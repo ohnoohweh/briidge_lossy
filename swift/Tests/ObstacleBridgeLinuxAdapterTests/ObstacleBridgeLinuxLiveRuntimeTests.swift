@@ -636,12 +636,13 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         }
         runtime.start()
         // The package suite schedules several Python-backed peers at once.
-        // QUIC's TLS setup can wait behind those workers on a shared Linux
-        // runner, so retain a deterministic but non-contentious qualification
-        // window rather than treating scheduler pressure as an owner failure.
-        #expect(firstConnection.wait(timeout: .now() + 15) == .success)
+        // Each of the two QUIC/TLS lifecycle epochs can wait behind those
+        // workers on a shared Linux runner, so retain a deterministic but
+        // non-contentious qualification window rather than treating scheduler
+        // pressure as an owner failure.
+        #expect(firstConnection.wait(timeout: .now() + 30) == .success)
         runtime.reconnect()
-        #expect(reconnected.wait(timeout: .now() + 15) == .success)
+        #expect(reconnected.wait(timeout: .now() + 30) == .success)
         runtime.stop()
     }
 

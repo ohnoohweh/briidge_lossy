@@ -1,12 +1,13 @@
 import CoreFoundation
 import Foundation
+import ObstacleBridgeDesktopShared
 import ObstacleBridgeLinuxAdapters
 
-/// Linux native peer child, deliberately limited to the existing outbound
-/// runtime. Its connected inherited descriptor is configuration handoff and
-/// owner-lifetime capability; it never creates an Admin or IPC listener.
+/// Linux native peer child. It shares the versioned desktop-worker framing
+/// with Python and macOS; its connected inherited descriptor is both the
+/// configuration handoff and the owner-lifetime capability.
 enum ObstacleBridgeLinuxNativePeerWorker {
-    private static let maximumFrame = 1_048_576
+    private enum WorkerError: Error { case invalid }
 
     static func run(controlFD: Int32) throws {
         guard controlFD >= 0 else { throw WorkerError.invalid }
@@ -14,10 +15,18 @@ enum ObstacleBridgeLinuxNativePeerWorker {
         var runtime: ObstacleBridgeLinuxLiveRuntime?
         defer { runtime?.stop() }
         do {
+            let hello = try read(handle)
+            guard hello["kind"] as? String == "worker.hello",
+                  hello["role"] as? String == "supervisor",
+                  hello["capabilities"] as? [String] == ["peer.binary-data", "peer.control"],
+                  let helloGeneration = positive(hello["generation"])
+            else { throw WorkerError.invalid }
+            try write(handle, ["v": 1, "kind": "worker.hello", "role": "peer",
+                               "capabilities": ["peer.binary-data", "peer.control"], "generation": helloGeneration])
             let start = try read(handle)
             guard start["kind"] as? String == "peer.start",
                   let peerID = start["peer_id"] as? String, !peerID.isEmpty, peerID.count <= 128,
-                  let generation = positive(start["generation"]),
+                  let generation = positive(start["generation"]), generation == helloGeneration,
                   let raw = start["config"] as? [String: Any]
             else { throw WorkerError.invalid }
             let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.parseJSONObject(raw)
@@ -25,26 +34,84 @@ enum ObstacleBridgeLinuxNativePeerWorker {
                   !configuration.packetTunnelEnabled, !configuration.proxyProvider.enabled else { throw WorkerError.invalid }
             let live = ObstacleBridgeLinuxLiveRuntime(configuration: configuration)
             live.start(); runtime = live
-            try write(handle, ["v": 1, "kind": "peer.ready", "peer_id": peerID, "generation": generation, "implementation": "native"])
+            try write(handle, ["v": 1, "kind": "peer.ready", "peer_id": peerID,
+                               "generation": generation, "implementation": "native"])
             while true {
-                let request = try read(handle)
+                let frame = try readIPCFrame(handle)
+                if frame.kind == .data {
+                    guard frame.generation == UInt64(generation) else { throw WorkerError.invalid }
+                    try writeData(handle, generation: generation, payload: frame.payload)
+                    continue
+                }
+                let request = try control(frame)
                 guard request["peer_id"] as? String == peerID, positive(request["generation"]) == generation,
                       let identifier = request["id"] as? String, !identifier.isEmpty, identifier.count <= 128 else { throw WorkerError.invalid }
                 switch request["kind"] as? String {
-                case "peer.stop": try write(handle, ["v": 1, "kind": "peer.stopping", "peer_id": peerID, "generation": generation, "id": identifier]); return
+                case "peer.stop":
+                    try write(handle, ["v": 1, "kind": "peer.stopping", "peer_id": peerID, "generation": generation, "id": identifier])
+                    return
                 case "peer.snapshot":
                     let status = try json(live.status())
-                    try write(handle, ["v": 1, "kind": "peer.snapshot.reply", "peer_id": peerID, "generation": generation, "id": identifier, "status": status, "connections": [:], "peers": ["peers": []]])
-                case "peer.control": try write(handle, ["v": 1, "kind": "peer.control.reply", "peer_id": peerID, "generation": generation, "id": identifier, "result": ["ok": false, "requested": 0, "reason": "native_peer_control_not_supported"]])
+                    try write(handle, ["v": 1, "kind": "peer.snapshot.reply", "peer_id": peerID,
+                                       "generation": generation, "id": identifier, "status": status,
+                                       "connections": [:], "peers": ["peers": []]])
+                case "peer.control":
+                    try write(handle, ["v": 1, "kind": "peer.control.reply", "peer_id": peerID,
+                                       "generation": generation, "id": identifier,
+                                       "result": ["ok": false, "requested": 0,
+                                                  "reason": "native_peer_control_not_supported"]])
                 default: throw WorkerError.invalid
                 }
             }
         } catch { try? write(handle, ["v": 1, "kind": "peer.error", "error": "peer worker failed"]) }
     }
-    private enum WorkerError: Error { case invalid }
-    private static func positive(_ value: Any?) -> Int? { guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.intValue > 0, n.doubleValue == Double(n.intValue) else { return nil }; return n.intValue }
-    private static func json<T: Encodable>(_ value: T) throws -> [String: Any] { try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any] ?? [:] }
-    private static func read(_ handle: FileHandle) throws -> [String: Any] { let h = try exact(handle, 4); let n = h.reduce(0) { ($0 << 8) | Int($1) }; guard n > 0, n <= maximumFrame, let result = try JSONSerialization.jsonObject(with: exact(handle, n)) as? [String: Any], positive(result["v"]) == 1 else { throw WorkerError.invalid }; return result }
-    private static func exact(_ handle: FileHandle, _ count: Int) throws -> Data { var out = Data(); while out.count < count { let next = try handle.read(upToCount: count - out.count) ?? Data(); guard !next.isEmpty else { throw WorkerError.invalid }; out.append(next) }; return out }
-    private static func write(_ handle: FileHandle, _ frame: [String: Any]) throws { let body = try JSONSerialization.data(withJSONObject: frame); guard body.count <= maximumFrame else { throw WorkerError.invalid }; var n = UInt32(body.count).bigEndian; handle.write(Data(bytes: &n, count: 4)); handle.write(body) }
+
+    private static func positive(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.intValue > 0, number.doubleValue == Double(number.intValue) else { return nil }
+        return number.intValue
+    }
+
+    private static func json<T: Encodable>(_ value: T) throws -> [String: Any] {
+        try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any] ?? [:]
+    }
+
+    private static func read(_ handle: FileHandle) throws -> [String: Any] {
+        try control(readIPCFrame(handle))
+    }
+
+    private static func readIPCFrame(_ handle: FileHandle) throws -> ObstacleBridgeWorkerIPC.Frame {
+        let header = try exact(handle, ObstacleBridgeWorkerIPC.headerBytes)
+        guard let length = try ObstacleBridgeWorkerIPC.frameSize(header) else { throw WorkerError.invalid }
+        let (frame, remainder) = try ObstacleBridgeWorkerIPC.decode(header + (try exact(handle, length)))
+        guard let frame, remainder.isEmpty else { throw WorkerError.invalid }
+        return frame
+    }
+
+    private static func control(_ frame: ObstacleBridgeWorkerIPC.Frame) throws -> [String: Any] {
+        guard let value = try? ObstacleBridgeWorkerIPC.decodeControl(frame), positive(value["v"]) == 1 else { throw WorkerError.invalid }
+        return value
+    }
+
+    private static func exact(_ handle: FileHandle, _ count: Int) throws -> Data {
+        var output = Data()
+        while output.count < count {
+            let chunk = try handle.read(upToCount: count - output.count) ?? Data()
+            guard !chunk.isEmpty else { throw WorkerError.invalid }
+            output.append(chunk)
+        }
+        return output
+    }
+
+    private static func write(_ handle: FileHandle, _ value: [String: Any]) throws {
+        let rawKind = value["kind"] as? String ?? ""
+        let kind: ObstacleBridgeWorkerIPC.Kind = rawKind == "worker.hello" ? .hello : rawKind == "peer.error" ? .error : .response
+        handle.write(try ObstacleBridgeWorkerIPC.encodeControl(kind: kind,
+                                                                generation: UInt64(positive(value["generation"]) ?? 1),
+                                                                value: value))
+    }
+
+    private static func writeData(_ handle: FileHandle, generation: Int, payload: Data) throws {
+        handle.write(try ObstacleBridgeWorkerIPC.encode(kind: .data, generation: UInt64(generation), payload: payload))
+    }
 }

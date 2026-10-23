@@ -1,10 +1,11 @@
 import Foundation
 import ObstacleBridgeCore
+import ObstacleBridgeDesktopShared
 #if os(Linux)
 import Glibc
 #endif
 
-fileprivate typealias ObstacleBridgeLinuxTunHelperFrameKind = ObstacleBridgeTunHelperProtocolV1.FrameKind
+fileprivate typealias ObstacleBridgeLinuxTunHelperFrameKind = ObstacleBridgeWorkerIPC.Kind
 
 /// Failure boundary for the Linux-only helper IPC owner. This adapter never
 /// opens `/dev/net/tun`, applies routes, or executes hooks; those privileged
@@ -38,6 +39,7 @@ public final class ObstacleBridgeLinuxTunHelperPacketDevice: ObstacleBridgeLinux
     private let lock = NSLock()
     private var fd: Int32 = -1
     private var running = false
+    private var generation: UInt64 = 0
 
     public init(adapter: ObstacleBridgeLinuxTunHelperAdapter, packetSink: @escaping (Data) -> Void, eventSink: @escaping (String) -> Void = { _ in }) {
         self.adapter = adapter; self.packetSink = packetSink; self.eventSink = eventSink
@@ -47,42 +49,43 @@ public final class ObstacleBridgeLinuxTunHelperPacketDevice: ObstacleBridgeLinux
         lock.lock(); defer { lock.unlock() }
         guard !running else { return }
         let connected = try adapter.connectSocket()
-        do { try adapter.authenticate(on: connected) } catch { _ = close(connected); throw error }
-        fd = connected; running = true
+        let selectedGeneration = UInt64.random(in: 1...UInt64.max)
+        do { try adapter.authenticate(on: connected, generation: selectedGeneration) } catch { _ = close(connected); throw error }
+        generation = selectedGeneration; fd = connected; running = true
         DispatchQueue.global().async { [weak self] in self?.receiveLoop() }
     }
 
     public func writePacket(_ packet: Data) throws {
-        lock.lock(); let active = running ? fd : -1; lock.unlock()
+        lock.lock(); let active = running ? fd : -1; let activeGeneration = generation; lock.unlock()
         guard active >= 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected }
-        try adapter.writeFrame(kind: .packetToHelper, body: packet, to: active)
+        try adapter.writeFrame(kind: .data, generation: activeGeneration, body: packet, to: active)
     }
 
     public func stop() {
-        lock.lock(); let active = fd; fd = -1; running = false; lock.unlock()
+        lock.lock(); let active = fd; fd = -1; generation = 0; running = false; lock.unlock()
         if active >= 0 { _ = shutdown(active, Int32(SHUT_RDWR)); _ = close(active) }
     }
 
     private func receiveLoop() {
         while true {
-            lock.lock(); let active = running ? fd : -1; lock.unlock()
-            guard active >= 0, let (kind, body) = try? adapter.readFrame(from: active) else { stop(); return }
-            switch kind {
-            case .packetFromHelper: packetSink(body)
+            lock.lock(); let active = running ? fd : -1; let activeGeneration = generation; lock.unlock()
+            guard active >= 0, let frame = try? adapter.readFrame(from: active), frame.generation == activeGeneration else { stop(); return }
+            switch frame.kind {
+            case .data: packetSink(frame.payload)
             case .event:
-                if let value = try? JSONSerialization.jsonObject(with: body) as? [String: Any], let detail = value["detail"] as? String { eventSink(detail) }
+                if let value = try? ObstacleBridgeWorkerIPC.decodeControl(frame), let payload = value["payload"] as? [String: Any], let detail = payload["detail"] as? String { eventSink(detail) }
             default: continue
             }
         }
     }
 }
 
-/// Unix-domain-socket client for the Python helper protocol v1. Every bounded
-/// exchange authenticates with HELLO before issuing one control operation.
-/// This deliberately matches `bridge_tun_helper_protocol.py`; it is not the
-/// XPC-shaped Core helper envelope, which is a separate in-process contract.
+/// Unix-domain-socket client for the common OBIP helper protocol. Every bounded
+/// exchange negotiates HELLO/READY, then authenticates its one-time token
+/// before issuing one control operation.
 public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
-    public static let maximumFrameBytes = ObstacleBridgeTunHelperProtocolV1.maximumFrameBytes
+    public static let maximumFrameBytes = ObstacleBridgeWorkerIPC.maximumFrameBytes
+    private static let helperCapabilities: Set<String> = ["tun.control", "tun.packet", "tun.event"]
 
     public let socketPath: String
     public let sessionToken: String
@@ -122,8 +125,9 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let fd = try connectSocket()
         defer { _ = close(fd) }
-        try authenticate(on: fd)
-        try writeFrame(kind: .packetToHelper, body: packet, to: fd)
+        let generation = nextGeneration()
+        try authenticate(on: fd, generation: generation)
+        try writeFrame(kind: .data, generation: generation, body: packet, to: fd)
         return ["ok": true, "op": ObstacleBridgeTunHelperCommand.writePacket.rawValue]
     }
 
@@ -163,38 +167,51 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
     private func exchangeControl(operation: String, payload: [String: Any]) throws -> [String: Any] {
         let fd = try connectSocket()
         defer { _ = close(fd) }
-        try authenticate(on: fd)
-        try writeControl(operation: operation, payload: payload, to: fd)
-        return try readControlResponse(expectedOperation: "\(operation)_OK", from: fd)
+        let generation = nextGeneration()
+        try authenticate(on: fd, generation: generation)
+        try writeControl(operation: operation, payload: payload, generation: generation, to: fd)
+        return try readControlResponse(expectedOperation: "\(operation)_OK", generation: generation, from: fd)
     }
 
-    fileprivate func authenticate(on fd: Int32) throws {
-        try writeControl(operation: "HELLO", payload: ["token": sessionToken], to: fd)
-        _ = try readControlResponse(expectedOperation: "HELLO_OK", from: fd)
+    fileprivate func authenticate(on fd: Int32, generation: UInt64) throws {
+        try writeAll(try ObstacleBridgeWorkerIPC.hello(generation: generation, role: "tun-helper-client", capabilities: Array(Self.helperCapabilities)), to: fd)
+        let peerHello = try readFrame(from: fd)
+        let accepted = try ObstacleBridgeWorkerIPC.negotiatedCapabilities(peerHello, supported: Self.helperCapabilities)
+        guard peerHello.kind == .hello, peerHello.generation == generation, accepted.role == "tun-helper", Set(accepted.capabilities) == Self.helperCapabilities else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper rejected common IPC capability negotiation")
+        }
+        let ready = try readFrame(from: fd)
+        guard ready.kind == .ready, ready.generation == generation,
+              let readyValue = try? ObstacleBridgeWorkerIPC.decodeControl(ready), readyValue["op"] as? String == "READY" else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper did not confirm common IPC readiness")
+        }
+        try writeControl(operation: "HELLO", payload: ["token": sessionToken], generation: generation, to: fd)
+        _ = try readControlResponse(expectedOperation: "HELLO_OK", generation: generation, from: fd)
     }
 
-    private func writeControl(operation: String, payload: [String: Any], to fd: Int32) throws {
-        let body: Data
-        do { body = try ObstacleBridgeTunHelperProtocolV1.control(operation: operation, payload: payload) }
+    private func writeControl(operation: String, payload: [String: Any], generation: UInt64, to fd: Int32) throws {
+        let frame: Data
+        do { frame = try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: generation, value: ["op": operation, "payload": payload]) }
         catch { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("unable to encode Linux TUN helper request") }
-        try writeFrame(kind: .controlRequest, body: body, to: fd)
+        try writeAll(frame, to: fd)
     }
 
-    private func readControlResponse(expectedOperation: String, from fd: Int32) throws -> [String: Any] {
+    private func readControlResponse(expectedOperation: String, generation: UInt64, from fd: Int32) throws -> [String: Any] {
         // The helper broadcasts packet and EVENT frames to every authenticated
         // client. A bounded control exchange can therefore observe an
         // unsolicited frame before its own response when TUN traffic begins.
         // Those frames belong to the long-lived packet endpoint, so discard
         // them here and keep reading within the socket's bounded timeout.
         while true {
-            let (kind, body) = try readFrame(from: fd)
-            switch kind {
-            case .packetFromHelper, .event:
+            let frame = try readFrame(from: fd)
+            guard frame.generation == generation else { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned a stale generation") }
+            switch frame.kind {
+            case .data, .event:
                 continue
-            case .controlResponse:
+            case .response:
                 let control: (operation: String, payload: [String: Any])
-                do { control = try ObstacleBridgeTunHelperProtocolV1.decodeControl(body) }
-                catch { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned an invalid protocol-v1 control response") }
+                do { control = try decodeControl(frame) }
+                catch { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned an invalid common IPC control response") }
                 let operation = control.operation
                 let payload = control.payload
                 if operation == "ERROR" {
@@ -205,7 +222,7 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
                 }
                 return payload.merging(["ok": true, "op": expectedOperation]) { _, response in response }
             default:
-                throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned unexpected \(kind.rawValue) frame while awaiting \(expectedOperation)")
+                throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned unexpected \(frame.kind.rawValue) frame while awaiting \(expectedOperation)")
             }
         }
     }
@@ -234,19 +251,30 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
         return fd
     }
 
-    fileprivate func writeFrame(kind: ObstacleBridgeLinuxTunHelperFrameKind, body: Data, to fd: Int32) throws {
-        do { try writeAll(try ObstacleBridgeTunHelperProtocolV1.frame(kind: kind, body: body), to: fd) }
-        catch ObstacleBridgeTunHelperProtocolV1.Error.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
+    fileprivate func writeFrame(kind: ObstacleBridgeLinuxTunHelperFrameKind, generation: UInt64, body: Data, to fd: Int32) throws {
+        do { try writeAll(try ObstacleBridgeWorkerIPC.encode(kind: kind, generation: generation, payload: body), to: fd) }
+        catch ObstacleBridgeWorkerIPC.Failure.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
     }
 
-    fileprivate func readFrame(from fd: Int32) throws -> (ObstacleBridgeLinuxTunHelperFrameKind, Data) {
-        let wireHeader = try readExactly(ObstacleBridgeTunHelperProtocolV1.headerBytes, from: fd)
-        let parsed: (kind: ObstacleBridgeLinuxTunHelperFrameKind, bodyLength: Int)
-        do { parsed = try ObstacleBridgeTunHelperProtocolV1.header(wireHeader) }
-        catch ObstacleBridgeTunHelperProtocolV1.Error.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
+    fileprivate func readFrame(from fd: Int32) throws -> ObstacleBridgeWorkerIPC.Frame {
+        let wireHeader = try readExactly(ObstacleBridgeWorkerIPC.headerBytes, from: fd)
+        let bodyLength: Int
+        do { bodyLength = try ObstacleBridgeWorkerIPC.frameSize(wireHeader) ?? 0 }
+        catch ObstacleBridgeWorkerIPC.Failure.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
         catch { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned unknown frame kind") }
-        return (parsed.kind, try readExactly(parsed.bodyLength, from: fd))
+        let decoded = try? ObstacleBridgeWorkerIPC.decode(wireHeader + (try readExactly(bodyLength, from: fd)))
+        guard let frame = decoded?.0, decoded?.1.isEmpty == true else { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned an incomplete frame") }
+        return frame
     }
+
+    private func decodeControl(_ frame: ObstacleBridgeWorkerIPC.Frame) throws -> (operation: String, payload: [String: Any]) {
+        let value = try ObstacleBridgeWorkerIPC.decodeControl(frame)
+        guard let operation = value["op"] as? String, !operation.isEmpty, operation.count <= 64,
+              let payload = value["payload"] as? [String: Any] else { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned invalid control") }
+        return (operation, payload)
+    }
+
+    private func nextGeneration() -> UInt64 { UInt64.random(in: 1...UInt64.max) }
 
     private func writeAll(_ data: Data, to fd: Int32) throws {
         var offset = 0

@@ -92,6 +92,26 @@ def test_native_peer_worker_is_rejected_off_macos(monkeypatch):
     asyncio.run(exercise())
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux-native peer qualification requires Linux")
+def test_linux_native_peer_worker_negotiates_common_ipc_and_stops():
+    executable = os.environ.get("OBSTACLEBRIDGE_TEST_LINUX_PEER_WORKER", "")
+    if not executable or not os.path.isfile(executable):
+        pytest.skip("Linux-native peer executable is not available")
+
+    async def exercise():
+        worker = PeerStackWorker("linux-native-peer-test", implementation="native", native_executable=executable)
+        try:
+            await worker.start(_config())
+            assert worker.generation == 1
+            snapshot = await worker.snapshot()
+            assert isinstance(snapshot, dict)
+            assert await worker.echo_data(b"linux-native-data\x00") == b"linux-native-data\x00"
+        finally:
+            await worker.stop()
+
+    asyncio.run(exercise())
+
+
 def test_peer_worker_inherits_stderr_without_managed_collector(monkeypatch, capfd):
     async def exercise():
         worker = PeerStackWorker("stderr-test")
@@ -103,6 +123,18 @@ def test_peer_worker_inherits_stderr_without_managed_collector(monkeypatch, capf
     monkeypatch.setattr(logging.getLogger(), "level", logging.INFO)
     asyncio.run(exercise())
     assert "[SERVER] ObstacleBridge build=" in capfd.readouterr().err
+
+
+def test_peer_worker_echoes_opaque_common_ipc_data():
+    async def exercise():
+        worker = PeerStackWorker("data-test")
+        try:
+            await worker.start(_config())
+            assert await worker.echo_data(b"\x00opaque\xffdata") == b"\x00opaque\xffdata"
+        finally:
+            await worker.stop()
+
+    asyncio.run(exercise())
 
 
 def test_cancelled_peer_retirement_kills_and_reaps_child():
@@ -194,8 +226,11 @@ def test_peer_worker_aborts_inflight_start_when_owner_disappears(monkeypatch):
         monkeypatch.setattr(peer_module, "_peer_args", lambda _config: object())
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         parent.setblocking(False)
-        _reader, writer = await asyncio.open_connection(sock=parent)
+        reader, writer = await asyncio.open_connection(sock=parent)
         task = asyncio.create_task(_serve(child.detach()))
+        capabilities = ["peer.binary-data", "peer.control"]
+        await _write_frame(writer, {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": capabilities, "generation": 1})
+        assert await _read_frame(reader) == {"v": 1, "kind": "worker.hello", "role": "peer", "capabilities": capabilities, "generation": 1}
         await _write_frame(writer, {"v": 1, "kind": "peer.start", "peer_id": "test", "generation": 1, "config": {}})
         await asyncio.wait_for(started.wait(), 2)
         writer.close()

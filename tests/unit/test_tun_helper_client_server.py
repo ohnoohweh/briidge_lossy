@@ -2,12 +2,19 @@
 import asyncio
 import os
 import sys
+import struct
 import tempfile
 import unittest
 import uuid
 
 from obstacle_bridge.bridge_tun_helper_client import TunHelperClient
-from obstacle_bridge.bridge_tun_helper_protocol import TUN_HELPER_MAX_FRAME_BYTES, TunHelperFrameKind
+from obstacle_bridge.bridge_tun_helper_protocol import (
+    TUN_HELPER_MAX_FRAME_BYTES,
+    TunHelperControlMessage,
+    TunHelperFrameKind,
+    encode_control_frame,
+    encode_hello,
+)
 from obstacle_bridge.bridge_tun_helper_server import TunHelperServer
 
 
@@ -180,7 +187,26 @@ class TunHelperClientServerTests(unittest.IsolatedAsyncioTestCase):
     @unittest.skipIf(sys.platform == "win32", "raw Unix socket test")
     async def test_oversized_header_closes_only_offending_connection(self) -> None:
         reader, writer = await asyncio.open_unix_connection(self.socket_path)
-        writer.write(bytes([TunHelperFrameKind.CONTROL_REQUEST]) + (TUN_HELPER_MAX_FRAME_BYTES + 1).to_bytes(4, "big"))
+        writer.write(struct.pack("!4sBBHQI", b"OBIP", 1, int(TunHelperFrameKind.REQUEST), 0, 1, TUN_HELPER_MAX_FRAME_BYTES + 1))
+        await writer.drain()
+        self.assertEqual(await asyncio.wait_for(reader.read(1), timeout=1), b"")
+        writer.close()
+        await writer.wait_closed()
+
+        client = TunHelperClient(socket_path=self.socket_path, session_token="secret")
+        try:
+            await client.connect()
+            self.assertEqual((await client.snapshot())["backend"], "fake")
+        finally:
+            await client.close()
+
+    @unittest.skipIf(sys.platform == "win32", "raw Unix socket test")
+    async def test_stale_common_generation_closes_only_offending_connection(self) -> None:
+        reader, writer = await asyncio.open_unix_connection(self.socket_path)
+        writer.write(encode_hello(7))
+        await writer.drain()
+        self.assertTrue(await asyncio.wait_for(reader.read(4096), timeout=1))
+        writer.write(encode_control_frame(TunHelperFrameKind.REQUEST, 8, TunHelperControlMessage(op="SNAPSHOT")))
         await writer.drain()
         self.assertEqual(await asyncio.wait_for(reader.read(1), timeout=1), b"")
         writer.close()
@@ -202,6 +228,31 @@ class TunHelperClientServerTests(unittest.IsolatedAsyncioTestCase):
             await client.snapshot()
 
         await client.close()
+
+    async def test_unauthenticated_connection_is_closed_after_hello_deadline(self) -> None:
+        await self.server.stop()
+        self.server = TunHelperServer(
+            backend=self.backend,
+            session_token="secret",
+            unauthenticated_client_idle_timeout_s=0.1,
+        )
+        await self.server.start(self.socket_path)
+        reader, writer = await asyncio.open_unix_connection(self.socket_path)
+        try:
+            assert await asyncio.wait_for(reader.read(1), timeout=1.0) == b""
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def test_authenticated_client_cannot_renegotiate_hello(self) -> None:
+        client = TunHelperClient(socket_path=self.socket_path, session_token="secret")
+        await client.connect()
+        try:
+            with self.assertRaisesRegex(RuntimeError, "HELLO is accepted only once"):
+                await client.request("HELLO", {"token": "wrong"})
+            self.assertEqual((await client.snapshot())["backend"], "fake")
+        finally:
+            await client.close()
 
     async def test_server_stops_after_authenticated_client_disconnects(self) -> None:
         client = TunHelperClient(socket_path=self.socket_path, session_token="secret")

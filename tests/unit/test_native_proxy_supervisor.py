@@ -26,7 +26,8 @@ def native_supervisor(tmp_path_factory):
     if not swiftc:
         pytest.skip("Swift compiler required")
     binary = tmp_path_factory.mktemp("proxy-supervisor") / "supervisor"
-    subprocess.run([swiftc, str(ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift"),
+    subprocess.run([swiftc, str(ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift"),
+                    str(ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift"),
                     str(ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift"),
                     str(ROOT / "tests/fixtures/native_proxy_supervisor_runner.swift"), "-o", str(binary)], check=True)
     return str(binary)
@@ -38,7 +39,8 @@ def native_collector(tmp_path_factory):
     if not swiftc:
         pytest.skip("Swift compiler required")
     binary = tmp_path_factory.mktemp("proxy-log-collector") / "collector"
-    subprocess.run([swiftc, str(ROOT / "swift/Sources/ObstacleBridgeLogCollector/main.swift"), "-o", str(binary)], check=True)
+    subprocess.run([swiftc, str(ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift"),
+                    str(ROOT / "swift/Sources/ObstacleBridgeLogCollector/main.swift"), "-o", str(binary)], check=True)
     return str(binary)
 
 

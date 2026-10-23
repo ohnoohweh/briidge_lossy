@@ -14,11 +14,16 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional, Protocol
 
 from .bridge_tun_helper_protocol import (
+    TUN_HELPER_CAPABILITIES,
+    TUN_HELPER_CLIENT_ROLE,
+    TUN_HELPER_SERVER_ROLE,
     TunHelperControlMessage,
     TunHelperFrameKind,
     decode_control_payload,
     encode_control_frame,
+    encode_hello,
     encode_frame,
+    negotiated_hello,
     try_decode_frame,
 )
 from .bridge_tun_helper_linux import LinuxTunHelperBackend, LinuxTunHelperInMemoryBackend
@@ -68,10 +73,13 @@ async def _maybe_await(value: Any) -> Any:
 @dataclass
 class _HelperConnectionState:
     authenticated: bool = False
+    common_ready: bool = False
+    generation: int = 0
 
 
 class TunHelperServer:
     AUTHENTICATED_CLIENT_IDLE_TIMEOUT_S = 5.0
+    UNAUTHENTICATED_CLIENT_IDLE_TIMEOUT_S = 5.0
 
     def __init__(
         self,
@@ -79,17 +87,20 @@ class TunHelperServer:
         backend: TunHelperBackend,
         session_token: str,
         authenticated_client_idle_timeout_s: float = AUTHENTICATED_CLIENT_IDLE_TIMEOUT_S,
+        unauthenticated_client_idle_timeout_s: float = UNAUTHENTICATED_CLIENT_IDLE_TIMEOUT_S,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._backend = backend
         self._session_token = str(session_token or "")
         self._log = logger or logging.getLogger("tun_helper_server")
         self._authenticated_client_idle_timeout_s = max(float(authenticated_client_idle_timeout_s), 0.5)
+        self._unauthenticated_client_idle_timeout_s = max(float(unauthenticated_client_idle_timeout_s), 0.1)
         self._server: Optional[asyncio.AbstractServer] = None
         self._socket_path = ""
         self._active_writers: set[asyncio.StreamWriter] = set()
         self._authenticated_writers: set[asyncio.StreamWriter] = set()
         self._writer_locks: dict[asyncio.StreamWriter, asyncio.Lock] = {}
+        self._writer_generations: dict[asyncio.StreamWriter, int] = {}
         self._closed = False
         self._watchdog_task: Optional[asyncio.Task] = None
         self._last_authenticated_client_at = time.monotonic()
@@ -186,6 +197,7 @@ class TunHelperServer:
         for writer in list(self._active_writers):
             await self._close_writer(writer)
         self._active_writers.clear()
+        self._writer_generations.clear()
         await self._backend.stop()
         if self._socket_path and not is_windows_pipe_path(self._socket_path) and not is_local_tcp_endpoint(self._socket_path):
             with contextlib.suppress(FileNotFoundError):
@@ -251,21 +263,25 @@ class TunHelperServer:
             packet=packet,
             note=f"writers={len(self._active_writers)}",
         )
-        frame = encode_frame(TunHelperFrameKind.PACKET_FROM_HELPER, bytes(packet))
         dead: list[asyncio.StreamWriter] = []
         for writer in list(self._active_writers):
             try:
-                await self._write_frame(writer, frame)
+                generation = self._writer_generations.get(writer)
+                if generation is not None:
+                    await self._write_frame(writer, encode_frame(TunHelperFrameKind.DATA, generation, bytes(packet)))
             except Exception:
                 dead.append(writer)
         for writer in dead:
             self._active_writers.discard(writer)
             self._authenticated_writers.discard(writer)
             self._writer_locks.pop(writer, None)
+            self._writer_generations.pop(writer, None)
             await self._close_writer(writer)
 
     async def _send_event(self, writer: asyncio.StreamWriter, text: str) -> None:
-        await self._write_frame(writer, encode_frame(TunHelperFrameKind.EVENT, str(text).encode("utf-8")))
+        generation = self._writer_generations.get(writer)
+        if generation is not None:
+            await self._write_frame(writer, encode_control_frame(TunHelperFrameKind.EVENT, generation, TunHelperControlMessage(op="EVENT", payload={"detail": str(text)})))
 
     async def _write_frame(self, writer: asyncio.StreamWriter, frame: bytes) -> None:
         lock = self._writer_locks.get(writer)
@@ -282,11 +298,16 @@ class TunHelperServer:
         *,
         op: str,
         payload: Optional[dict[str, Any]] = None,
+        kind: TunHelperFrameKind = TunHelperFrameKind.RESPONSE,
     ) -> None:
+        generation = self._writer_generations.get(writer)
+        if generation is None:
+            return
         await self._write_frame(
             writer,
             encode_control_frame(
-                TunHelperFrameKind.CONTROL_RESPONSE,
+                kind,
+                generation,
                 TunHelperControlMessage(op=op, payload=payload or {}),
             ),
         )
@@ -300,6 +321,13 @@ class TunHelperServer:
         op = str(message.op or "").strip().upper()
         payload = dict(message.payload)
         if op == "HELLO":
+            if state.authenticated:
+                await self._send_response(
+                    writer,
+                    op="ERROR",
+                    payload={"code": "already_authenticated", "detail": "HELLO is accepted only once"},
+                )
+                return
             token = str(payload.get("token") or "")
             if token != self._session_token:
                 await self._send_response(
@@ -381,7 +409,14 @@ class TunHelperServer:
         buffer = b""
         try:
             while not self._closed:
-                chunk = await reader.read(65536)
+                try:
+                    chunk = await asyncio.wait_for(
+                        reader.read(65536),
+                        timeout=self._unauthenticated_client_idle_timeout_s if not state.authenticated else None,
+                    )
+                except asyncio.TimeoutError:
+                    self._log.warning("[TUN/HELPER] unauthenticated client did not send HELLO before deadline")
+                    return
                 if not chunk:
                     break
                 buffer += chunk
@@ -393,11 +428,32 @@ class TunHelperServer:
                         return
                     if decoded is None:
                         break
-                    kind, payload, remainder = decoded
+                    frame, remainder = decoded
                     buffer = remainder
-                    if kind == TunHelperFrameKind.CONTROL_REQUEST:
+                    if not state.common_ready:
+                        if frame.kind != TunHelperFrameKind.HELLO:
+                            self._log.warning("[TUN/HELPER] closing connection before common IPC HELLO")
+                            return
                         try:
-                            message = decode_control_payload(payload)
+                            role, capabilities = negotiated_hello(frame)
+                        except ValueError:
+                            self._log.warning("[TUN/HELPER] closing connection with invalid common IPC HELLO")
+                            return
+                        if role != TUN_HELPER_CLIENT_ROLE or set(capabilities) != set(TUN_HELPER_CAPABILITIES):
+                            self._log.warning("[TUN/HELPER] closing connection with unsupported common IPC capabilities")
+                            return
+                        state.common_ready = True
+                        state.generation = frame.generation
+                        self._writer_generations[writer] = frame.generation
+                        await self._write_frame(writer, encode_hello(frame.generation, role=TUN_HELPER_SERVER_ROLE))
+                        await self._send_response(writer, op="READY", payload={"capabilities": sorted(TUN_HELPER_CAPABILITIES)}, kind=TunHelperFrameKind.READY)
+                        continue
+                    if frame.generation != state.generation:
+                        self._log.warning("[TUN/HELPER] closing connection with stale common IPC generation")
+                        return
+                    if frame.kind == TunHelperFrameKind.REQUEST:
+                        try:
+                            message = decode_control_payload(frame.payload)
                         except Exception as exc:
                             await self._send_response(
                                 writer,
@@ -406,7 +462,7 @@ class TunHelperServer:
                             )
                             continue
                         await self._handle_control(state, writer, message)
-                    elif kind == TunHelperFrameKind.PACKET_TO_HELPER:
+                    elif frame.kind == TunHelperFrameKind.DATA:
                         if not state.authenticated:
                             await self._send_response(
                                 writer,
@@ -417,20 +473,21 @@ class TunHelperServer:
                         self._mark_authenticated_client_activity()
                         self._log_probe_trace(
                             stage="server_recv_packet_to_helper",
-                            packet=bytes(payload),
+                            packet=bytes(frame.payload),
                             note=f"authenticated={int(state.authenticated)}",
                         )
-                        await _maybe_await(self._backend.write_packet(bytes(payload)))
+                        await _maybe_await(self._backend.write_packet(bytes(frame.payload)))
                     else:
                         await self._send_response(
                             writer,
                             op="ERROR",
-                            payload={"code": "unexpected_frame_kind", "detail": int(kind)},
+                            payload={"code": "unexpected_frame_kind", "detail": int(frame.kind)},
                         )
         finally:
             self._active_writers.discard(writer)
             self._authenticated_writers.discard(writer)
             self._writer_locks.pop(writer, None)
+            self._writer_generations.pop(writer, None)
             if not self._authenticated_writers:
                 self._last_authenticated_client_at = time.monotonic()
             await self._close_writer(writer)

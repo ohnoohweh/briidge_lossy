@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// OS-independent framing and JSON control contract for Python and compiled
 /// Swift TUN helpers. Local transport selection does not change this wire ABI.
@@ -6,6 +7,7 @@ public enum ObstacleBridgeTunHelperProtocolV1 {
     public static let version = 1
     public static let maximumFrameBytes = 1_048_576
     public static let headerBytes = 5
+    public static let maximumOperationScalars = 64
 
     public enum FrameKind: UInt8, Sendable {
         case controlRequest = 1, controlResponse = 2, packetFromHelper = 3, packetToHelper = 4, event = 5
@@ -30,15 +32,23 @@ public enum ObstacleBridgeTunHelperProtocolV1 {
     }
 
     public static func control(operation: String, payload: [String: Any]) throws -> Data {
-        guard !operation.isEmpty else { throw Error.malformedControl }
-        return try JSONSerialization.data(withJSONObject: ["version": version, "op": operation, "payload": payload], options: [.sortedKeys])
+        return try JSONSerialization.data(withJSONObject: ["version": version, "op": normalizedOperation(operation), "payload": payload], options: [.sortedKeys])
     }
 
     public static func decodeControl(_ data: Data) throws -> (operation: String, payload: [String: Any]) {
         guard let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              value["version"] as? Int == version,
-              let operation = value["op"] as? String, !operation.isEmpty,
+              let rawVersion = value["version"] as? NSNumber,
+              CFGetTypeID(rawVersion) != CFBooleanGetTypeID(),
+              rawVersion.intValue == version,
+              rawVersion.doubleValue == Double(version),
+              let rawOperation = value["op"] as? String,
               let payload = value["payload"] as? [String: Any] else { throw Error.malformedControl }
-        return (operation, payload)
+        return (try normalizedOperation(rawOperation), payload)
+    }
+
+    private static func normalizedOperation(_ value: String) throws -> String {
+        let operation = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !operation.isEmpty, operation.unicodeScalars.count <= maximumOperationScalars else { throw Error.malformedControl }
+        return operation
     }
 }

@@ -11,9 +11,14 @@ IOS_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeiOS/"
 MACOS_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeMacOS/"
 DESKTOP_PROXY_SUPERVISOR = "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift"
 DESKTOP_LOG_SUPERVISOR = "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift"
+DESKTOP_WORKER_IPC = "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift"
 LINUX_DESKTOP_HOST = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxLiveRuntime.swift"
 LINUX_LOG_ADAPTER = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxObservability.swift"
 MACOS_DESKTOP_HOST = "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift"
+MACOS_NATIVE_PEER = "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeNativePeerWorker.swift"
+LINUX_NATIVE_PEER = "swift/Sources/ObstacleBridgeLinux/ObstacleBridgeLinuxNativePeerWorker.swift"
+MACOS_TUN_HELPER_SERVER = "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeMacOSProtocolV1TunHelperServer.swift"
+LINUX_TUN_HELPER_SERVER = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTunHelperServer.swift"
 SWIFT_SUFFIX = ".swift"
 PARITY_TEST_FILES = {
     "ios/tests/test_m3_native_sources.py",
@@ -43,7 +48,7 @@ def _is_swift_under(path: str, prefix: str) -> bool:
 def classify_swift_shared_parity(changed: list[str]) -> dict[str, list[str]]:
     normalized = _normalize(changed)
     return {
-        "shared_swift": [path for path in normalized if _is_swift_under(path, SHARED_SWIFT_PREFIX)],
+        "shared_swift": [path for path in normalized if _is_swift_under(path, SHARED_SWIFT_PREFIX) or path == DESKTOP_WORKER_IPC],
         "ios_swift": [path for path in normalized if _is_swift_under(path, IOS_SWIFT_PREFIX)],
         "macos_swift": [path for path in normalized if _is_swift_under(path, MACOS_SWIFT_PREFIX)],
         "parity_tests": [path for path in normalized if path in PARITY_TEST_FILES],
@@ -64,6 +69,14 @@ def validate_swift_shared_parity(changed: list[str]) -> list[str]:
         and ((DESKTOP_PROXY_SUPERVISOR in _normalize(changed) and LINUX_DESKTOP_HOST in _normalize(changed))
              or (DESKTOP_LOG_SUPERVISOR in _normalize(changed) and LINUX_LOG_ADAPTER in _normalize(changed)))
     )
+    native_peer_pair = (
+        set(macos_swift) == {MACOS_NATIVE_PEER}
+        and LINUX_NATIVE_PEER in _normalize(changed)
+    )
+    tun_helper_server_pair = (
+        set(macos_swift) == {MACOS_TUN_HELPER_SERVER}
+        and LINUX_TUN_HELPER_SERVER in _normalize(changed)
+    )
     errors: list[str] = []
 
     if ios_swift and not (shared_swift or macos_swift):
@@ -73,7 +86,7 @@ def validate_swift_shared_parity(changed: list[str]) -> list[str]:
             f"Expected one of: files under {SHARED_SWIFT_PREFIX} or files under {MACOS_SWIFT_PREFIX}"
         )
 
-    if macos_swift and not (shared_swift or ios_swift or desktop_pair):
+    if macos_swift and not (shared_swift or ios_swift or desktop_pair or native_peer_pair or tun_helper_server_pair):
         errors.append(
             "macOS-specific Swift runtime files changed without a shared Swift update or a mirrored iOS Swift update.\n"
             f"Changed macOS files: {', '.join(macos_swift)}\n"

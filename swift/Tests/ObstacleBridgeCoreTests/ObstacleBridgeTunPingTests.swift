@@ -25,6 +25,28 @@ struct ObstacleBridgeTunPingTests {
             try ObstacleBridgeTunHelperProtocolV1.header(Data([4, 0, 0x10, 0, 1]))
         }
     }
+    @Test func protocolV1ControlRejectsBooleanAndFractionalVersions() throws {
+        for body in [
+            Data("{\"version\":true,\"op\":\"HELLO\",\"payload\":{}}".utf8),
+            Data("{\"version\":1.5,\"op\":\"HELLO\",\"payload\":{}}".utf8),
+        ] {
+            #expect(throws: ObstacleBridgeTunHelperProtocolV1.Error.malformedControl) {
+                try ObstacleBridgeTunHelperProtocolV1.decodeControl(body)
+            }
+        }
+    }
+    @Test func protocolV1ControlNormalizesAndBoundsOperations() throws {
+        let encoded = try ObstacleBridgeTunHelperProtocolV1.control(operation: "  HELLO  ", payload: [:])
+        #expect(try ObstacleBridgeTunHelperProtocolV1.decodeControl(encoded).operation == "HELLO")
+        for body in [
+            Data("{\"version\":1,\"op\":\"   \",\"payload\":{}}".utf8),
+            Data("{\"version\":1,\"op\":\"".utf8) + Data(repeating: 120, count: 65) + Data("\",\"payload\":{}}".utf8),
+        ] {
+            #expect(throws: ObstacleBridgeTunHelperProtocolV1.Error.malformedControl) {
+                try ObstacleBridgeTunHelperProtocolV1.decodeControl(body)
+            }
+        }
+    }
     @Test func buildsBoundedIPv4ProbePacket() throws {
         let payload = ObstacleBridgeTunPing.probePayload(
             probeKind: ObstacleBridgeTunPing.probeKindPeer,

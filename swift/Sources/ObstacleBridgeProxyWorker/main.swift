@@ -1,5 +1,8 @@
 import Dispatch
 import Foundation
+#if SWIFT_PACKAGE
+import ObstacleBridgeDesktopShared
+#endif
 #if canImport(Darwin)
 import Darwin
 private let streamType = SOCK_STREAM
@@ -36,20 +39,21 @@ private func writeAll(_ fd: Int32, _ data: Data) throws {
 }
 
 private func readFrame(_ fd: Int32) throws -> [String: Any] {
-    let prefix = [UInt8](try readExact(fd, 4))
-    let size = prefix.reduce(0) { ($0 << 8) | Int($1) }
-    guard size > 0 && size <= maximumControlFrame,
-          let message = try JSONSerialization.jsonObject(with: readExact(fd, size)) as? [String: Any],
-          message["v"] as? Int == 1 else { throw WorkerError.invalid }
+    let header = try readExact(fd, ObstacleBridgeWorkerIPC.headerBytes)
+    guard let size = try ObstacleBridgeWorkerIPC.frameSize(header), size <= maximumControlFrame else { throw WorkerError.invalid }
+    let (frame, remainder) = try ObstacleBridgeWorkerIPC.decode(header + (try readExact(fd, size)))
+    guard let frame, remainder.isEmpty else { throw WorkerError.invalid }
+    let message = try ObstacleBridgeWorkerIPC.decodeControl(frame)
+    guard message["v"] as? Int == 1 else { throw WorkerError.invalid }
     return message
 }
 
 private func writeFrame(_ fd: Int32, _ message: [String: Any]) throws {
-    let body = try JSONSerialization.data(withJSONObject: message, options: [.sortedKeys])
-    guard body.count > 0 && body.count <= maximumControlFrame else { throw WorkerError.invalid }
-    let size = UInt32(body.count)
-    var frame = Data([UInt8((size >> 24) & 255), UInt8((size >> 16) & 255), UInt8((size >> 8) & 255), UInt8(size & 255)])
-    frame.append(body)
+    let rawKind = message["kind"] as? String ?? ""
+    let kind: ObstacleBridgeWorkerIPC.Kind = rawKind == "worker.hello" ? .hello : rawKind == "proxy.error" ? .error : rawKind == "proxy.snapshot" ? .event : .response
+    let generation = UInt64((message["generation"] as? Int) ?? 1)
+    let frame = try ObstacleBridgeWorkerIPC.encodeControl(kind: kind, generation: generation, value: message)
+    guard frame.count - ObstacleBridgeWorkerIPC.headerBytes <= maximumControlFrame else { throw WorkerError.invalid }
     try writeAll(fd, frame)
 }
 
@@ -518,11 +522,15 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
     guard validateSocket(fd, type: streamType), logFD != fd else { throw WorkerError.invalid }
     let logger = try logFD.map { try ChildLogger(fd: $0) }
     setTimeout(fd, seconds: 5)
+    let hello = try readFrame(fd)
+    guard hello["kind"] as? String == "worker.hello", hello["role"] as? String == "supervisor",
+          hello["capabilities"] as? [String] == ["proxy.control"], let helloGeneration = hello["generation"] as? Int, helloGeneration > 0 else { throw WorkerError.invalid }
+    try writeFrame(fd, ["v": 1, "kind": "worker.hello", "role": "proxy", "capabilities": ["proxy.control"], "generation": helloGeneration])
     let initial = try readFrame(fd)
     let rootLevel = initial["log_root_level"] as? Int ?? 30
     let loggerLevel = (initial["log_levels"] as? [String: Int])?["proxy_provider"] ?? 0
     logger?.level = loggerLevel == 0 ? rootLevel : loggerLevel
-    guard initial["kind"] as? String == "proxy.start", let generation = initial["generation"] as? Int, generation > 0,
+    guard initial["kind"] as? String == "proxy.start", let generation = initial["generation"] as? Int, generation == helloGeneration,
           let config = initial["config"] as? [String: Any],
           let bindHost = config["bind"] as? String, ["127.0.0.1", "::1"].contains(bindHost),
           let policy = config["policy"] as? [String: Any], Set(policy.keys) == ["allow_private_destinations", "blocked_host_patterns"],

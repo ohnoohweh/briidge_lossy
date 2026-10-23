@@ -17,7 +17,7 @@ from unittest import mock
 import pytest
 
 from obstacle_bridge.bridge_logging_ipc import fetch_remote_log_lines
-from obstacle_bridge.bridge_logging_worker import ChildLogRelay, ManagedLoggingWorker, SupervisedLoggingWorker, _PrivateLogHandler, activate_managed_logging, managed_logging_status
+from obstacle_bridge.bridge_logging_worker import ChildLogRelay, ManagedLoggingWorker, SupervisedLoggingWorker, _PrivateLogHandler, activate_managed_logging, managed_logging_status, serve_private_receiver
 from obstacle_bridge.bridge_proxy_worker import ProxyWorker
 from obstacle_bridge.bridge_peer_worker import PeerStackWorker
 from obstacle_bridge.bridge import AdminWebUI
@@ -32,7 +32,7 @@ def native_collector(tmp_path_factory):
     if not swiftc or sys.platform not in {"darwin", "linux"}:
         pytest.skip("native collector requires swiftc on macOS or Linux")
     binary = tmp_path_factory.mktemp("private-log-collector") / "collector"
-    subprocess.run([swiftc, str(SOURCE), "-o", str(binary)], check=True, capture_output=True, text=True)
+    subprocess.run([swiftc, str(SOURCE.parents[1] / "ObstacleBridgeDesktopShared" / "ObstacleBridgeWorkerIPC.swift"), str(SOURCE), "-o", str(binary)], check=True, capture_output=True, text=True)
     return binary
 
 
@@ -67,6 +67,24 @@ def test_private_worker_exits_when_owner_lifetime_closes(worker):
     worker.handler.emit(logging.LogRecord("private.test", logging.WARNING, __file__, 1, "after loss", (), None))
     assert worker.handler.dropped_records == 1
     assert worker.fetch(10)["available"] is False
+
+
+def test_private_receiver_rejects_a_bad_initial_hello_without_staying_alive():
+    parent_data, child_data = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    parent_lifetime, child_lifetime = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    result: list[int] = []
+    thread = threading.Thread(target=lambda: result.append(serve_private_receiver(child_data.detach(), child_lifetime.detach())))
+    try:
+        thread.start()
+        parent_data.send(b"not-a-worker-hello")
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        assert result == [0]
+    finally:
+        parent_data.close()
+        parent_lifetime.close()
+        if thread.is_alive():
+            thread.join(timeout=1)
 
 
 def test_private_query_lock_has_a_bounded_wait(worker):

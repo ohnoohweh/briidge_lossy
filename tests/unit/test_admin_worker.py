@@ -228,8 +228,8 @@ def test_supervised_admin_stop_cancels_pending_restart(monkeypatch):
 def test_admin_worker_rejects_oversized_frame_before_body():
     async def exercise():
         reader = asyncio.StreamReader()
-        reader.feed_data(struct.pack("!I", MAX_FRAME + 1))
-        with pytest.raises(ValueError, match="frame size"):
+        reader.feed_data(struct.pack("!4sBBHQI", b"OBIP", 1, 3, 0, 1, MAX_FRAME + 1))
+        with pytest.raises(ValueError, match="frame"):
             await asyncio.wait_for(_read_frame(reader), 0.2)
     asyncio.run(exercise())
 

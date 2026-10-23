@@ -9,48 +9,56 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
-import json
 import logging
 import os
 import shutil
 import socket
-import struct
 import sys
 import uuid
 from typing import Any
 
-MAX_FRAME = 1024 * 1024
+from .worker_ipc import WORKER_IPC_MAX_FRAME_BYTES, WorkerIPCFrame, WorkerIPCFrameKind, decode_control, encode_control, encode_frame, frame_size, try_decode_frame
 
 
-def _json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate peer worker field")
-        result[key] = value
-    return result
+MAX_FRAME = WORKER_IPC_MAX_FRAME_BYTES
+_PEER_CAPABILITIES = ["peer.binary-data", "peer.control"]
 
 
-def _invalid_constant(_value: str) -> None:
-    raise ValueError("invalid peer worker number")
-
+async def _read_ipc_frame(reader: asyncio.StreamReader) -> WorkerIPCFrame:
+    try:
+        header = await reader.readexactly(20)
+    except asyncio.IncompleteReadError as exc:
+        raise ValueError("invalid peer worker frame") from exc
+    size = frame_size(header)
+    if size is None or size > WORKER_IPC_MAX_FRAME_BYTES:
+        raise ValueError("invalid peer worker frame size")
+    frame, remainder = try_decode_frame(header + await reader.readexactly(size))
+    if frame is None or remainder:
+        raise ValueError("invalid peer worker frame")
+    return frame
 
 async def _read_frame(reader: asyncio.StreamReader) -> dict[str, Any]:
-    size = struct.unpack("!I", await reader.readexactly(4))[0]
-    if not 0 < size <= MAX_FRAME:
-        raise ValueError("invalid peer worker frame size")
-    value = json.loads((await reader.readexactly(size)).decode("utf-8"),
-                       object_pairs_hook=_json_object, parse_constant=_invalid_constant)
-    if not isinstance(value, dict) or type(value.get("v")) is not int or value["v"] != 1:
+    frame = await _read_ipc_frame(reader)
+    value = decode_control(frame)
+    if type(value.get("v")) is not int or value["v"] != 1:
         raise ValueError("invalid peer worker frame")
     return value
 
 
 async def _write_frame(writer: asyncio.StreamWriter, value: dict[str, Any]) -> None:
-    body = json.dumps(value, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
-    if not 0 < len(body) <= MAX_FRAME:
-        raise ValueError("invalid peer worker frame size")
-    writer.write(struct.pack("!I", len(body)) + body)
+    raw_kind = str(value.get("kind") or "")
+    frame_kind = (WorkerIPCFrameKind.HELLO if raw_kind == "worker.hello"
+                  else WorkerIPCFrameKind.REQUEST if raw_kind == "peer.start"
+                  else WorkerIPCFrameKind.ERROR if raw_kind.endswith(".error") or raw_kind == "peer.error"
+                  else WorkerIPCFrameKind.RESPONSE)
+    generation = value.get("generation")
+    generation = generation if type(generation) is int and generation > 0 else 1
+    writer.write(encode_control(frame_kind, generation, value))
+    await asyncio.wait_for(writer.drain(), 1.0)
+
+
+async def _write_data(writer: asyncio.StreamWriter, generation: int, payload: bytes) -> None:
+    writer.write(encode_frame(WorkerIPCFrameKind.DATA, generation, payload))
     await asyncio.wait_for(writer.drain(), 1.0)
 
 
@@ -106,6 +114,11 @@ async def _serve(control_fd: int, log_fd: int | None = None) -> None:
     runner = None
     log_socket = None
     try:
+        hello = await asyncio.wait_for(_read_frame(reader), 5.0)
+        if hello != {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": _PEER_CAPABILITIES, "generation": hello.get("generation")} or type(hello.get("generation")) is not int or hello["generation"] < 1:
+            raise ValueError("invalid peer worker hello")
+        generation = hello["generation"]
+        await _write_frame(writer, {"v": 1, "kind": "worker.hello", "role": "peer", "capabilities": _PEER_CAPABILITIES, "generation": generation})
         start = await asyncio.wait_for(_read_frame(reader), 5.0)
         peer_id, generation, config = start.get("peer_id"), start.get("generation"), start.get("config")
         if (start.get("kind") != "peer.start" or not isinstance(peer_id, str) or not 1 <= len(peer_id) <= 128
@@ -139,7 +152,15 @@ async def _serve(control_fd: int, log_fd: int | None = None) -> None:
         identity = {"v": 1, "peer_id": peer_id, "generation": generation}
         await _write_frame(writer, {**identity, "kind": "peer.ready", "implementation": "python"})
         while True:
-            request = await _read_frame(reader)
+            frame = await _read_ipc_frame(reader)
+            if frame.kind == WorkerIPCFrameKind.DATA:
+                if frame.generation != generation:
+                    raise ValueError("stale peer worker generation")
+                await _write_data(writer, generation, frame.payload)
+                continue
+            request = decode_control(frame)
+            if type(request.get("v")) is not int or request["v"] != 1:
+                raise ValueError("invalid peer worker frame")
             if (request.get("peer_id") != peer_id or type(request.get("generation")) is not int
                     or request["generation"] != generation):
                 raise ValueError("stale peer worker generation")
@@ -251,6 +272,10 @@ class PeerStackWorker:
             self._reader, self._writer = await asyncio.open_connection(sock=parent)
             self.process = process
             generation = self.generation + 1
+            await _write_frame(self._writer, {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": _PEER_CAPABILITIES, "generation": generation})
+            hello = await asyncio.wait_for(_read_frame(self._reader), 5.0)
+            if hello != {"v": 1, "kind": "worker.hello", "role": "peer", "capabilities": _PEER_CAPABILITIES, "generation": generation}:
+                raise RuntimeError("peer worker capability negotiation failed")
             names = ("runner", "tcp_session", "peer_address_protocol", "secure_link", "compress_layer", "channel_mux")
             await _write_frame(self._writer, {"v": 1, "kind": "peer.start", "peer_id": self.peer_id,
                                              "generation": generation, "config": config,
@@ -304,6 +329,22 @@ class PeerStackWorker:
 
     async def snapshot(self) -> dict[str, Any]:
         return (await self.snapshot_bundle())["status"]
+
+    async def echo_data(self, payload: bytes) -> bytes:
+        """Prove the negotiated opaque data lane without interpreting its bytes."""
+        body = bytes(payload)
+        async with self._lock:
+            if self.process is None or self.process.returncode is not None or self._reader is None or self._writer is None:
+                raise RuntimeError("peer worker unavailable")
+            try:
+                await _write_data(self._writer, self.generation, body)
+                reply = await asyncio.wait_for(_read_ipc_frame(self._reader), 2.0)
+                if reply.kind != WorkerIPCFrameKind.DATA or reply.generation != self.generation or reply.payload != body:
+                    raise ValueError("invalid peer worker data response")
+                return reply.payload
+            except BaseException:
+                await self._retire()
+                raise
 
     async def control(self, operation: str, target_peer_id: str | None = None, scope: str | None = None) -> dict[str, Any]:
         if operation not in {"reconnect", "rekey", "reload"}:

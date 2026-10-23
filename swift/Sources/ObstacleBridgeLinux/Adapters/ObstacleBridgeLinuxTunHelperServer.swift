@@ -1,5 +1,6 @@
 import Foundation
 import ObstacleBridgeCore
+import ObstacleBridgeDesktopShared
 #if os(Linux)
 import Glibc
 #endif
@@ -27,18 +28,19 @@ public extension ObstacleBridgeLinuxTunHelperServerBackend {
 }
 
 /// Partial Swift replacement for the Python local TUN helper server. It
-/// implements the version-1 authenticated control and packet wire boundary,
+/// implements the common OBIP authenticated control and packet wire boundary,
 /// including helper-originated packet and event fan-out. Network-policy
 /// lifecycle remains deliberately incomplete, so callers cannot mistake it
 /// for full replacement parity yet.
 public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
-    private typealias FrameKind = ObstacleBridgeTunHelperProtocolV1.FrameKind
-    private static let version = ObstacleBridgeTunHelperProtocolV1.version
+    private typealias FrameKind = ObstacleBridgeWorkerIPC.Kind
+    private static let helperCapabilities: Set<String> = ["tun.control", "tun.packet", "tun.event"]
     private static let maximumFrameBytes = ObstacleBridgeLinuxTunHelperAdapter.maximumFrameBytes
 
     public let socketPath: String
     private let sessionToken: String
     private let authenticatedClientIdleTimeout: TimeInterval
+    private let unauthenticatedClientIdleTimeout: TimeInterval
     private let backend: ObstacleBridgeLinuxTunHelperServerBackend
     private let onStop: (() -> Void)?
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.tun-helper-server", attributes: .concurrent)
@@ -47,16 +49,18 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     private var listener: Int32 = -1
     private var running = false
     private var authenticatedClients: Set<Int32> = []
+    private var clientGenerations: [Int32: UInt64] = [:]
     private var lastAuthenticatedActivity = Date()
     private var watchdog: DispatchSourceTimer?
 
-    public init(socketPath: String, sessionToken: String, backend: ObstacleBridgeLinuxTunHelperServerBackend, authenticatedClientIdleTimeout: TimeInterval = 5, onStop: (() -> Void)? = nil) throws {
+    public init(socketPath: String, sessionToken: String, backend: ObstacleBridgeLinuxTunHelperServerBackend, authenticatedClientIdleTimeout: TimeInterval = 5, unauthenticatedClientIdleTimeout: TimeInterval = 5, onStop: (() -> Void)? = nil) throws {
         guard !socketPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !sessionToken.isEmpty else {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux TUN helper server requires socket path and session token")
         }
         self.socketPath = socketPath
         self.sessionToken = sessionToken
         self.authenticatedClientIdleTimeout = max(authenticatedClientIdleTimeout, 0.5)
+        self.unauthenticatedClientIdleTimeout = max(unauthenticatedClientIdleTimeout, 0.1)
         self.backend = backend
         self.onStop = onStop
         backend.setPacketSink { [weak self] packet in self?.emitPacket(packet) }
@@ -96,7 +100,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         lock.unlock()
         watchdog?.cancel()
         if fd >= 0 { _ = shutdown(fd, Int32(SHUT_RDWR)); _ = close(fd) }
-        lock.lock(); authenticatedClients.removeAll(); lock.unlock()
+        lock.lock(); authenticatedClients.removeAll(); clientGenerations.removeAll(); lock.unlock()
         _ = unlink(socketPath)
         backend.stop()
         onStop?()
@@ -123,35 +127,51 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     }
 
     private func handle(client: Int32) {
-        defer { lock.lock(); authenticatedClients.remove(client); lock.unlock(); _ = close(client) }
+        defer { lock.lock(); authenticatedClients.remove(client); clientGenerations.removeValue(forKey: client); lock.unlock(); _ = close(client) }
         var authenticated = false
+        var generation: UInt64 = 0
         while true {
-            guard let (kind, body) = try? readFrame(from: client) else { return }
-            switch kind {
-            case .controlRequest:
-                guard let message = decodeControl(body) else { try? sendError("bad_control_payload", "invalid protocol-v1 control message", to: client); continue }
+            let timeoutMS = authenticated ? nil : Int32(min(30_000, max(100, unauthenticatedClientIdleTimeout * 1_000)))
+            guard let frame = try? readFrame(from: client, timeoutMS: timeoutMS) else { return }
+            if generation == 0 {
+                guard frame.kind == .hello,
+                      let negotiated = try? ObstacleBridgeWorkerIPC.negotiatedCapabilities(frame, supported: Self.helperCapabilities),
+                      negotiated.role == "tun-helper-client", Set(negotiated.capabilities) == Self.helperCapabilities else { return }
+                generation = frame.generation
+                lock.lock(); clientGenerations[client] = generation; lock.unlock()
+                do {
+                    try writeAll(try ObstacleBridgeWorkerIPC.hello(generation: generation, role: "tun-helper", capabilities: Array(Self.helperCapabilities)), to: client)
+                    try sendControl("READY", ["capabilities": Self.helperCapabilities.sorted()], kind: .ready, generation: generation, to: client)
+                } catch { return }
+                continue
+            }
+            guard frame.generation == generation else { return }
+            switch frame.kind {
+            case .request:
+                guard let message = decodeControl(frame) else { try? sendError("bad_control_payload", "invalid common IPC control message", generation: generation, to: client); continue }
                 let operation = message.operation.uppercased()
                 if operation == "HELLO" {
-                    guard message.payload["token"] as? String == sessionToken else { try? sendError("auth_failed", "invalid session token", to: client); continue }
+                    guard !authenticated else { try? sendError("already_authenticated", "HELLO is accepted only once", generation: generation, to: client); continue }
+                    guard message.payload["token"] as? String == sessionToken else { try? sendError("auth_failed", "invalid session token", generation: generation, to: client); continue }
                     authenticated = true
                     lock.lock(); authenticatedClients.insert(client); lastAuthenticatedActivity = Date(); lock.unlock()
-                    try? sendControl("HELLO_OK", ["authenticated": true], to: client)
+                    try? sendControl("HELLO_OK", ["authenticated": true], generation: generation, to: client)
                     continue
                 }
-                guard authenticated else { try? sendError("not_authenticated", "HELLO required before helper commands", to: client); continue }
+                guard authenticated else { try? sendError("not_authenticated", "HELLO required before helper commands", generation: generation, to: client); continue }
                 markAuthenticatedActivity()
-                handleControl(operation: operation, payload: message.payload, client: client)
-            case .packetToHelper:
-                guard authenticated else { try? sendError("not_authenticated", "HELLO required before helper packet writes", to: client); continue }
+                handleControl(operation: operation, payload: message.payload, generation: generation, client: client)
+            case .data:
+                guard authenticated else { try? sendError("not_authenticated", "HELLO required before helper packet writes", generation: generation, to: client); continue }
                 markAuthenticatedActivity()
-                do { try backend.writePacket(body) } catch { try? sendError("write_packet_failed", error.localizedDescription, to: client) }
+                do { try backend.writePacket(frame.payload) } catch { try? sendError("write_packet_failed", error.localizedDescription, generation: generation, to: client) }
             default:
-                try? sendError("unexpected_frame_kind", "\(kind.rawValue)", to: client)
+                try? sendError("unexpected_frame_kind", "\(frame.kind.rawValue)", generation: generation, to: client)
             }
         }
     }
 
-    private func handleControl(operation: String, payload: [String: Any], client: Int32) {
+    private func handleControl(operation: String, payload: [String: Any], generation: UInt64, client: Int32) {
         do {
             let reply: [String: Any]
             switch operation {
@@ -161,18 +181,18 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
             case "SET_TUN_ENABLED": reply = try backend.setTunEnabled(payload)
             case "SNAPSHOT": reply = try backend.snapshot()
             case "STOP":
-                try sendControl("STOP_OK", ["stopping": true], to: client)
+                try sendControl("STOP_OK", ["stopping": true], generation: generation, to: client)
                 emitEvent("helper stopping")
                 // Match the Python server: acknowledge first, then stop on a
                 // separate task so the client can receive STOP_OK.
                 queue.async { [weak self] in self?.stop() }
                 return
-            default: try sendError("unsupported_op", operation, to: client); return
+            default: try sendError("unsupported_op", operation, generation: generation, to: client); return
             }
-            try sendControl("\(operation)_OK", reply, to: client)
+            try sendControl("\(operation)_OK", reply, generation: generation, to: client)
         } catch {
             backend.recordFailure(stage: operation.lowercased(), error: error.localizedDescription)
-            try? sendError("\(operation.lowercased())_failed", error.localizedDescription, to: client)
+            try? sendError("\(operation.lowercased())_failed", error.localizedDescription, generation: generation, to: client)
         }
     }
     private func markAuthenticatedActivity() { lock.lock(); lastAuthenticatedActivity = Date(); lock.unlock() }
@@ -183,31 +203,35 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         if expired { emitEvent("helper authenticated-client idle timeout"); stop() }
     }
 
-    private func decodeControl(_ body: Data) -> (operation: String, payload: [String: Any])? {
-        try? ObstacleBridgeTunHelperProtocolV1.decodeControl(body)
+    private func decodeControl(_ frame: ObstacleBridgeWorkerIPC.Frame) -> (operation: String, payload: [String: Any])? {
+        guard let value = try? ObstacleBridgeWorkerIPC.decodeControl(frame),
+              let operation = value["op"] as? String, !operation.isEmpty, operation.count <= 64,
+              let payload = value["payload"] as? [String: Any] else { return nil }
+        return (operation, payload)
     }
-    private func sendError(_ code: String, _ detail: String, to fd: Int32) throws { try sendControl("ERROR", ["code": code, "detail": detail], to: fd) }
-    private func sendControl(_ operation: String, _ payload: [String: Any], to fd: Int32) throws {
-        let body = try ObstacleBridgeTunHelperProtocolV1.control(operation: operation, payload: payload)
-        try writeFrame(kind: .controlResponse, body: body, to: fd)
+    private func sendError(_ code: String, _ detail: String, generation: UInt64, to fd: Int32) throws { try sendControl("ERROR", ["code": code, "detail": detail], generation: generation, to: fd) }
+    private func sendControl(_ operation: String, _ payload: [String: Any], kind: FrameKind = .response, generation: UInt64, to fd: Int32) throws {
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: kind, generation: generation, value: ["op": operation, "payload": payload]), to: fd)
     }
     /// Packet and event producers use this fan-out path; only clients that
     /// completed HELLO receive helper-originated traffic.
     public func emitPacket(_ packet: Data) {
-        lock.lock(); let clients = authenticatedClients; lock.unlock()
-        for client in clients { try? writeFrame(kind: .packetFromHelper, body: packet, to: client) }
+        lock.lock(); let clients = authenticatedClients; let generations = clientGenerations; lock.unlock()
+        for client in clients { if let generation = generations[client] { try? writeFrame(kind: .data, generation: generation, body: packet, to: client) } }
     }
     /// Emits the same compact JSON EVENT shape as the Python helper. Event
     /// delivery is best-effort and only reaches authenticated local clients.
     public func emitEvent(_ detail: String) {
-        guard let body = try? JSONSerialization.data(withJSONObject: ["detail": detail], options: [.sortedKeys]) else { return }
-        lock.lock(); let clients = authenticatedClients; lock.unlock()
-        for client in clients { try? writeFrame(kind: .event, body: body, to: client) }
+        lock.lock(); let clients = authenticatedClients; let generations = clientGenerations; lock.unlock()
+        for client in clients { if let generation = generations[client] { try? sendControl("EVENT", ["detail": detail], kind: .event, generation: generation, to: client) } }
     }
-    private func writeFrame(kind: FrameKind, body: Data, to fd: Int32) throws {
+    private func writeFrame(kind: FrameKind, generation: UInt64, body: Data, to fd: Int32) throws {
         let frame: Data
-        do { frame = try ObstacleBridgeTunHelperProtocolV1.frame(kind: kind, body: body) }
-        catch ObstacleBridgeTunHelperProtocolV1.Error.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
+        do { frame = try ObstacleBridgeWorkerIPC.encode(kind: kind, generation: generation, payload: body) }
+        catch ObstacleBridgeWorkerIPC.Failure.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
+        try writeAll(frame, to: fd)
+    }
+    private func writeAll(_ frame: Data, to fd: Int32) throws {
         writerLock.lock(); defer { writerLock.unlock() }
         var offset = 0
         while offset < frame.count {
@@ -222,13 +246,21 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
             offset += Int(count)
         }
     }
-    private func readFrame(from fd: Int32) throws -> (FrameKind, Data) {
-        let wireHeader = try readExactly(ObstacleBridgeTunHelperProtocolV1.headerBytes, from: fd)
-        let parsed: (kind: FrameKind, bodyLength: Int)
-        do { parsed = try ObstacleBridgeTunHelperProtocolV1.header(wireHeader) }
-        catch ObstacleBridgeTunHelperProtocolV1.Error.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
+    private func readFrame(from fd: Int32, timeoutMS: Int32? = nil) throws -> ObstacleBridgeWorkerIPC.Frame {
+        if let timeoutMS {
+            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            guard poll(&descriptor, 1, timeoutMS) > 0, descriptor.revents & Int16(POLLIN) != 0 else {
+                throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected
+            }
+        }
+        let wireHeader = try readExactly(ObstacleBridgeWorkerIPC.headerBytes, from: fd)
+        let bodyLength: Int
+        do { bodyLength = try ObstacleBridgeWorkerIPC.frameSize(wireHeader) ?? 0 }
+        catch ObstacleBridgeWorkerIPC.Failure.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
         catch { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("unknown frame kind") }
-        return (parsed.kind, try readExactly(parsed.bodyLength, from: fd))
+        let decoded = try? ObstacleBridgeWorkerIPC.decode(wireHeader + (try readExactly(bodyLength, from: fd)))
+        guard let frame = decoded?.0, decoded?.1.isEmpty == true else { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("incomplete common IPC frame") }
+        return frame
     }
     private func readExactly(_ count: Int, from fd: Int32) throws -> Data {
         var result = Data(); var buffer = [UInt8](repeating: 0, count: min(8192, max(1, count)))

@@ -1,4 +1,7 @@
 import Foundation
+#if SWIFT_PACKAGE
+import ObstacleBridgeDesktopShared
+#endif
 #if canImport(Darwin)
 import Darwin
 private let datagramSocketType = SOCK_DGRAM
@@ -16,6 +19,7 @@ private let maxDatagram = 60 * 1024
 private let maxReplyDatagram = 8 * 1024
 private let ringLimit = 1_200
 private let ringByteLimit = 1_048_576
+private let privateStartupTimeoutMS: Int32 = 5_000
 
 private func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data("\(message)\n".utf8))
@@ -78,26 +82,53 @@ private func socketType(_ fd: Int32) -> Int32? {
 }
 
 let arguments = CommandLine.arguments
-let privateMode = arguments.count == 4 && arguments[1] == "--private-fds"
+let privateMode = arguments.count == 6 && arguments[1] == "--private-fds" && arguments[4] == "--generation"
 let socketFD: Int32
 let lifetimeFD: Int32
+let privateGeneration: UInt64
 if privateMode {
     guard let data = Int32(arguments[2]), let lifetime = Int32(arguments[3]),
+          let generation = UInt64(arguments[5]), generation > 0,
           data >= 0, lifetime >= 0, data != lifetime,
           socketType(data) == datagramSocketType, socketType(lifetime) == streamSocketType else {
         fail("invalid private logging sockets")
     }
     socketFD = data
     lifetimeFD = lifetime
-    let ready = try JSONSerialization.data(withJSONObject: [
+    privateGeneration = generation
+    var startupDescriptors = [pollfd(fd: data, events: Int16(POLLIN), revents: 0), pollfd(fd: lifetime, events: Int16(POLLIN), revents: 0)]
+    let startupPoll = poll(&startupDescriptors, nfds_t(startupDescriptors.count), privateStartupTimeoutMS)
+    guard startupPoll > 0, startupDescriptors[1].revents == 0,
+          startupDescriptors[0].revents & Int16(POLLIN) != 0 else {
+        fail("logging worker startup timed out")
+    }
+    var helloBuffer = [UInt8](repeating: 0, count: maxDatagram + ObstacleBridgeWorkerIPC.headerBytes + 1)
+    let helloCount = recv(data, &helloBuffer, helloBuffer.count, 0)
+    guard helloCount > 0, helloCount <= maxDatagram + ObstacleBridgeWorkerIPC.headerBytes,
+          let decoded = try? ObstacleBridgeWorkerIPC.decode(Data(helloBuffer.prefix(helloCount))),
+          let hello = decoded.0, decoded.1.isEmpty, hello.kind == .hello, hello.generation == generation,
+          let helloPayload = try? ObstacleBridgeWorkerIPC.decodeControl(hello),
+          helloPayload["v"] as? Int == 1, helloPayload["kind"] as? String == "worker.hello",
+          helloPayload["role"] as? String == "supervisor",
+          helloPayload["capabilities"] as? [String] == ["logging.query", "logging.records"] else {
+        fail("invalid logging worker capability request")
+    }
+    let helloReply = try ObstacleBridgeWorkerIPC.encodeControl(kind: .hello, generation: generation, value: [
+        "v": 1, "kind": "worker.hello", "role": "logging",
+        "capabilities": ["logging.query", "logging.records"],
+    ])
+    let helloSent = helloReply.withUnsafeBytes { send(data, $0.baseAddress, $0.count, 0) }
+    guard helloSent == helloReply.count else { fail("unable to negotiate logging worker") }
+    let ready = try ObstacleBridgeWorkerIPC.encodeControl(kind: .ready, generation: generation, value: [
         "v": 1, "kind": "worker.ready", "role": "logging", "implementation": "native",
-    ], options: [.sortedKeys])
+    ])
     let sent = ready.withUnsafeBytes { send(data, $0.baseAddress, $0.count, 0) }
     guard sent == ready.count else { fail("unable to announce logging worker") }
 } else {
     let port = parsePort(arguments)
     socketFD = socket(AF_INET, datagramSocketType, 0)
     lifetimeFD = -1
+    privateGeneration = 0
     guard socketFD >= 0 else { fail("unable to create collector socket") }
     var bindAddress = sockaddr_in()
     bindAddress.sin_family = sa_family_t(AF_INET)
@@ -138,13 +169,24 @@ while true {
         if errno == EINTR { continue }
         fail("collector socket receive failed")
     }
-    guard count <= (privateMode ? maxReplyDatagram : maxDatagram),
-          let payload = (try? JSONSerialization.jsonObject(with: Data(buffer.prefix(count)))) as? [String: Any],
+    guard count <= (privateMode ? maxReplyDatagram + ObstacleBridgeWorkerIPC.headerBytes : maxDatagram) else { continue }
+    let wire = Data(buffer.prefix(count))
+    let payloadData: Data
+    if privateMode {
+        guard let decoded = try? ObstacleBridgeWorkerIPC.decode(wire), let frame = decoded.0,
+              decoded.1.isEmpty, frame.generation == privateGeneration,
+              frame.kind == .request || frame.kind == .data else { continue }
+        payloadData = frame.payload
+    } else {
+        payloadData = wire
+    }
+    guard let payload = (try? JSONSerialization.jsonObject(with: payloadData)) as? [String: Any],
           let version = payload["v"] as? Int, version == 1 else { continue }
     if payload["kind"] as? String == "logs.query" {
         guard let data = reply(lines, limit: (payload["limit"] as? Int) ?? 400, requestID: payload["request_id"] as? String) else { continue }
         if privateMode {
-            _ = data.withUnsafeBytes { send(socketFD, $0.baseAddress, $0.count, Int32(MSG_DONTWAIT)) }
+            guard let framed = try? ObstacleBridgeWorkerIPC.encode(kind: .response, generation: privateGeneration, payload: data) else { continue }
+            _ = framed.withUnsafeBytes { send(socketFD, $0.baseAddress, $0.count, Int32(MSG_DONTWAIT)) }
         } else {
             _ = withUnsafePointer(to: &peer) { address in
                 address.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in

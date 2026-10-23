@@ -10,13 +10,17 @@ from scripts.check_swift_shared_parity_guard import (
 def test_classify_swift_shared_parity_buckets_changed_files() -> None:
     classified = classify_swift_shared_parity([
         "swift/Sources/ObstacleBridgeAppleShared/SharedThing.swift",
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift",
         "swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift",
         "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
         "ios/tests/test_m3_native_sources.py",
         "README.md",
     ])
 
-    assert classified["shared_swift"] == ["swift/Sources/ObstacleBridgeAppleShared/SharedThing.swift"]
+    assert classified["shared_swift"] == [
+        "swift/Sources/ObstacleBridgeAppleShared/SharedThing.swift",
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift",
+    ]
     assert classified["ios_swift"] == ["swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift"]
     assert classified["macos_swift"] == ["swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift"]
     assert classified["parity_tests"] == ["ios/tests/test_m3_native_sources.py"]

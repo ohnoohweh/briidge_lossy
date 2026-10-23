@@ -76,22 +76,21 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
 
     private static func readFrame(_ fd: Int32, timeout: UInt64) throws -> [String: Any] {
         let deadline = DispatchTime.now().uptimeNanoseconds + timeout
-        let prefix = [UInt8](try readExact(fd, count: 4, deadline: deadline))
-        let size = prefix.reduce(0) { ($0 << 8) | Int($1) }
-        guard size > 0, size <= maxFrame else { throw Failure.invalidFrame }
-        let body = try readExact(fd, count: size, deadline: deadline)
-        guard let value = try JSONSerialization.jsonObject(with: body) as? [String: Any], value["v"] as? Int == 1 else {
-            throw Failure.invalidFrame
-        }
+        let header = try readExact(fd, count: ObstacleBridgeWorkerIPC.headerBytes, deadline: deadline)
+        guard let size = try ObstacleBridgeWorkerIPC.frameSize(header), size <= maxFrame else { throw Failure.invalidFrame }
+        let (frame, remainder) = try ObstacleBridgeWorkerIPC.decode(header + (try readExact(fd, count: size, deadline: deadline)))
+        guard let frame, remainder.isEmpty else { throw Failure.invalidFrame }
+        let value = try ObstacleBridgeWorkerIPC.decodeControl(frame)
+        guard value["v"] as? Int == 1 else { throw Failure.invalidFrame }
         return value
     }
 
     private func writeFrame(_ fd: Int32, value: [String: Any]) throws {
-        let data = try JSONSerialization.data(withJSONObject: value)
-        guard !data.isEmpty, data.count <= Self.maxFrame else { throw Failure.invalidFrame }
-        let size = UInt32(data.count)
-        var frame = Data([UInt8((size >> 24) & 255), UInt8((size >> 16) & 255), UInt8((size >> 8) & 255), UInt8(size & 255)])
-        frame.append(data)
+        let rawKind = value["kind"] as? String ?? ""
+        let kind: ObstacleBridgeWorkerIPC.Kind = rawKind == "worker.hello" ? .hello : rawKind == "proxy.start" || rawKind == "proxy.stop" ? .request : .response
+        let generation = UInt64((value["generation"] as? Int) ?? 1)
+        let frame = try ObstacleBridgeWorkerIPC.encodeControl(kind: kind, generation: generation, value: value)
+        guard frame.count - ObstacleBridgeWorkerIPC.headerBytes <= Self.maxFrame else { throw Failure.invalidFrame }
         let deadline = DispatchTime.now().uptimeNanoseconds + 1_000_000_000
         writeLock.lock(); defer { writeLock.unlock() }
         var offset = 0
@@ -155,6 +154,10 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
             relay?.releaseChildHandle()
             lock.lock(); child = process; control = parentFD; stopping = false; logRelay = relay; lock.unlock()
             try childInput.close()
+            try writeFrame(parentFD, value: ["v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["proxy.control"], "generation": expectedGeneration])
+            let hello = try Self.readFrame(parentFD, timeout: 5_000_000_000)
+            guard hello["kind"] as? String == "worker.hello", hello["role"] as? String == "proxy",
+                  hello["capabilities"] as? [String] == ["proxy.control"], hello["generation"] as? Int == expectedGeneration else { throw Failure.invalidFrame }
             try writeFrame(parentFD, value: ["v": 1, "kind": "proxy.start", "generation": expectedGeneration, "config": config,
                                              "log_root_level": 10, "log_levels": ["proxy_provider": loggingWorker?.proxyLogLevel ?? 0]])
             let response = try Self.readFrame(parentFD, timeout: 5_000_000_000)

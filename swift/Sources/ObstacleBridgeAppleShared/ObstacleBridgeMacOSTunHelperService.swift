@@ -1,5 +1,8 @@
 import Foundation
 
+// The packaged macOS helper's Unix-socket control path uses the shared OBIP
+// worker framing; XPC remains a separate in-process service boundary.
+
 #if os(macOS)
 #if canImport(ServiceManagement)
 import ServiceManagement
@@ -7,8 +10,15 @@ import ServiceManagement
 
 enum ObstacleBridgeMacOSTunHelperService {
     static let helperBundleIdentifier = "com.obstaclebridge.macos.ObstacleBridge.TunHelper"
+    /// Packaged HostRunner child selector for the inherited-only native Admin bootstrap.
+    static let nativeAdminChildControlArgument = "--admin-worker-control-fd"
+    /// Optional record-only descriptor for that same inherited-only child.
+    static let nativeAdminChildLogArgument = "--log-fd"
     static let helperExecutableName = "ObstacleBridgeTunHelper"
     static let expectedHelperVersion = "1"
+    /// Bound the packaged helper's accept loop so authenticated owner loss
+    /// cannot leave its Unix-socket capability live behind the client.
+    static let ownerLossAcceptPollMilliseconds: Int32 = 100
     static let pythonHelperProtocolVersion = ObstacleBridgeTunHelperProtocolV1.version
     static let helperLaunchDaemonPlistName = "\(helperBundleIdentifier).plist"
     static let xpcMachServiceName = "\(helperBundleIdentifier).xpc"

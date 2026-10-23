@@ -23,9 +23,10 @@ def native_log_binaries(tmp_path_factory):
     directory = tmp_path_factory.mktemp("log-supervisor")
     owner = directory / "supervisor"
     collector = directory / "collector"
-    subprocess.run([swiftc, str(ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift"),
+    shared = ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift"
+    subprocess.run([swiftc, str(shared), str(ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift"),
                     str(ROOT / "tests/fixtures/native_log_supervisor_runner.swift"), "-o", str(owner)], check=True)
-    subprocess.run([swiftc, str(ROOT / "swift/Sources/ObstacleBridgeLogCollector/main.swift"), "-o", str(collector)], check=True)
+    subprocess.run([swiftc, str(shared), str(ROOT / "swift/Sources/ObstacleBridgeLogCollector/main.swift"), "-o", str(collector)], check=True)
     return str(owner), str(collector)
 
 

@@ -14,10 +14,12 @@ var targets: [Target] = [
     ),
     .executableTarget(
         name: "ObstacleBridgeProxyWorker",
+        dependencies: ["ObstacleBridgeDesktopShared"],
         path: "swift/Sources/ObstacleBridgeProxyWorker"
     ),
     .executableTarget(
         name: "ObstacleBridgeLogCollector",
+        dependencies: ["ObstacleBridgeDesktopShared"],
         path: "swift/Sources/ObstacleBridgeLogCollector"
     ),
     .systemLibrary(
@@ -51,6 +53,11 @@ var targets: [Target] = [
         name: "ObstacleBridgeApplePackageProbeTests",
         dependencies: ["ObstacleBridgeApplePackageProbe"],
         path: "swift/Tests/ObstacleBridgeApplePackageProbeTests"
+    ),
+    .testTarget(
+        name: "ObstacleBridgeDesktopSharedTests",
+        dependencies: ["ObstacleBridgeDesktopShared"],
+        path: "swift/Tests/ObstacleBridgeDesktopSharedTests"
     ),
 ]
 
@@ -92,7 +99,7 @@ targets += [
     ),
     .testTarget(
         name: "ObstacleBridgeLinuxAdapterTests",
-        dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore"],
+        dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore", "ObstacleBridgeDesktopShared"],
         path: "swift/Tests/ObstacleBridgeLinuxAdapterTests"
     ),
 ]

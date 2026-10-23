@@ -9,12 +9,13 @@ import json
 import logging
 import math
 import socket
-import struct
 import sys
 import threading
 import time
 import uuid
 from typing import Any
+
+from .worker_ipc import WorkerIPCFrameKind, decode_control, encode_control, frame_size, try_decode_frame
 
 MAX_FRAME = 1024 * 1024
 SYNC_METHODS = frozenset({
@@ -30,24 +31,32 @@ ASYNC_METHODS = frozenset({"request_tun_enabled", "probe_tun_connectivity_verifi
                            "request_secure_link_reload_async"})
 
 
-def _encode(message: dict[str, Any]) -> bytes:
-    data = json.dumps(message, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
-    if not data or len(data) > MAX_FRAME:
+def _encode(message: dict[str, Any], generation: int = 1) -> bytes:
+    kind = (WorkerIPCFrameKind.HELLO if message.get("kind") == "worker.hello"
+            else WorkerIPCFrameKind.READY if message.get("kind") == "admin.ready"
+            else WorkerIPCFrameKind.REQUEST if message.get("kind") in {"admin.start", "admin.call"}
+            else WorkerIPCFrameKind.RESPONSE)
+    frame = encode_control(kind, generation, message)
+    if len(frame) - 20 > MAX_FRAME:
         raise ValueError("invalid Admin worker frame size")
-    return struct.pack("!I", len(data)) + data
+    return frame
 
 
-async def _read_frame(reader: asyncio.StreamReader) -> dict[str, Any]:
-    size = struct.unpack("!I", await reader.readexactly(4))[0]
-    if not 0 < size <= MAX_FRAME:
+async def _read_frame(reader: asyncio.StreamReader, generation: int = 1) -> dict[str, Any]:
+    header = await reader.readexactly(20)
+    size = frame_size(header)
+    if size is None or size > MAX_FRAME:
         raise ValueError("invalid Admin worker frame size")
-    value = json.loads((await reader.readexactly(size)).decode("utf-8"))
-    if not isinstance(value, dict) or value.get("v") != 1:
+    decoded = try_decode_frame(header + await reader.readexactly(size))
+    if decoded is None or decoded[1] or decoded[0].generation != generation:
+        raise ValueError("invalid Admin worker frame")
+    value = decode_control(decoded[0])
+    if value.get("v") != 1:
         raise ValueError("invalid Admin worker frame")
     return value
 
 
-def _read_socket_frame(sock: socket.socket) -> dict[str, Any]:
+def _read_socket_frame(sock: socket.socket, generation: int = 1) -> dict[str, Any]:
     def read_exact(size: int) -> bytes:
         result = bytearray()
         while len(result) < size:
@@ -56,11 +65,15 @@ def _read_socket_frame(sock: socket.socket) -> dict[str, Any]:
                 raise EOFError("Admin worker control closed")
             result.extend(chunk)
         return bytes(result)
-    size = struct.unpack("!I", read_exact(4))[0]
-    if not 0 < size <= MAX_FRAME:
+    header = read_exact(20)
+    size = frame_size(header)
+    if size is None or size > MAX_FRAME:
         raise ValueError("invalid Admin worker frame size")
-    value = json.loads(read_exact(size).decode("utf-8"))
-    if not isinstance(value, dict) or value.get("v") != 1:
+    decoded = try_decode_frame(header + read_exact(size))
+    if decoded is None or decoded[1] or decoded[0].generation != generation:
+        raise ValueError("invalid Admin worker frame")
+    value = decode_control(decoded[0])
+    if value.get("v") != 1:
         raise ValueError("invalid Admin worker frame")
     return value
 
@@ -77,11 +90,12 @@ def _serializable_args(args: Any) -> dict[str, Any]:
 
 
 class _RemoteRunner:
-    def __init__(self, sock: socket.socket, args: argparse.Namespace):
+    def __init__(self, sock: socket.socket, args: argparse.Namespace, generation: int = 1):
         self._socket = sock
         self.args = args
         self._lock = threading.Lock()
         self._failed = False
+        self._generation = generation
 
     def _call(self, method: str, *args, **kwargs):
         timeout = 4.0 if method in ASYNC_METHODS else 0.35
@@ -95,8 +109,8 @@ class _RemoteRunner:
             request_id = uuid.uuid4().hex
             self._socket.settimeout(remaining)
             self._socket.sendall(_encode({"v": 1, "kind": "admin.call", "id": request_id,
-                                         "method": method, "args": args, "kwargs": kwargs, "deadline": deadline}))
-            reply = _read_socket_frame(self._socket)
+                                         "method": method, "args": args, "kwargs": kwargs, "deadline": deadline}, self._generation))
+            reply = _read_socket_frame(self._socket, self._generation)
             if reply.get("kind") != "admin.reply" or reply.get("id") != request_id:
                 raise ValueError("invalid Admin runner reply")
             if not reply.get("ok"):
@@ -127,7 +141,7 @@ class _RemoteRunner:
         raise AttributeError(name)
 
 
-async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None) -> None:
+async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None, generation: int = 1) -> None:
     control = socket.socket(fileno=control_fd)
     lifetime = socket.socket(fileno=lifetime_fd)
     if (control.family != socket.AF_UNIX or control.type != socket.SOCK_STREAM
@@ -135,7 +149,11 @@ async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None) ->
             or control_fd == lifetime_fd):
         raise ValueError("invalid Admin worker sockets")
     control.settimeout(5.0)
-    bootstrap = _read_socket_frame(control)
+    hello = _read_socket_frame(control, generation)
+    if hello != {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": generation}:
+        raise ValueError("invalid Admin worker hello")
+    control.sendall(_encode({"v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": generation}, generation))
+    bootstrap = _read_socket_frame(control, generation)
     if bootstrap.get("kind") != "admin.start" or not isinstance(bootstrap.get("args"), dict):
         raise ValueError("invalid Admin worker startup")
     args = argparse.Namespace(**bootstrap["args"])
@@ -144,7 +162,7 @@ async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None) ->
         from .bridge_logging_worker import install_child_log_handler
         log_socket = install_child_log_handler(log_fd, int(bootstrap.get("log_root_level", logging.WARNING)),
                                                bootstrap.get("log_levels", {}))
-    proxy = _RemoteRunner(control, args)
+    proxy = _RemoteRunner(control, args, generation)
     from .bridge import AdminWebUI
     from .bridge_logging_ipc import swap_admin_log_query_client
 
@@ -165,7 +183,7 @@ async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None) ->
         await ui.start()
         sockets = ui.server.sockets if ui.server else []
         port = sockets[0].getsockname()[1] if sockets else 0
-        control.sendall(_encode({"v": 1, "kind": "admin.ready", "implementation": "python", "port": port}))
+        control.sendall(_encode({"v": 1, "kind": "admin.ready", "implementation": "python", "port": port}, generation))
         await stop.wait()
     finally:
         await ui.stop()
@@ -217,8 +235,9 @@ class AdminWorker:
         try:
             from .bridge_logging_worker import open_child_log_relay
             self._log_relay = open_child_log_relay()
+            next_generation = self.generation + 1
             command = [sys.executable, "-m", "obstacle_bridge.bridge_admin_worker",
-                       "--control-fd", str(child_control.fileno()), "--lifetime-fd", str(child_lifetime.fileno())]
+                       "--control-fd", str(child_control.fileno()), "--lifetime-fd", str(child_lifetime.fileno()), "--generation", str(next_generation)]
             inherited = [child_control.fileno(), child_lifetime.fileno()]
             if self._log_relay is not None:
                 log_fd = self._log_relay.sender.fileno()
@@ -237,11 +256,16 @@ class AdminWorker:
             # changing the runner's persisted configuration.
             if self.generation and int(child_args.get("admin_web_port") or 0) == 0:
                 child_args["admin_web_port"] = self.port
+            self.writer.write(_encode({"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": next_generation}, next_generation))
+            await asyncio.wait_for(self.writer.drain(), 1.0)
+            hello = await asyncio.wait_for(_read_frame(reader, next_generation), 5.0)
+            if hello != {"v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": next_generation}:
+                raise ValueError("invalid Admin worker hello")
             self.writer.write(_encode({"v": 1, "kind": "admin.start", "args": child_args,
                                        "log_root_level": logging.getLogger().level,
-                                       "log_levels": {"admin_web": logging.getLogger("admin_web").level}}))
+                                       "log_levels": {"admin_web": logging.getLogger("admin_web").level}}, next_generation))
             await asyncio.wait_for(self.writer.drain(), 1.0)
-            response = await asyncio.wait_for(_read_frame(reader), 6.0)
+            response = await asyncio.wait_for(_read_frame(reader, next_generation), 6.0)
             if response.get("kind") != "admin.ready" or response.get("implementation") != "python":
                 raise ValueError("invalid Admin worker readiness")
             self.port = int(response.get("port") or 0)
@@ -283,7 +307,7 @@ class AdminWorker:
     async def _dispatch(self, reader: asyncio.StreamReader):
         try:
             while True:
-                request = await _read_frame(reader)
+                request = await _read_frame(reader, self.generation)
                 method = request.get("method")
                 request_id = request.get("id")
                 if (request.get("kind") != "admin.call" or not isinstance(method, str) or method not in SYNC_METHODS | ASYNC_METHODS
@@ -305,9 +329,9 @@ class AdminWorker:
                     reply.update(ok=True, result=result)
                     if method == "update_config":
                         reply["args"] = _serializable_args(self.args)
-                    encoded = _encode(reply)
+                    encoded = _encode(reply, self.generation)
                 except Exception:
-                    encoded = _encode({"v": 1, "kind": "admin.reply", "id": request_id, "ok": False})
+                    encoded = _encode({"v": 1, "kind": "admin.reply", "id": request_id, "ok": False}, self.generation)
                 self.writer.write(encoded)
                 await asyncio.wait_for(self.writer.drain(), 1.0)
         except (asyncio.IncompleteReadError, ConnectionError, ValueError, OSError, asyncio.TimeoutError):
@@ -354,9 +378,10 @@ def main() -> None:
     parser.add_argument("--control-fd", required=True, type=int)
     parser.add_argument("--lifetime-fd", required=True, type=int)
     parser.add_argument("--log-fd", type=int)
+    parser.add_argument("--generation", type=int, default=1)
     args = parser.parse_args()
     try:
-        asyncio.run(_serve_child(args.control_fd, args.lifetime_fd, args.log_fd))
+        asyncio.run(_serve_child(args.control_fd, args.lifetime_fd, args.log_fd, args.generation))
     except Exception:
         # Startup/control frames can contain secrets and are never logged.
         raise SystemExit(1)

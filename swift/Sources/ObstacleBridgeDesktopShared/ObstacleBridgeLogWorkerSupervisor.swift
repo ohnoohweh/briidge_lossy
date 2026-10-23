@@ -109,22 +109,26 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         }
     }
 
-    private func receive(_ fd: Int32) -> [String: Any]? {
-        var bytes = [UInt8](repeating: 0, count: Self.maxDatagram + 1)
+    private func receive(_ fd: Int32, generation: UInt64) -> (kind: ObstacleBridgeWorkerIPC.Kind, payload: [String: Any])? {
+        var bytes = [UInt8](repeating: 0, count: Self.maxDatagram + ObstacleBridgeWorkerIPC.headerBytes + 1)
         let count = recv(fd, &bytes, bytes.count, 0)
-        guard count > 0, count <= Self.maxDatagram,
-              let object = try? JSONSerialization.jsonObject(with: Data(bytes.prefix(count))) as? [String: Any] else { return nil }
-        return object
+        guard count > 0, count <= Self.maxDatagram + ObstacleBridgeWorkerIPC.headerBytes,
+              let decoded = try? ObstacleBridgeWorkerIPC.decode(Data(bytes.prefix(count))), let frame = decoded.0,
+              decoded.1.isEmpty, frame.generation == generation,
+              let object = try? JSONSerialization.jsonObject(with: frame.payload) as? [String: Any] else { return nil }
+        return (frame.kind, object)
     }
 
-    private func sendDatagram(_ fd: Int32, payload: [String: Any]) -> Bool {
+    private func sendDatagram(_ fd: Int32, kind: ObstacleBridgeWorkerIPC.Kind, generation: UInt64, payload: [String: Any]) -> Bool {
         guard let data = try? JSONSerialization.data(withJSONObject: payload), !data.isEmpty, data.count <= Self.maxDatagram else { return false }
+        guard let frame = try? ObstacleBridgeWorkerIPC.encode(kind: kind, generation: generation, payload: data),
+              frame.count <= Self.maxDatagram + ObstacleBridgeWorkerIPC.headerBytes else { return false }
         #if os(Linux)
         let flags = Int32(MSG_DONTWAIT | MSG_NOSIGNAL)
         #else
         let flags = Int32(MSG_DONTWAIT)
         #endif
-        return data.withUnsafeBytes { send(fd, $0.baseAddress, $0.count, flags) } == data.count
+        return frame.withUnsafeBytes { send(fd, $0.baseAddress, $0.count, flags) } == frame.count
     }
 
     /// Call while lifecycleLock is held. The child inherits only the two
@@ -156,16 +160,26 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         #endif
         guard let nullOutput = FileHandle(forWritingAtPath: "/dev/null") else { throw Failure.unavailable }
         child.executableURL = URL(fileURLWithPath: executable)
-        child.arguments = (implementation == "python" ? ["-m", "obstacle_bridge.bridge_logging_ipc"] : []) + ["--private-fds", "0", "2"]
+        let nextGeneration = UInt64(generation + 1)
+        child.arguments = (implementation == "python" ? ["-m", "obstacle_bridge.bridge_logging_ipc"] : []) + ["--private-fds", "0", "2", "--generation", String(nextGeneration)]
         child.standardInput = childInput
         child.standardError = childError
         child.standardOutput = nullOutput
         try child.run()
         try childInput.close(); try childError.close(); try nullOutput.close()
-        guard waitReadable(parentData, milliseconds: 5_000),
-              let ready = receive(parentData), ready["v"] as? Int == 1,
-              ready["kind"] as? String == "worker.ready", ready["role"] as? String == "logging",
-              ready["implementation"] as? String == implementation, child.isRunning else { throw Failure.unavailable }
+        guard sendDatagram(parentData, kind: .hello, generation: nextGeneration, payload: [
+                  "v": 1, "kind": "worker.hello", "role": "supervisor",
+                  "capabilities": ["logging.query", "logging.records"],
+              ]),
+              waitReadable(parentData, milliseconds: 5_000),
+              let hello = receive(parentData, generation: nextGeneration), hello.kind == .hello,
+              hello.payload["v"] as? Int == 1, hello.payload["kind"] as? String == "worker.hello",
+              hello.payload["role"] as? String == "logging",
+              hello.payload["capabilities"] as? [String] == ["logging.query", "logging.records"],
+              waitReadable(parentData, milliseconds: 5_000),
+              let ready = receive(parentData, generation: nextGeneration), ready.kind == .ready, ready.payload["v"] as? Int == 1,
+              ready.payload["kind"] as? String == "worker.ready", ready.payload["role"] as? String == "logging",
+              ready.payload["implementation"] as? String == implementation, child.isRunning else { throw Failure.unavailable }
         stateLock.lock()
         process = child; dataFD = parentData; lifetimeFD = parentLifetime; generation += 1
         stateLock.unlock()
@@ -220,7 +234,7 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         let record: [String: Any] = ["v": 1, "created": Date().timeIntervalSince1970, "name": String(name.prefix(256)),
                                      "level": String(level.prefix(32)), "levelno": levelNumber,
                                      "message": String(message.prefix(4096)), "process": Int(ProcessInfo.processInfo.processIdentifier), "thread": "native"]
-        if !sendDatagram(dataFD, payload: record) { droppedRecords += 1 }
+        if !sendDatagram(dataFD, kind: .data, generation: UInt64(generation), payload: record) { droppedRecords += 1 }
     }
 
     /// A child gets a separate record-only socket, never the Admin query
@@ -245,8 +259,9 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         #else
         let flags = Int32(MSG_DONTWAIT)
         #endif
-        let sent = data.withUnsafeBytes { send(dataFD, $0.baseAddress, $0.count, flags) }
-        if sent != data.count { droppedRecords += 1 }
+        guard let frame = try? ObstacleBridgeWorkerIPC.encode(kind: .data, generation: UInt64(generation), payload: data) else { droppedRecords += 1; return }
+        let sent = frame.withUnsafeBytes { send(dataFD, $0.baseAddress, $0.count, flags) }
+        if sent != frame.count { droppedRecords += 1 }
     }
 
     public func fetch(limit: Int) -> [String: Any] {
@@ -260,10 +275,10 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         guard descriptor >= 0 else { return unavailable }
         defer { close(descriptor) }
         let requestID = UUID().uuidString.lowercased()
-        guard sendDatagram(descriptor, payload: ["v": 1, "kind": "logs.query", "limit": max(1, min(limit, 1000)), "request_id": requestID]),
-              waitReadable(descriptor, milliseconds: 150), let reply = receive(descriptor),
-              reply["v"] as? Int == 1, reply["kind"] as? String == "logs.reply", reply["ok"] as? Bool == true,
-              reply["request_id"] as? String == requestID, let lines = reply["lines"] as? [String] else { return unavailable }
+        guard sendDatagram(descriptor, kind: .request, generation: UInt64(currentGeneration), payload: ["v": 1, "kind": "logs.query", "limit": max(1, min(limit, 1000)), "request_id": requestID]),
+              waitReadable(descriptor, milliseconds: 150), let reply = receive(descriptor, generation: UInt64(currentGeneration)), reply.kind == .response,
+              reply.payload["v"] as? Int == 1, reply.payload["kind"] as? String == "logs.reply", reply.payload["ok"] as? Bool == true,
+              reply.payload["request_id"] as? String == requestID, let lines = reply.payload["lines"] as? [String] else { return unavailable }
         stateLock.lock(); let current = !stopped && generation == currentGeneration && process?.isRunning == true; stateLock.unlock()
         return current ? ["available": true, "lines": lines, "error": ""] : unavailable
     }

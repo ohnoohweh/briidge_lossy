@@ -67,8 +67,14 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     entrypoint = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
     worker = (APP_NATIVE_DIR / "ObstacleBridgeNativePeerWorker.swift").read_text(encoding="utf-8")
     runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    common_ipc = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeWorkerIPC.swift").read_text(encoding="utf-8")
+    helper_service = (ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared" / "ObstacleBridgeMacOSTunHelperService.swift").read_text(encoding="utf-8")
+    proxy_worker = (ROOT / "swift" / "Sources" / "ObstacleBridgeProxyWorker" / "main.swift").read_text(encoding="utf-8")
+    proxy_supervisor = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeProxyWorkerSupervisor.swift").read_text(encoding="utf-8")
 
     assert build_script.count("ObstacleBridgeNativePeerWorker.swift") == 2
+    assert build_script.count("ObstacleBridgeWorkerIPC.swift") == 5
+    assert build_script.count("ObstacleBridgeNativeAdminWorker.swift") == 1
     assert '"--peer-worker-control-fd"' in entrypoint
     assert '"--log-fd"' in entrypoint
     assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker
@@ -78,6 +84,21 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert "native peer worker cannot own shared desktop services" in runner
     assert "private func recordOperationalLog(" in runner
     assert runner.count("NSLog(") == 1
+    assert "ObstacleBridgeWorkerIPC.frameSize(header)" in worker
+    assert "ObstacleBridgeWorkerIPC.encodeControl" in worker
+    assert '"peer.binary-data", "peer.control"' in worker
+    assert "frame.kind == .data" in worker
+    assert "writeData(control, generation: generation, payload: frame.payload)" in worker
+    assert "ObstacleBridgeWorkerIPC.decodeControl" in proxy_worker
+    assert "ObstacleBridgeWorkerIPC.encodeControl" in proxy_supervisor
+    assert "public static let maximumFrameBytes = 1_048_576" in common_ipc
+    assert "ControlJSONScanner" in common_ipc
+    assert "hasDuplicateObjectKey" in common_ipc
+    assert "nativeAdminChildControlArgument" in entrypoint
+    assert 'nativeAdminChildControlArgument = "--admin-worker-control-fd"' in helper_service
+    assert 'nativeAdminChildLogArgument = "--log-fd"' in helper_service
+    assert "ObstacleBridgeNativeAdminMacOSService.run" in entrypoint
+    assert "ObstacleBridgeNativeAdminMacOSService.swift" in build_script
 
 
 def test_macos_logging_producer_inventory_has_no_private_mode_direct_sink() -> None:
@@ -157,6 +178,7 @@ def test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_wi
                     "secure_link": {"secure_link": True, "secure_link_mode": "psk", "secure_link_psk": secret},
                     "TUN_routing": {"enabled_on_startup": False},
                 })
+                assert await worker.echo_data(b"macos-native-data\x00") == b"macos-native-data\x00"
                 for _ in range(100):
                     records = collector.fetch(100)
                     if any("peer_worker.started" in line for line in records["lines"]):
@@ -491,6 +513,9 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert 'return "helper_version_mismatch"' in service
     assert "let helperVersionMismatch = helperPresent && plistPresent && helperStatusOK && !helperVersionMatches" in service
     assert '"repair_action": helperVersionMismatch ? "stop_then_register" : ""' in service
+    assert "readFrame(fd, timeoutMS: authenticated ? nil" in protocol_server
+    assert "var descriptor = pollfd(fd: fd, events: Int16(POLLIN)" in protocol_server
+    assert '"HELLO is accepted only once"' in protocol_server
     assert "Stop/unregister the helper, rebuild or replace the app bundle, then register it again." in service
     assert '"approval_required": approvalRequired' in service
     assert '"approval_action": approvalRequired ? "open_system_settings_login_items" : ""' in service
@@ -539,7 +564,10 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert 'args.contains("--helper-build-info")' in helper_main
     assert "ObstacleBridgeGeneratedBuildStamp.providerBuildCommit" in helper_main
     assert "ObstacleBridgeMacOSProtocolV1TunHelperServer" in helper_main
-    assert "ObstacleBridgeTunHelperProtocolV1.decodeControl" in protocol_server
+    assert "ObstacleBridgeWorkerIPC.negotiatedCapabilities" in protocol_server
+    assert "ObstacleBridgeWorkerIPC.decodeControl" in protocol_server
+    assert "ObstacleBridgeWorkerIPC.frameSize" in protocol_server
+    assert "ownerLossAcceptPollMilliseconds" in protocol_server
     assert "obstacleBridgeUnixSocketPathBytes(socketPath, capacity:" in protocol_server
     assert "destination.initialize(repeating: 0, count: bytes.count)" in protocol_server
     assert "destination.update(from: path, count: path.count)" in protocol_server
@@ -548,8 +576,9 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "applyPythonNetwork" in protocol_server
     assert "backend.setPacketSink" in protocol_server
     assert "backend.setEventSink" in protocol_server
-    assert ".packetFromHelper" in protocol_server
+    assert "frame.kind == .data" in protocol_server
     assert ".event" in protocol_server
+    assert "clientGenerations" in protocol_server
     assert "authenticatedClients" in protocol_server
     assert "writerLock" in protocol_server
     assert "expireIfIdle" in protocol_server
@@ -733,6 +762,180 @@ def test_macos_tun_helper_package_status_validates_bundled_helper_version(tmp_pa
     assert status["helper_package_valid"] is True
     assert status["repair_action"] == ""
     assert status["repair_hint"] == ""
+
+
+def test_macos_packaged_tun_helper_interoperates_with_python_common_ipc() -> None:
+    artifact = build_macos_swift_artifact()
+    helper_path = artifact.app_bundle / "Contents" / "MacOS" / "ObstacleBridgeTunHelper"
+    # Darwin's sockaddr_un path is limited to 104 bytes. pytest's per-test
+    # directory can exceed that, so keep this real Unix socket path short.
+    socket_path = Path("/tmp") / f"ob-ipc1h-{uuid.uuid4().hex}.sock"
+    process = subprocess.Popen(
+        [str(helper_path), "--tun-helper-server", str(socket_path), "test-token", "--idle-sec", "5"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not socket_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert socket_path.exists()
+
+        from obstacle_bridge.bridge_tun_helper_client import TunHelperClient
+
+        async def probe() -> dict:
+            client = TunHelperClient(socket_path=str(socket_path), session_token="test-token")
+            await client.connect()
+            try:
+                return await client.snapshot()
+            finally:
+                await client.close()
+
+        assert asyncio.run(probe())["backend"] == "darwin-native"
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=5)
+        with contextlib.suppress(FileNotFoundError):
+            socket_path.unlink()
+
+
+def test_macos_packaged_tun_helper_exits_after_authenticated_owner_loss() -> None:
+    artifact = build_macos_swift_artifact()
+    helper_path = artifact.app_bundle / "Contents" / "MacOS" / "ObstacleBridgeTunHelper"
+    socket_path = Path("/tmp") / f"ob-ipc1h-owner-loss-{uuid.uuid4().hex}.sock"
+    process = subprocess.Popen(
+        [str(helper_path), "--tun-helper-server", str(socket_path), "test-token", "--idle-sec", "0.5"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not socket_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert socket_path.exists()
+
+        from obstacle_bridge.bridge_tun_helper_client import TunHelperClient
+
+        async def connect_and_release() -> None:
+            client = TunHelperClient(socket_path=str(socket_path), session_token="test-token")
+            await client.connect()
+            await client.close()
+
+        asyncio.run(connect_and_release())
+        while process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert process.poll() == 0
+        assert not socket_path.exists()
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=5)
+        with contextlib.suppress(FileNotFoundError):
+            socket_path.unlink()
+
+
+def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss(monkeypatch: pytest.MonkeyPatch) -> None:
+    artifact = build_macos_swift_artifact()
+    parent_control, child_control = socket.socketpair()
+    parent_lifetime, child_lifetime = socket.socketpair()
+    parent_log, child_log = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    process = subprocess.Popen(
+        [
+            str(artifact.binary_path),
+            "--admin-worker-control-fd", str(child_control.fileno()),
+            "--admin-worker-lifetime-fd", str(child_lifetime.fileno()),
+            "--generation", "7",
+            "--log-fd", str(child_log.fileno()),
+        ],
+        pass_fds=(child_control.fileno(), child_lifetime.fileno(), child_log.fileno()),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    child_control.close()
+    child_lifetime.close()
+    child_log.close()
+    parent_control.settimeout(3)
+    parent_log.settimeout(3)
+    try:
+        from obstacle_bridge.worker_ipc import WorkerIPCFrameKind, decode_control, encode_control, frame_size, try_decode_frame
+
+        def receive_control() -> dict:
+            header = parent_control.recv(20)
+            assert len(header) == 20
+            size = frame_size(header)
+            assert size is not None
+            body = parent_control.recv(size)
+            assert len(body) == size
+            decoded = try_decode_frame(header + body)
+            assert decoded is not None and not decoded[1]
+            return decode_control(decoded[0])
+
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.HELLO, 7, {
+            "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 7,
+        }))
+        assert receive_control() == {
+            "v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": 7,
+        }
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {"admin_web_bind": "127.0.0.1", "admin_web_port": 0}, "log_root_level": 0}))
+        request = receive_control()
+        assert request["kind"] == "admin.call"
+        assert request["id"] == "bootstrap-status"
+        assert request["method"] == "get_status_snapshot"
+        assert request["args"] == [] and request["kwargs"] == {}
+        assert isinstance(request["deadline"], float)
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": request["id"], "ok": True, "result": {},
+        }))
+        ready = receive_control()
+        assert ready["v"] == 1 and ready["kind"] == "admin.ready"
+        assert ready["implementation"] == "native" and ready["generation"] == 7
+        assert isinstance(ready["port"], int) and ready["port"] > 0
+        assert process.poll() is None
+        assert json.loads(parent_log.recv(8192)) == {
+            "v": 1, "name": "admin.native", "level": "INFO", "levelno": 20,
+            "message": "native_admin_ready", "process": process.pid, "thread": "native",
+            "created": pytest.approx(time.time(), abs=3),
+        }
+        result: dict[str, object] = {}
+        failures: list[BaseException] = []
+
+        def reject_system_proxy_lookup() -> dict:
+            raise AssertionError("local child qualification must not consult system proxies")
+
+        monkeypatch.setattr(urllib.request, "getproxies", reject_system_proxy_lookup)
+
+        def fetch_status() -> None:
+            try:
+                # This is a direct inherited-child listener probe. macOS system
+                # proxy discovery can block before any TCP connection is made.
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                with opener.open(f"http://127.0.0.1:{ready['port']}/api/status", timeout=3) as response:
+                    result.update(json.loads(response.read()))
+            except BaseException as error:
+                failures.append(error)
+
+        request_thread = threading.Thread(target=fetch_status)
+        request_thread.start()
+        status_request = receive_control()
+        assert status_request["kind"] == "admin.call"
+        assert status_request["method"] == "get_status_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": status_request["id"], "ok": True, "result": {"state": "native-child"},
+        }))
+        request_thread.join(timeout=3)
+        assert not request_thread.is_alive() and not failures
+        assert result == {"state": "native-child"}
+        parent_lifetime.close()
+        assert process.wait(timeout=3) == 0
+    finally:
+        parent_control.close()
+        parent_log.close()
+        with contextlib.suppress(OSError):
+            parent_lifetime.close()
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=5)
 
 
 def test_macos_tun_helper_package_status_reports_stale_helper_version(tmp_path: Path) -> None:

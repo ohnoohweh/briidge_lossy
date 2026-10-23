@@ -1044,14 +1044,15 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_settings.py::test_ensure_supported_platform_raises_for_unsupported_helper_mode
     - tests/unit/test_tun_helper_settings.py::test_resolved_socket_path_defaults_to_loopback_tcp_for_windows_native_backend
     - tests/unit/test_tun_helper_settings.py::test_resolved_runtime_dir_is_separate_from_windows_pipe_endpoint
-    - tests/unit/test_tun_helper_protocol.py::test_control_frame_round_trip
-    - tests/unit/test_tun_helper_protocol.py::test_decode_control_payload_rejects_unknown_version
+    - tests/unit/test_tun_helper_protocol.py::test_control_frame_uses_common_obip_header_and_generation
+    - tests/unit/test_tun_helper_protocol.py::test_common_hello_negotiates_helper_capabilities
     - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_returns_none_for_incomplete_payload
-    - tests/unit/test_tun_helper_protocol.py::test_packet_frame_preserves_binary_boundaries
-    - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_rejects_unknown_kind
-    - tests/unit/test_tun_helper_protocol.py::test_frame_size_bound_matches_native_and_rejects_oversized_header
+    - tests/unit/test_tun_helper_protocol.py::test_packet_frames_preserve_boundaries_and_generation
+    - tests/unit/test_tun_helper_protocol.py::test_control_payload_rejects_duplicate_nonfinite_and_invalid_operations
+    - tests/unit/test_tun_helper_protocol.py::test_frame_size_bound_matches_common_ipc_and_rejects_invalid_header
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunPingTests.swift::protocolV1EnforcesPythonCompatibleFrameLimit
     - tests/unit/test_tun_helper_client_server.py::test_oversized_header_closes_only_offending_connection
+    - tests/unit/test_tun_helper_client_server.py::test_stale_common_generation_closes_only_offending_connection
     - tests/unit/test_tun_helper_client_server.py::test_client_server_handshake_open_snapshot_and_packet_loop
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_and_remove_network_round_trip
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_uses_client_when_backend_is_external
@@ -1617,6 +1618,8 @@ REQ-MYU-007:
 # extend the existing `REQ-MYU-*` and admin-observability test families.
 
 REQ-ADM-001:
+  # Python and native macOS/Linux TUN helpers now use generation-fenced OBIP
+  # HELLO/READY, request/response/event/data frames; qualification remains IPC-1H work.
   # UDP logging targets remain direct host:port configuration values rather
   # than being coerced into the adjacent logger-level selector vocabulary.
   # The remaining desktop logging-worker work is sequenced in macOS-only and
@@ -1638,6 +1641,16 @@ REQ-ADM-001:
   # state remains observable through `/api/status`.
   # Python contract tests pin the same public worker fields and log envelope.
   # The isolated Admin-worker query path is covered by the same contract.
+  # Common desktop-worker framing independently verifies bounded control/data
+  # frames, generation fencing, and capability-intersection parity in Python
+  # and Swift. Python plus macOS/Linux-native peer children use the shared frames end
+  # to end under the Python supervisor, with negotiated opaque data exchange; Linux CI launches, snapshots, stops, and exercises its packaged peer. Python/native proxy and private logging
+  # exchanges use those frames too; peer, proxy, and private (not public UDP) logging children exchange a capability hello,
+  # while native-supervisor collector builds use the codec, private logging and all privileged helpers bound unauthenticated initial admission and reject token-HELLO renegotiation; Python and macOS/Linux-native helpers negotiate HELLO/READY capabilities and carry generation-fenced OBIP request/response/event/data frames; the packaged macOS helper completes a Python-client snapshot exchange and exits after authenticated owner loss. The shared Swift decoder rejects duplicate object members, including escaped-key aliases. Python and shared Swift helper controls normalize nonempty operations to at most 64 characters; Python rejects non-finite/non-object JSON while Swift rejects boolean/fractional versions; the Python Admin worker also exchanges a capability hello with generation-
+  # fenced frames too; the Linux helper suite contains the matching authenticated-owner-loss case, pending host-local CI evidence. A shared native Admin bootstrap accepts only verified inherited Unix-stream control/lifetime and record-only log descriptors, exchanges Admin HELLO/READY, makes one deadline-limited correlated bootstrap-status parent RPC, fails closed when its reply is withheld, and exits on owner loss; packaged macOS and Linux-only socketpair tests cover that boundary, with Linux CI evidence pending. Admin HTTP/session parity, host-local selection, and broader lifecycle qualification remain in IPC-1A1, IPC-1A2, IPC-1A3, and IPC-1Q.
+  # The macOS child reports its bound status port and serves status over parent
+  # RPC; the direct-loopback HTTP probe rejects system proxy lookup. Full
+  # authentication/API/session parity and Linux listener support remain open.
   integration_tests:
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
@@ -1645,6 +1658,20 @@ REQ-ADM-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
     - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visible_via_host_webadmin_api
   unit_tests:
+    - tests/unit/test_worker_ipc_protocol.py::test_common_worker_ipc_rejects_malformed_oversized_and_stale_frames
+    - tests/unit/test_worker_ipc_protocol.py::test_common_worker_ipc_negotiates_only_mutual_capabilities
+    - tests/unit/test_worker_ipc_protocol.py::test_common_worker_ipc_swift_wire_parity
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_packaged_tun_helper_interoperates_with_python_common_ipc
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_packaged_tun_helper_exits_after_authenticated_owner_loss
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss
+    - swift/Tests/ObstacleBridgeDesktopSharedTests/ObstacleBridgeWorkerIPCTests.swift::controlDecodeRejectsDuplicateObjectMembersAtEveryDepth
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterAuthenticatedOwnerLoss
+    - tests/unit/test_proxy_worker.py::test_proxy_control_rejects_oversize_header_without_waiting_for_body
+    - tests/unit/test_native_proxy_supervisor.py::test_swift_supervisor_owns_python_or_native_proxy
+    - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input
+    - tests/unit/test_native_log_supervisor.py::test_swift_host_logging_records_queries_and_restarts
     - tests/unit/test_runtime_metrics.py::test_histogram_reports_bounded_percentiles_and_no_samples
     - tests/unit/test_runtime_metrics.py::test_rolling_histogram_expires_old_slots_without_retaining_samples
     - tests/unit/test_runtime_metrics.py::test_accumulator_bounds_categories_and_uses_injected_clock
