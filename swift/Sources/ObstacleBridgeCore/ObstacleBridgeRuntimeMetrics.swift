@@ -87,9 +87,16 @@ public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
         let observationNow = nowNS ?? DispatchTime.now().uptimeNanoseconds
         lock.lock(); defer { lock.unlock() }
         trim(nowNS: observationNow)
+        var recentMaxByCategory = [Category: UInt64]()
+        for sample in recent {
+            recentMaxByCategory[sample.category] = max(
+                recentMaxByCategory[sample.category] ?? 0,
+                sample.durationNS
+            )
+        }
         let rows: [[String: Any]] = Category.allCases.map { category in
             let value = lifetime[category] ?? .init()
-            let recentMax = recent.filter { $0.category == category }.map(\.durationNS).max()
+            let recentMax = recentMaxByCategory[category]
             return ["category": category.rawValue, "count": value.count,
                     "total_ms": Double(value.totalNS) / 1_000_000, "mean_ms": value.count == 0 ? NSNull() : Double(value.totalNS) / Double(value.count) / 1_000_000,
                     "p95_ms": NSNull(), "p99_ms": NSNull(), "max_ms": value.count == 0 ? NSNull() : Double(value.maxNS) / 1_000_000,

@@ -622,6 +622,11 @@ completed duration into fixed summaries; it retains neither packet content nor
 per-callback history. Focused unit tests use deterministic inputs and do not
 need a live bridge, root privileges, TUN, a network peer, or Swift.
 
+The Runtime Analysis trailing-two-second projection reads only the matching
+fixed rolling slots for each category rather than scanning the full retained
+minute. The equivalent Swift projection derives all recent category maxima in
+one pass over its bounded recent aggregate set.
+
 #### CPU-load and contributor semantics
 
 The CPU-load indicators are process measurements, not callback-duration

@@ -189,9 +189,14 @@ class RollingDurationHistogram:
         window_slots = int(math.ceil(window / self.slot_duration_ns))
         earliest_epoch = now_epoch - window_slots + 1
         aggregate = DurationHistogram(self.buckets_ns)
-        for epoch, slot in zip(self._epochs, self._slots):
-            if epoch is not None and earliest_epoch <= epoch <= now_epoch:
-                aggregate.merge(slot)
+        # The ring index is derived from the epoch, so inspecting every ring
+        # slot is unnecessary for a short status window.  In particular, the
+        # Runtime Analysis two-second projection visits only its two relevant
+        # slots per category rather than all sixty retained slots.
+        for epoch in range(earliest_epoch, now_epoch + 1):
+            index = epoch % self.slot_count
+            if self._epochs[index] == epoch:
+                aggregate.merge(self._slots[index])
         return aggregate.summary()
 
 

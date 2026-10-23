@@ -84,6 +84,18 @@ def test_rolling_histogram_expires_old_slots_without_retaining_samples():
     assert histogram.summary(now_ns=4 * NANOSECONDS_PER_SECOND).max_ms is None
 
 
+def test_rolling_histogram_reads_only_the_active_window_epochs():
+    histogram = RollingDurationHistogram(slot_count=60, slot_duration_ns=NANOSECONDS_PER_SECOND)
+    histogram.record(3 * NANOSECONDS_PER_MILLISECOND, completed_at_ns=57 * NANOSECONDS_PER_SECOND)
+    histogram.record(5 * NANOSECONDS_PER_MILLISECOND, completed_at_ns=58 * NANOSECONDS_PER_SECOND)
+    histogram.record(7 * NANOSECONDS_PER_MILLISECOND, completed_at_ns=59 * NANOSECONDS_PER_SECOND)
+
+    summary = histogram.summary(now_ns=59 * NANOSECONDS_PER_SECOND, window_ns=2 * NANOSECONDS_PER_SECOND)
+    assert summary.count == 2
+    assert summary.total_ms == 12.0
+    assert summary.max_ms == 7.0
+
+
 def test_accumulator_bounds_categories_and_uses_injected_clock():
     clock = FakeClock(5 * NANOSECONDS_PER_SECOND)
     metrics = RuntimeMetricAccumulator(("overlay_receive", "admin_snapshot"), clock=clock)
