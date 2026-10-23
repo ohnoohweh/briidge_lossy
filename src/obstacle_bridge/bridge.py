@@ -238,7 +238,7 @@ def _detect_build_info() -> dict:
     if repo_root is not None:
         try:
             rev = subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
+                ["git", "rev-parse", "--short=8", "HEAD"],
                 cwd=str(repo_root),
                 capture_output=True,
                 text=True,

@@ -41,7 +41,7 @@ def _git(root: pathlib.Path, *args: str) -> str:
 def expected_build_identity(root: pathlib.Path | None = None) -> dict[str, Any]:
     root = root or _repository_root()
     try:
-        commit = _git(root, "rev-parse", "--short=12", "HEAD").strip()
+        commit = _git(root, "rev-parse", "--short=8", "HEAD").strip()
         dirty = bool(_git(root, "status", "--porcelain"))
         diff_sha = _git(root, "diff", "--binary", "HEAD")
     except (OSError, subprocess.CalledProcessError) as error:

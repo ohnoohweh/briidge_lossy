@@ -796,8 +796,14 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert '"diff_sha": diffSHA' in provider
     assert '"build_timestamp_utc": timestamp' in provider
     build_info_writer = (ROOT / "scripts" / "write_build_info.py").read_text(encoding="utf-8")
+    linux_build_script = (ROOT / "scripts" / "build_linux_app.sh").read_text(encoding="utf-8")
+    python_bridge = (ROOT / "src" / "obstacle_bridge" / "bridge.py").read_text(encoding="utf-8")
+    swift_tun_helper = (ROOT / "src" / "obstacle_bridge" / "bridge_swift_tun_helper.py").read_text(encoding="utf-8")
     assert '["rev-parse", "--short=8", "HEAD"]' in build_info_writer
     assert 'rev-parse --short=8 HEAD' in build_script
+    assert 'rev-parse --short=8 HEAD' in linux_build_script
+    assert '["git", "rev-parse", "--short=8", "HEAD"]' in python_bridge
+    assert '_git(root, "rev-parse", "--short=8", "HEAD")' in swift_tun_helper
     assert "Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)" in build_script
     assert "Set :CFBundleShortVersionString $(MARKETING_VERSION)" in build_script
     assert 'private func adminSnapshotCachingEnabled() -> Bool' in provider
