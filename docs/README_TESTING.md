@@ -313,6 +313,11 @@ logging collectors are supervised, expose their redacted status through
 `/api/logs`; it also covers all Python/native proxy-worker and collector
 combinations and component-level proxy log filtering.
 Focused Python worker tests pin the same normalized worker-status and log-envelope keys as the Core-owned native Admin API.
+The packaged macOS Admin-child probe additionally checks its reported listener port,
+fetches HTTP status through a correlated parent RPC, and verifies owner-loss exit.
+It explicitly disables HTTP proxies and rejects system proxy discovery so host
+proxy settings cannot stall the probe before its loopback connection. Linux
+listener implementation and full authenticated API/session parity remain open.
 The private Admin-worker query test exercises that envelope through its isolated process boundary.
 The Admin probe verifies that the Linux peer row is one Core/adapter-derived
 redacted projection: lifecycle/readiness, epoch/session diagnostics, retry

@@ -74,7 +74,7 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
 
     assert build_script.count("ObstacleBridgeNativePeerWorker.swift") == 2
     assert build_script.count("ObstacleBridgeWorkerIPC.swift") == 5
-    assert build_script.count("ObstacleBridgeNativeAdminWorker.swift") == 2
+    assert build_script.count("ObstacleBridgeNativeAdminWorker.swift") == 1
     assert '"--peer-worker-control-fd"' in entrypoint
     assert '"--log-fd"' in entrypoint
     assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker
@@ -97,7 +97,8 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert "nativeAdminChildControlArgument" in entrypoint
     assert 'nativeAdminChildControlArgument = "--admin-worker-control-fd"' in helper_service
     assert 'nativeAdminChildLogArgument = "--log-fd"' in helper_service
-    assert "ObstacleBridgeNativeAdminWorker.run" in entrypoint
+    assert "ObstacleBridgeNativeAdminMacOSService.run" in entrypoint
+    assert "ObstacleBridgeNativeAdminMacOSService.swift" in build_script
 
 
 def test_macos_logging_producer_inventory_has_no_private_mode_direct_sink() -> None:
@@ -828,7 +829,7 @@ def test_macos_packaged_tun_helper_exits_after_authenticated_owner_loss() -> Non
             socket_path.unlink()
 
 
-def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss() -> None:
+def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss(monkeypatch: pytest.MonkeyPatch) -> None:
     artifact = build_macos_swift_artifact()
     parent_control, child_control = socket.socketpair()
     parent_lifetime, child_lifetime = socket.socketpair()
@@ -870,7 +871,7 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert receive_control() == {
             "v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": 7,
         }
-        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {}, "log_root_level": 0}))
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {"admin_web_bind": "127.0.0.1", "admin_web_port": 0}, "log_root_level": 0}))
         request = receive_control()
         assert request["kind"] == "admin.call"
         assert request["id"] == "bootstrap-status"
@@ -880,12 +881,45 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
             "v": 1, "kind": "admin.reply", "id": request["id"], "ok": True, "result": {},
         }))
-        assert receive_control() == {"v": 1, "kind": "admin.ready", "implementation": "native", "port": 0, "generation": 7}
+        ready = receive_control()
+        assert ready["v"] == 1 and ready["kind"] == "admin.ready"
+        assert ready["implementation"] == "native" and ready["generation"] == 7
+        assert isinstance(ready["port"], int) and ready["port"] > 0
+        assert process.poll() is None
         assert json.loads(parent_log.recv(8192)) == {
             "v": 1, "name": "admin.native", "level": "INFO", "levelno": 20,
             "message": "native_admin_ready", "process": process.pid, "thread": "native",
             "created": pytest.approx(time.time(), abs=3),
         }
+        result: dict[str, object] = {}
+        failures: list[BaseException] = []
+
+        def reject_system_proxy_lookup() -> dict:
+            raise AssertionError("local child qualification must not consult system proxies")
+
+        monkeypatch.setattr(urllib.request, "getproxies", reject_system_proxy_lookup)
+
+        def fetch_status() -> None:
+            try:
+                # This is a direct inherited-child listener probe. macOS system
+                # proxy discovery can block before any TCP connection is made.
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                with opener.open(f"http://127.0.0.1:{ready['port']}/api/status", timeout=3) as response:
+                    result.update(json.loads(response.read()))
+            except BaseException as error:
+                failures.append(error)
+
+        request_thread = threading.Thread(target=fetch_status)
+        request_thread.start()
+        status_request = receive_control()
+        assert status_request["kind"] == "admin.call"
+        assert status_request["method"] == "get_status_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": status_request["id"], "ok": True, "result": {"state": "native-child"},
+        }))
+        request_thread.join(timeout=3)
+        assert not request_thread.is_alive() and not failures
+        assert result == {"state": "native-child"}
         parent_lifetime.close()
         assert process.wait(timeout=3) == 0
     finally:

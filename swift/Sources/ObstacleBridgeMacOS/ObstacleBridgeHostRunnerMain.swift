@@ -15,13 +15,13 @@ struct ObstacleBridgeHostRunnerMain {
                       arguments[0] == ObstacleBridgeMacOSTunHelperService.nativeAdminChildControlArgument, let controlFD = Int32(arguments[1]),
                       arguments[2] == "--admin-worker-lifetime-fd", let lifetimeFD = Int32(arguments[3]),
                       arguments[4] == "--generation", let generation = Int(arguments[5]) {
-                try ObstacleBridgeNativeAdminWorker.run(controlFD: controlFD, lifetimeFD: lifetimeFD, generation: generation)
+                try ObstacleBridgeNativeAdminMacOSService.run(controlFD: controlFD, lifetimeFD: lifetimeFD, logFD: nil, generation: generation)
             } else if arguments.count == 8,
                       arguments[0] == ObstacleBridgeMacOSTunHelperService.nativeAdminChildControlArgument, let controlFD = Int32(arguments[1]),
                       arguments[2] == "--admin-worker-lifetime-fd", let lifetimeFD = Int32(arguments[3]),
                       arguments[4] == "--generation", let generation = Int(arguments[5]),
                       arguments[6] == ObstacleBridgeMacOSTunHelperService.nativeAdminChildLogArgument, let logFD = Int32(arguments[7]) {
-                try ObstacleBridgeNativeAdminWorker.run(controlFD: controlFD, lifetimeFD: lifetimeFD, logFD: logFD, generation: generation)
+                try ObstacleBridgeNativeAdminMacOSService.run(controlFD: controlFD, lifetimeFD: lifetimeFD, logFD: logFD, generation: generation)
             } else {
                 try ObstacleBridgeHostRunner.runMain(arguments: arguments)
             }

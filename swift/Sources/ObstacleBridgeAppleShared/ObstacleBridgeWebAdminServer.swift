@@ -4,11 +4,17 @@ import Network
 
 enum ObstacleBridgeWebAdminServerError: Error, LocalizedError {
     case invalidPort(Int)
+    case startupTimedOut
+    case startupFailed
 
     var errorDescription: String? {
         switch self {
         case .invalidPort(let port):
             return "Invalid web admin port: \(port)"
+        case .startupTimedOut:
+            return "Web admin listener startup timed out"
+        case .startupFailed:
+            return "Web admin listener startup failed"
         }
     }
 }
@@ -45,6 +51,10 @@ final class ObstacleBridgeWebAdminServer {
     private let authenticatedProvider: ([String: String]) -> Bool
     private let fallbackIndexTitle: String
     private let fallbackIndexSubtitle: String
+    private let startupLock = NSLock()
+    private let startupSignal = DispatchSemaphore(value: 0)
+    private var startupPort = 0
+    private var startupFailed = false
     private var liveSessions: [ObjectIdentifier: LiveSession] = [:]
 
     init(
@@ -59,7 +69,7 @@ final class ObstacleBridgeWebAdminServer {
         authRequiredProvider: @escaping () -> Bool = { false },
         authenticatedProvider: @escaping ([String: String]) -> Bool = { _ in true }
     ) throws {
-        guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
+        guard let rawPort = UInt16(exactly: port), let nwPort = NWEndpoint.Port(rawValue: rawPort) else {
             throw ObstacleBridgeWebAdminServerError.invalidPort(port)
         }
         let parameters = NWParameters.tcp
@@ -76,9 +86,19 @@ final class ObstacleBridgeWebAdminServer {
         self.authenticatedProvider = authenticatedProvider
         self.fallbackIndexTitle = fallbackIndexTitle
         self.fallbackIndexSubtitle = fallbackIndexSubtitle
-        listener.stateUpdateHandler = { state in
+        listener.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
             switch state {
+            case .ready:
+                self.startupLock.lock()
+                self.startupPort = Int(self.listener.port?.rawValue ?? 0)
+                self.startupLock.unlock()
+                self.startupSignal.signal()
             case .failed(let error):
+                self.startupLock.lock()
+                self.startupFailed = true
+                self.startupLock.unlock()
+                self.startupSignal.signal()
                 fputs("ObstacleBridgeWebAdminServer listener failed: \(error.localizedDescription)\n", stderr)
             default:
                 break
@@ -102,6 +122,14 @@ final class ObstacleBridgeWebAdminServer {
 
     func start() {
         listener.start(queue: queue)
+    }
+
+    func startAndWait(timeout: TimeInterval = 1) throws -> Int {
+        start()
+        guard startupSignal.wait(timeout: .now() + timeout) == .success else { throw ObstacleBridgeWebAdminServerError.startupTimedOut }
+        startupLock.lock(); defer { startupLock.unlock() }
+        guard !startupFailed, startupPort > 0 else { throw ObstacleBridgeWebAdminServerError.startupFailed }
+        return startupPort
     }
 
     func stop() {

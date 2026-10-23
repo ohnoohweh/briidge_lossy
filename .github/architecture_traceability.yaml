@@ -455,7 +455,10 @@ ARC-CMP-004:
   # all privileged helpers bound unauthenticated initial admission and reject token-HELLO renegotiation; Python and macOS/Linux-native helpers negotiate HELLO/READY capabilities and carry generation-fenced OBIP request/response/event/data frames; the packaged macOS helper completes a Python-client snapshot exchange and exits after authenticated owner loss. The shared Swift decoder rejects duplicate object members, including escaped-key aliases. Python and shared Swift helper controls normalize nonempty operations to at most 64 characters; Python rejects non-finite/non-object JSON while Swift rejects boolean/fractional versions;
   # the Python Admin child does too, while collector probes and native-proxy supervisor
   # fixtures compile that shared codec;
-  # the Python Admin worker has migrated while
+  # The macOS native Admin child owns a status listener, reports its bound port,
+  # and serves status through serialized allowlisted parent RPC. Its host-local
+  # HTTP qualification bypasses system proxies and verifies owner-loss exit.
+  # Full authenticated API/session parity and Linux listener support remain open.
   # A shared native Admin bootstrap accepts only verified inherited Unix-stream control/lifetime and record-only log descriptors, exchanges Admin HELLO/READY, makes one deadline-limited correlated bootstrap-status parent RPC, fails closed when its reply is withheld, and exits on owner loss; packaged macOS and Linux-only socketpair tests cover that boundary, with Linux CI evidence pending. Host qualification remains. Linux helper runtime/owner-loss, Admin HTTP/session parity, host-local selection, and broader lifecycle qualification remain in IPC-1H, IPC-1A1, IPC-1A2, IPC-1A3, and IPC-1Q. Contract-v1
   # requires explicit auth and rejects malformed
   # loopback bind and configuration before spawn while retaining the existing

@@ -20,7 +20,55 @@ public enum ObstacleBridgeNativeAdminWorker {
     private static let unixStreamSocketType = SOCK_STREAM
     #endif
 
-    public static func run(controlFD: Int32, lifetimeFD: Int32, logFD: Int32? = nil, generation: Int) throws {
+    /// Serialized parent-owned state access for a native Admin child. The
+    /// inherited control descriptor remains the only RPC transport.
+    public final class ParentRPC: @unchecked Sendable {
+        private static let methods: Set<String> = [
+            "get_status_snapshot", "get_peer_connections_snapshot", "get_connections_snapshot",
+            "get_config_snapshot", "get_config_schema_snapshot", "get_debug_logs", "fetch_logs",
+        ]
+        private let control: FileHandle
+        private let generation: Int
+        private let lock = NSLock()
+
+        fileprivate init(control: FileHandle, generation: Int) {
+            self.control = control
+            self.generation = generation
+        }
+
+        public func call(method: String, args: [Any] = [], kwargs: [String: Any] = [:], timeout: TimeInterval = 0.35, requestID: String? = nil) throws -> Any {
+            guard Self.methods.contains(method), timeout > 0, timeout <= 4,
+                  JSONSerialization.isValidJSONObject(args), JSONSerialization.isValidJSONObject(kwargs)
+            else { throw Failure.invalidBootstrap }
+            lock.lock(); defer { lock.unlock() }
+            let deadline = ProcessInfo.processInfo.systemUptime + timeout
+            let identifier = requestID ?? UUID().uuidString.lowercased()
+            guard !identifier.isEmpty, identifier.count <= 64 else { throw Failure.invalidBootstrap }
+            try ObstacleBridgeNativeAdminWorker.write(control, kind: .request, generation: generation, value: [
+                "v": 1, "kind": "admin.call", "id": identifier, "method": method,
+                "args": args, "kwargs": kwargs, "deadline": deadline,
+            ])
+            let reply = try ObstacleBridgeNativeAdminWorker.readControl(control, generation: generation, expectedKind: .response, deadline: deadline)
+            guard reply["kind"] as? String == "admin.reply", reply["id"] as? String == identifier,
+                  reply["ok"] as? Bool == true
+            else { throw Failure.invalidBootstrap }
+            return reply["result"] ?? NSNull()
+        }
+    }
+
+    public struct Service {
+        public let port: Int
+        private let stopHandler: () -> Void
+
+        public init(port: Int, stop: @escaping () -> Void) {
+            self.port = port
+            self.stopHandler = stop
+        }
+
+        fileprivate func stop() { stopHandler() }
+    }
+
+    public static func run(controlFD: Int32, lifetimeFD: Int32, logFD: Int32? = nil, generation: Int, serviceFactory: (([String: Any], ParentRPC) throws -> Service)? = nil) throws {
         guard controlFD >= 0, lifetimeFD >= 0, controlFD != lifetimeFD, generation > 0,
               isUnixStreamDescriptor(controlFD), isUnixStreamDescriptor(lifetimeFD)
         else { throw Failure.invalidBootstrap }
@@ -37,21 +85,15 @@ public enum ObstacleBridgeNativeAdminWorker {
         guard bootstrap["kind"] as? String == "admin.start", bootstrap["args"] is [String: Any] else { throw Failure.invalidBootstrap }
         let logLevel = strictNonnegativeInt(bootstrap["log_root_level"]) ?? 30
         let logProducer = try logFD.map { try ObstacleBridgeLogProducer(inheritedFD: $0, minimumLevel: logLevel) }
-        // This is the first parent-owned datum the child needs.  It pins the
-        // common correlated request/reply boundary before IPC-1A2 adds the
-        // HTTP/session methods that consume further runner state.
-        let deadline = ProcessInfo.processInfo.systemUptime + 1
-        try write(control, kind: .request, generation: generation, value: [
-            "v": 1, "kind": "admin.call", "id": bootstrapStatusRequestID,
-            "method": "get_status_snapshot", "args": [], "kwargs": [:], "deadline": deadline,
-        ])
-        let reply = try readControl(control, generation: generation, expectedKind: .response, deadline: deadline)
-        guard reply["kind"] as? String == "admin.reply", reply["id"] as? String == bootstrapStatusRequestID,
-              reply["ok"] as? Bool == true, reply["result"] is [String: Any]
+        let parentRPC = ParentRPC(control: control, generation: generation)
+        let initialStatus = try parentRPC.call(method: "get_status_snapshot", timeout: 1, requestID: bootstrapStatusRequestID)
+        guard initialStatus is [String: Any]
         else { throw Failure.invalidBootstrap }
+        let service = try serviceFactory?(bootstrap["args"] as! [String: Any], parentRPC)
+        defer { service?.stop() }
         logProducer?.emit(name: "admin.native", level: "INFO", levelNumber: 20, message: "native_admin_ready")
         try write(control, kind: .ready, generation: generation, value: [
-            "v": 1, "kind": "admin.ready", "implementation": "native", "port": 0, "generation": generation,
+            "v": 1, "kind": "admin.ready", "implementation": "native", "port": service?.port ?? 0, "generation": generation,
         ])
         // A zero-byte lifetime read is the sole owner-loss signal. Closing it
         // releases both inherited capabilities without an ambient endpoint.
