@@ -275,7 +275,7 @@ class Runner:
             "overlay_receive_prepare", "overlay_receive_data", "overlay_receive_idle",
             "overlay_receive_control", "securelink", "compression", "control_tick",
             "compression_encode", "compression_decode", "compression_frame",
-            "apple_transport_owner_queue", "securelink_worker",
+            "securelink_worker",
             "apple_transport_parse_dispatch", "apple_transport_egress",
             "apple_transport_payload_route", "apple_transport_lifecycle",
             "apple_transport_securelink_route", "apple_transport_delivered_payload",

@@ -638,10 +638,15 @@ branches. TCP payload work further distinguishes server data, client
 open/data, local-write enqueue, and close work. Client-open work further
 separates Core admission, service/event publication, `NWConnection`
 creation/start, and receive registration/immediate activation. Socket egress
-and connection lifecycle remain separate. The owner-queue row
-is an inclusive boundary measurement: it is useful for finding a long
-serialized owner turn, but must not be summed with the Core sub-stage rows it
-contains. The fixed, aggregate-only vocabulary permits up to 56 categories.
+and connection lifecycle remain separate. Runtime Analysis records only an
+individual uninterrupted work scope. It does not emit inclusive queue,
+transaction, or request-wrapper rows that span separately measurable
+subtasks: such a row can look like the longest block without identifying one
+actionable uninterrupted operation. Consequently,
+`apple_transport_owner_queue` is not a metric category; its former aggregate
+is replaced by the receive, SecureLink, payload-route, and TCP/TUN/UDP leaf
+scopes that identify the leading uninterrupted operation. The fixed,
+aggregate-only vocabulary permits up to 56 categories.
 
 The Runtime Analysis trailing-two-second projection reads only the matching
 fixed rolling slots for each category rather than scanning the full retained
