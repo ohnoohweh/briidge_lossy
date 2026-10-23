@@ -274,6 +274,8 @@ class Runner:
             "channelmux_callback", "tun_callback", "overlay_receive", "overlay_send",
             "overlay_receive_prepare", "overlay_receive_data", "overlay_receive_idle",
             "overlay_receive_control", "securelink", "compression", "control_tick",
+            "compression_encode", "compression_decode", "compression_frame",
+            "apple_transport_owner_queue", "securelink_worker",
             "retransmit_tick", "retransmit_reported_missing", "retransmit_unconfirmed",
             "status_stats", "status_session_summaries", "status_worker_state",
             "status_telemetry_state", "status_tun_helper_state", "status_peer_stack_state",

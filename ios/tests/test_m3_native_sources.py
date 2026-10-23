@@ -288,6 +288,20 @@ def test_ios_runtime_status_projects_shared_runtime_metrics() -> None:
     assert "runtimeHealthRecordsPayload" in provider
 
 
+def test_ios_runtime_metrics_include_swift_worker_and_owner_boundaries() -> None:
+    metrics = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeRuntimeMetrics.swift").read_text(encoding="utf-8")
+    compression = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompressLayerRuntime.swift").read_text(encoding="utf-8")
+    adapter = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    for category in ("compression_encode", "compression_decode", "compression_frame", "securelink_worker", "apple_transport_owner_queue"):
+        assert category in metrics
+    assert ".compressionEncode" in compression
+    assert ".compressionDecode" in compression
+    assert ".compressionFrame" in compression
+    assert ".secureLinkWorker" in adapter
+    assert ".appleTransportOwnerQueue" in owner
+
+
 def test_ipserver_extension_plist_and_entitlements_exist() -> None:
     info_plist = (IPSERVER_NATIVE_DIR / "Info.plist").read_text(encoding="utf-8")
     entitlements = (IPSERVER_NATIVE_DIR / "IPServer.entitlements").read_text(encoding="utf-8")

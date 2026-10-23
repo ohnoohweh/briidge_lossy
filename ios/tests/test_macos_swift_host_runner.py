@@ -246,6 +246,20 @@ def test_macos_host_runner_projects_shared_runtime_metrics() -> None:
     assert '"previous_runtime_lifetime_ended_cleanly"' in source
 
 
+def test_macos_runtime_metrics_keep_swift_worker_and_owner_boundaries() -> None:
+    metrics = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeMetrics.swift").read_text(encoding="utf-8")
+    compression = (CORE_SWIFT_DIR / "ObstacleBridgeCompressLayerRuntime.swift").read_text(encoding="utf-8")
+    adapter = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    for category in ("compression_encode", "compression_decode", "compression_frame", "securelink_worker", "apple_transport_owner_queue"):
+        assert category in metrics
+    assert ".compressionEncode" in compression
+    assert ".compressionDecode" in compression
+    assert ".compressionFrame" in compression
+    assert ".secureLinkWorker" in adapter
+    assert ".appleTransportOwnerQueue" in owner
+
+
 def test_macos_host_runner_converts_portable_runtime_service_specs_at_the_host_boundary() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     native_service_spec = (CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift").read_text(encoding="utf-8")

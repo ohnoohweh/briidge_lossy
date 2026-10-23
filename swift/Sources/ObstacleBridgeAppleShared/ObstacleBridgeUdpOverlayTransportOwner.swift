@@ -860,6 +860,15 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func handleOverlayDatagram(_ datagram: Data) {
+        ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportOwnerQueue) {
+            handleOverlayDatagramOnOwnerQueue(datagram)
+        }
+    }
+
+    /// Inclusive wall time for work executed by this serial transport-owner
+    /// queue.  Core receive sub-stages remain separately timed, so this row is
+    /// a queue-boundary diagnostic and must not be added to those sub-stages.
+    private func handleOverlayDatagramOnOwnerQueue(_ datagram: Data) {
         let wasConnected = overlayConnected
         guard let frame = ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(datagram) else {
             return

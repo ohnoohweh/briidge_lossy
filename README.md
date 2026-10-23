@@ -1742,14 +1742,16 @@ event-loop lateness. Cached redacted status now exposes bounded aggregates;
 the local smoke is socket/TUN-free, and the WebAdmin Runtime Analysis view
 shows lifetime and trailing-two-second peak CPU and uninterrupted-work signals;
 contributors across overlay receive preparation/data/idle/control, retransmit
-reported-missing/unconfirmed sweeps, SecureLink, compression, timer, status statistics,
+reported-missing/unconfirmed sweeps, SecureLink worker/crypto, compression
+frame/encode/decode, Apple transport-owner queue, timer, status statistics,
 session summaries, worker state, telemetry state, TUN-helper state, peer-stack
 state, runtime-metrics/health projection,
 connections, peer inventory, build-info, security-advisor, logging, ChannelMux,
 and TUN boundaries are displayed as event-loop occupancy estimates. The
 portable Swift Core supplies the same redacted runtime-metrics
 status shape to Linux, macOS, and iOS hosts for its shared overlay, SecureLink,
-compression, timer, and detailed myUDP receive/retransmit boundaries.
+compression, timer, detailed myUDP receive/retransmit boundaries, and its
+inclusive transport-owner queue boundary.
 Trailing-two-second projection reads only
 the matching rolling slots per category, and Swift derives recent maxima in one
 pass over its bounded aggregate set.

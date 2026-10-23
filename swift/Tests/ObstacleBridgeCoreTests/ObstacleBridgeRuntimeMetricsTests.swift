@@ -10,6 +10,7 @@ struct ObstacleBridgeRuntimeMetricsTests {
         metrics.record(.retransmitReportedMissing, durationNS: 5_000_000, completedNS: 1_000_000_000)
         metrics.record(.retransmitUnconfirmed, durationNS: 6_000_000, completedNS: 1_000_000_000)
         metrics.record(.secureLink, durationNS: 7_000_000, completedNS: 2_000_000_000)
+        metrics.record(.compressionEncode, durationNS: 8_000_000, completedNS: 2_000_000_000)
         let payload = metrics.snapshotPayload(nowNS: 2_000_000_000)
         let rows = payload["categories"] as? [[String: Any]]
         let secureLink = rows?.first { ($0["category"] as? String) == "securelink" }
@@ -17,7 +18,7 @@ struct ObstacleBridgeRuntimeMetricsTests {
         #expect(secureLink?["max_ms"] as? Double == 7.0)
         let retransmit = rows?.first { ($0["category"] as? String) == "retransmit_unconfirmed" }
         #expect(retransmit?["max_ms"] as? Double == 6.0)
-        #expect(payload["longest_uninterrupted_category"] as? String == "securelink")
+        #expect(payload["longest_uninterrupted_category"] as? String == "compression_encode")
         #expect(payload["payload"] == nil)
 
         let expired = metrics.snapshotPayload(nowNS: 5_000_000_001)

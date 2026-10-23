@@ -1101,6 +1101,11 @@ The CI workflow labels the platform-local lifecycle matrix as PXY-3B and its exa
 | `tests/unit/test_ws_payload_mode.py` | WebSocket framing/runtime behavior | Verify payload encoding modes, including grouped `semi-text-shape`, encoded-frame-aware client sizing for text modes, tx loop behavior, socket config, dual-stack IPv6 wildcard listener setup, reconnect grace, HTTP preflight, comma-separated peer candidate normalization, platform-default proxy handling (`system` on Windows and `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` on Linux/POSIX), compression, and debug static HTTP behavior | `pytest -q tests/unit/test_ws_payload_mode.py` |
 | `tests/unit/test_requirements_unit_gaps.py` | Requirement-gap unit coverage | Verify Admin Web auth gates, listener peer identity snapshots, UDP IPv4/IPv6 labels, and focused `myudp` reliability invariants | `pytest -q tests/unit/test_requirements_unit_gaps.py` |
 
+Runtime-metrics coverage includes the bounded Swift category vocabulary for
+compression frame/encode/decode, SecureLink worker boundaries, and the
+inclusive Apple myUDP transport-owner queue measurement. The queue-boundary
+row is diagnostic and is not additive with contained Core timing scopes.
+
 ### Run the full unit suite
 
 ```bash

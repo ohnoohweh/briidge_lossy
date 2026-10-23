@@ -240,7 +240,9 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         guard let secureLinkAdapter else {
             return OutboundSnapshot(emittedFrames: [])
         }
-        let snapshot = try secureLinkAdapter.requestSecureLinkRekey(sessionID: sessionID, clientNonce: clientNonce)
+        let snapshot = try ObstacleBridgeRuntimeMetrics.shared.measure(.secureLinkWorker) {
+            try secureLinkAdapter.requestSecureLinkRekey(sessionID: sessionID, clientNonce: clientNonce)
+        }
         return OutboundSnapshot(emittedFrames: snapshot.emittedFrames)
     }
 
@@ -248,7 +250,9 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         guard let secureLinkAdapter else {
             return OutboundSnapshot(emittedFrames: [])
         }
-        let snapshot = try secureLinkAdapter.pollDueFrames()
+        let snapshot = try ObstacleBridgeRuntimeMetrics.shared.measure(.secureLinkWorker) {
+            try secureLinkAdapter.pollDueFrames()
+        }
         return OutboundSnapshot(emittedFrames: snapshot.emittedFrames)
     }
 
@@ -350,7 +354,9 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
             refreshOuterLifecycle(secureLinkStatus: nil)
             return OutboundSnapshot(emittedFrames: emittedFrames)
         }
-        let snapshot = try secureLinkAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce)
+        let snapshot = try ObstacleBridgeRuntimeMetrics.shared.measure(.secureLinkWorker) {
+            try secureLinkAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce)
+        }
         emittedFrames.append(contentsOf: snapshot.emittedFrames)
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter.statusSnapshot())
         return OutboundSnapshot(emittedFrames: emittedFrames)
@@ -359,7 +365,9 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     public func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
         let outboundPayload = compressRuntime?.handleSendPayload(payload).wirePayload ?? payload
         if let secureLinkAdapter {
-            let snapshot = try secureLinkAdapter.handleOutboundPayload(outboundPayload)
+            let snapshot = try ObstacleBridgeRuntimeMetrics.shared.measure(.secureLinkWorker) {
+                try secureLinkAdapter.handleOutboundPayload(outboundPayload)
+            }
             return OutboundSnapshot(emittedFrames: snapshot.emittedFrames)
         }
         return OutboundSnapshot(emittedFrames: [outboundPayload])
@@ -387,7 +395,9 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         }
         let secureDelivered: [Data]
         if let secureLinkAdapter {
-            let snapshot = secureLinkAdapter.handleInboundFrame(payload)
+            let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.secureLinkWorker) {
+                secureLinkAdapter.handleInboundFrame(payload)
+            }
             emittedFrames.append(contentsOf: snapshot.emittedFrames)
             secureDelivered = snapshot.deliveredPayloads
         } else {

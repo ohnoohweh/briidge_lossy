@@ -108,15 +108,17 @@ final class ObstacleBridgeCompressLayerRuntime {
     }
 
     func handleInboundPayload(_ payload: Data, peerID: Int? = nil) -> ReceiveSnapshot {
-        let started = DispatchTime.now().uptimeNanoseconds
-        defer { ObstacleBridgeRuntimeMetrics.shared.record(.compression, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
-        guard let frame = try? ObstacleBridgeChannelMuxFrameCodec.decode(payload) else {
+        guard let frame = ObstacleBridgeRuntimeMetrics.shared.measure(.compressionFrame, {
+            try? ObstacleBridgeChannelMuxFrameCodec.decode(payload)
+        }) else {
             return ReceiveSnapshot(deliveredPayload: payload, deliveredPeerID: peerID, dropped: false, decompressed: false)
         }
         guard frame.messageType >= ObstacleBridgeMuxCompression.compressedFlag else {
             return ReceiveSnapshot(deliveredPayload: payload, deliveredPeerID: peerID, dropped: false, decompressed: false)
         }
-        guard let result = try? ObstacleBridgeMuxCompression.unprotect(payload, maximumBodyBytes: maxMuxPayload) else {
+        guard let result = ObstacleBridgeRuntimeMetrics.shared.measure(.compressionDecode, {
+            try? ObstacleBridgeMuxCompression.unprotect(payload, maximumBodyBytes: maxMuxPayload)
+        }) else {
             decompressFailTotal += 1
             addPeerCounter(peerID: peerID, field: \PeerStats.decompressFailTotal, value: 1)
             return ReceiveSnapshot(deliveredPayload: nil, deliveredPeerID: peerID, dropped: true, decompressed: false)
@@ -128,9 +130,9 @@ final class ObstacleBridgeCompressLayerRuntime {
     }
 
     func handleSendPayload(_ payload: Data, peerID: Int? = nil) -> SendSnapshot {
-        let started = DispatchTime.now().uptimeNanoseconds
-        defer { ObstacleBridgeRuntimeMetrics.shared.record(.compression, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
-        guard let frame = try? ObstacleBridgeChannelMuxFrameCodec.decode(payload) else {
+        guard let frame = ObstacleBridgeRuntimeMetrics.shared.measure(.compressionFrame, {
+            try? ObstacleBridgeChannelMuxFrameCodec.decode(payload)
+        }) else {
             return SendSnapshot(wirePayload: payload, sentBytes: payload.count, compressed: false)
         }
 
@@ -150,7 +152,9 @@ final class ObstacleBridgeCompressLayerRuntime {
         addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressAttemptsTotal, value: 1)
         addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressInputBytesTotal, value: frame.body.count)
 
-        guard let result = try? ObstacleBridgeMuxCompression.protect(payload, policy: policy), result.compressed else {
+        guard let result = ObstacleBridgeRuntimeMetrics.shared.measure(.compressionEncode, {
+            try? ObstacleBridgeMuxCompression.protect(payload, policy: policy)
+        }), result.compressed else {
             compressSkippedNoGainTotal += 1
             compressOutputBytesTotal += frame.body.count
             addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressSkippedNoGainTotal, value: 1)

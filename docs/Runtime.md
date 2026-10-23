@@ -629,6 +629,12 @@ component scopes replace the aggregate receive/retransmit timer scopes,
 avoiding nested occupancy accounting while exposing the source of a long
 transport slice.
 
+Swift additionally separates compression frame handling, zlib encode, and
+zlib decode. It records SecureLink worker boundaries across every wrapped
+transport and the Apple myUDP transport-owner queue turn. The queue row is an
+inclusive boundary measurement: it is useful for finding a long serialized
+owner turn, but must not be summed with the Core sub-stage rows it contains.
+
 The Runtime Analysis trailing-two-second projection reads only the matching
 fixed rolling slots for each category rather than scanning the full retained
 minute. The equivalent Swift projection derives all recent category maxima in

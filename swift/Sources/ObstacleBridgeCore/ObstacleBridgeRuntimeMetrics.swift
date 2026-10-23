@@ -17,6 +17,11 @@ public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
         case overlayReceiveControl = "overlay_receive_control"
         case secureLink = "securelink"
         case compression
+        case compressionEncode = "compression_encode"
+        case compressionDecode = "compression_decode"
+        case compressionFrame = "compression_frame"
+        case appleTransportOwnerQueue = "apple_transport_owner_queue"
+        case secureLinkWorker = "securelink_worker"
         case controlTick = "control_tick"
         case retransmitTick = "retransmit_tick"
         case retransmitReportedMissing = "retransmit_reported_missing"
