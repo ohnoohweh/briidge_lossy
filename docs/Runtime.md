@@ -611,9 +611,11 @@ a 250 ms cadence. The primitives retain aggregates only. Approved synchronous
 scopes cover overlay receive/send, SecureLink encode/decode, compression,
 control and retransmit ticks, WebAdmin snapshot components, logging, and the
 existing ChannelMux/TUN callbacks. Python WebAdmin splits status construction
-into base statistics, session-layer summaries, helper/telemetry runtime state,
-and runtime-metrics/health projection. Connections, peer inventory, build-info,
-and security-advisor construction remain separate categories, so a snapshot
+into base statistics, session-layer summaries, worker state, telemetry state,
+TUN-helper state, peer-stack state, and runtime-metrics/health projection.
+Disabled telemetry collectors return a fixed disabled summary without opening,
+scanning, or reading their spool. Connections, peer inventory, build-info, and
+security-advisor construction remain separate categories, so a snapshot
 peak identifies the responsible component instead of grouping all admin work
 together. A scope reports just its category and
 completed duration into fixed summaries; it retains neither packet content nor

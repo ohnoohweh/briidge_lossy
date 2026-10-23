@@ -273,7 +273,8 @@ class Runner:
         self._runtime_metrics = RuntimeMetricAccumulator((
             "channelmux_callback", "tun_callback", "overlay_receive", "overlay_send",
             "securelink", "compression", "control_tick", "retransmit_tick",
-            "status_stats", "status_session_summaries", "status_runtime_state",
+            "status_stats", "status_session_summaries", "status_worker_state",
+            "status_telemetry_state", "status_tun_helper_state", "status_peer_stack_state",
             "runtime_metrics_projection", "connections_snapshot", "peers_snapshot",
             "build_info", "security_advisor", "logging",
         ))
@@ -452,6 +453,19 @@ class Runner:
         enabled = bool(getattr(self.args, "telemetry_collector_enabled", False))
         proc = self._telemetry_collector_process
         running = bool(proc is not None and proc.returncode is None)
+        if not enabled and not running:
+            return {
+                "enabled": False,
+                "runtime_state": "disabled",
+                "pid": None,
+                "last_error": self._telemetry_collector_last_error or None,
+                "spool": {},
+                "accepted_batches": 0,
+                "rejected_batches": 0,
+                "last_accepted_unix_ts": None,
+                "last_rejected_unix_ts": None,
+                "ingest_last_error": None,
+            }
         spool_directory = str(getattr(self.args, "telemetry_collector_spool_directory", "") or "").strip()
         spool = {}
         if spool_directory:
@@ -2419,7 +2433,7 @@ class Runner:
             "status_session_summaries", time.monotonic_ns() - session_summary_started_ns
         )
 
-        runtime_state_started_ns = time.monotonic_ns()
+        worker_state_started_ns = time.monotonic_ns()
         payload["proxy_provider"] = self._proxy_provider_snapshot()
         from .bridge_logging_worker import managed_logging_status
         payload["logging_worker"] = managed_logging_status()
@@ -2435,13 +2449,23 @@ class Runner:
                 "restarts": getattr(admin_worker, "restarts", 0),
                 "failed_starts": getattr(admin_worker, "failed_starts", 0),
             }
+        self.record_runtime_duration(
+            "status_worker_state", time.monotonic_ns() - worker_state_started_ns
+        )
+
+        telemetry_state_started_ns = time.monotonic_ns()
         payload["telemetry"] = {
             "client": self.get_telemetry_client_snapshot(),
             "collector": self.get_telemetry_collector_snapshot(),
         }
+        self.record_runtime_duration(
+            "status_telemetry_state", time.monotonic_ns() - telemetry_state_started_ns
+        )
+
+        tun_helper_state_started_ns = time.monotonic_ns()
         payload["tun_helper"] = self._tun_helper_snapshot()
         self.record_runtime_duration(
-            "status_runtime_state", time.monotonic_ns() - runtime_state_started_ns
+            "status_tun_helper_state", time.monotonic_ns() - tun_helper_state_started_ns
         )
 
         runtime_metrics_started_ns = time.monotonic_ns()
@@ -2451,7 +2475,7 @@ class Runner:
             "runtime_metrics_projection", time.monotonic_ns() - runtime_metrics_started_ns
         )
 
-        runtime_state_started_ns = time.monotonic_ns()
+        peer_stack_state_started_ns = time.monotonic_ns()
         if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             snapshot = self._current_peer_stack_snapshot()
             if snapshot is not None:
@@ -2470,7 +2494,7 @@ class Runner:
                 "failed_starts": self._peer_stack_failed_starts,
             }
         self.record_runtime_duration(
-            "status_runtime_state", time.monotonic_ns() - runtime_state_started_ns
+            "status_peer_stack_state", time.monotonic_ns() - peer_stack_state_started_ns
         )
         return payload
 

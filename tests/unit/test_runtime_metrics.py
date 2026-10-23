@@ -1,6 +1,7 @@
 import unittest
 import asyncio
 import threading
+from types import SimpleNamespace
 
 from obstacle_bridge.bridge import Runner
 from obstacle_bridge.runtime_metrics import (
@@ -33,7 +34,8 @@ def _runner_for_metrics_tests():
     runner._runtime_metrics = RuntimeMetricAccumulator((
         "channelmux_callback", "tun_callback", "overlay_receive", "overlay_send",
         "securelink", "compression", "control_tick", "retransmit_tick",
-        "status_stats", "status_session_summaries", "status_runtime_state",
+        "status_stats", "status_session_summaries", "status_worker_state",
+        "status_telemetry_state", "status_tun_helper_state", "status_peer_stack_state",
         "runtime_metrics_projection", "connections_snapshot", "peers_snapshot",
         "build_info", "security_advisor", "logging",
     ))
@@ -166,12 +168,41 @@ def test_runner_keeps_webadmin_snapshot_components_separate():
     runner = _runner_for_metrics_tests()
     runner.record_runtime_duration("status_stats", 3 * NANOSECONDS_PER_MILLISECOND)
     runner.record_runtime_duration("status_session_summaries", 5 * NANOSECONDS_PER_MILLISECOND)
+    runner.record_runtime_duration("status_telemetry_state", 6 * NANOSECONDS_PER_MILLISECOND)
     runner.record_runtime_duration("connections_snapshot", 7 * NANOSECONDS_PER_MILLISECOND)
     rows = {item["category"]: item for item in runner._runtime_metrics_status_fields()["categories"]}
     assert rows["status_stats"]["max_ms"] == 3.0
     assert rows["status_session_summaries"]["max_ms"] == 5.0
+    assert rows["status_telemetry_state"]["max_ms"] == 6.0
     assert rows["connections_snapshot"]["max_ms"] == 7.0
     assert rows["peers_snapshot"]["count"] == 0
+
+
+def test_disabled_collector_status_skips_spool_filesystem_snapshot(monkeypatch):
+    runner = Runner.__new__(Runner)
+    runner.args = SimpleNamespace(
+        telemetry_collector_enabled=False,
+        telemetry_collector_spool_directory="/must-not-be-read",
+    )
+    runner._telemetry_collector_process = None
+    runner._telemetry_collector_last_error = ""
+
+    def unexpected_spool(*args, **kwargs):
+        raise AssertionError("disabled collector must not inspect its spool")
+
+    monkeypatch.setattr("obstacle_bridge.bridge_runner.TelemetrySpool", unexpected_spool)
+    assert runner.get_telemetry_collector_snapshot() == {
+        "enabled": False,
+        "runtime_state": "disabled",
+        "pid": None,
+        "last_error": None,
+        "spool": {},
+        "accepted_batches": 0,
+        "rejected_batches": 0,
+        "last_accepted_unix_ts": None,
+        "last_rejected_unix_ts": None,
+        "ingest_last_error": None,
+    }
 
 
 def test_linux_local_runtime_metrics_smoke_lifecycle():
