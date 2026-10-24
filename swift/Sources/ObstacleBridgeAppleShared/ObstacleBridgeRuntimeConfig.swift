@@ -21,6 +21,14 @@ enum ObstacleBridgeRuntimeConfig {
     /// configuration and status vocabulary does not need platform-private values.
     static let packetFlowPCAPDefaultMaximumBytes = 16 * 1_024 * 1_024
     static let packetFlowPCAPDefaultRetentionFiles = 2
+    /// The native provider log is iOS-only, but its bounded diagnostic policy
+    /// remains shared with Apple hosts so operator-facing diagnostic limits do
+    /// not acquire a platform-private vocabulary.
+    static let nativeProviderDiagnosticLogMaximumBytes = 1_048_576
+    static let nativeProviderDiagnosticLogBackupCount = 2
+    static let nativeProviderDiagnosticLogTailMaximumBytes = 256 * 1_024
+    static let nativeProviderDiagnosticLogTailReadBlockBytes = 16 * 1_024
+    static let nativeProviderDiagnosticLogMaximumPendingWrites = 64
     // Packaged-host qualification may provide an isolated runtime config
     // without changing either platform's durable app-scoped configuration.
     // The macOS primary app and host runner consume this shared vocabulary;

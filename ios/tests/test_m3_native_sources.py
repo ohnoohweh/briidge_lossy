@@ -279,6 +279,30 @@ def test_native_packet_flow_bridge_source_exists() -> None:
     assert 'payload["packet_flow_capture"] = bridgeSnapshot["packetflow_pcap"]' in provider
 
 
+def test_ios_native_provider_log_reads_are_bounded_and_tail_chunked() -> None:
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+
+    shared = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    assert "nativeProviderLogMaximumBytes = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogMaximumBytes" in provider
+    assert "nativeProviderLogBackupCount = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogBackupCount" in provider
+    assert "nativeProviderLogTailMaximumBytes = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogTailMaximumBytes" in provider
+    assert "nativeProviderLogTailReadBlockBytes = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogTailReadBlockBytes" in provider
+    assert "nativeProviderDiagnosticLogMaximumBytes = 1_048_576" in shared
+    assert "nativeProviderDiagnosticLogBackupCount = 2" in shared
+    assert "nativeProviderDiagnosticLogTailMaximumBytes = 256 * 1_024" in shared
+    assert "nativeProviderDiagnosticLogTailReadBlockBytes = 16 * 1_024" in shared
+    assert 'label: "PacketTunnelProvider.NativeProviderLog"' in provider
+    assert "nativeProviderLogMaximumPendingWrites = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogMaximumPendingWrites" in provider
+    assert "nativeProviderDiagnosticLogMaximumPendingWrites = 64" in shared
+    assert "nativeProviderLogQueue.async" in provider
+    assert "rotateNativeProviderLog(at: logURL" in provider
+    assert "nativeProviderLogQueue.sync" in provider
+    assert "FileHandle(forReadingFrom: url)" in provider
+    assert "handle.readData(ofLength: count)" in provider
+    assert "older native provider diagnostic lines omitted" in provider
+    assert "String(contentsOf: url, encoding: .utf8)" not in provider
+
+
 def test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence() -> None:
     provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 
