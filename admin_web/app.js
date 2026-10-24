@@ -3359,6 +3359,25 @@ function applyTunRoutingDoc(j) {
     : 'n/a';
   setText('tunRoutingPacketFlowFifoLast2Seconds', fmtPacketFlowFifo(packetFlowFifo?.max_queued_packets_last_2_seconds));
   setText('tunRoutingPacketFlowFifoSinceStart', fmtPacketFlowFifo(packetFlowFifo?.max_queued_packets_since_start));
+  const packetFlowCapture = j.packet_flow_capture;
+  const captureDirection = (direction) => {
+    if (!direction || typeof direction !== 'object') return 'n/a';
+    return `${fmtBytes(direction.bytes_written ?? 0)} / ${fmtBytes(direction.max_bytes ?? 0)}`;
+  };
+  if (!packetFlowCapture) {
+    setText('tunRoutingPacketFlowCapture', 'n/a');
+    setText('tunRoutingPacketFlowCaptureHealth', 'n/a');
+  } else if (!packetFlowCapture.enabled) {
+    setText('tunRoutingPacketFlowCapture', 'disabled');
+    setText('tunRoutingPacketFlowCaptureHealth', 'n/a');
+  } else {
+    const incomingCapture = packetFlowCapture.incoming;
+    const outgoingCapture = packetFlowCapture.outgoing;
+    setText('tunRoutingPacketFlowCapture', `enabled · in ${captureDirection(incomingCapture)} · out ${captureDirection(outgoingCapture)}`);
+    const drops = Number(incomingCapture?.dropped_packets ?? 0) + Number(outgoingCapture?.dropped_packets ?? 0);
+    const limitReached = Boolean(incomingCapture?.limit_reached || outgoingCapture?.limit_reached);
+    setText('tunRoutingPacketFlowCaptureHealth', `${fmtInteger(drops)} drops${limitReached ? ' · limit reached' : ''}`);
+  }
   setText('tunRoutingIcmpStageCounters', fmtIcmpStageCounters(j.summary || {}));
   setText('tunRoutingProbeBoundaryCounters', fmtProbeBoundaryCounters(j.summary || {}));
   setText('tunRoutingLocalReplyStageCounters', fmtLocalReplyStageCounters(j.summary || {}));

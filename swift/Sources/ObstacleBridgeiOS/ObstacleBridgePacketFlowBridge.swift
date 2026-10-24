@@ -12,8 +12,20 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
     private final class PacketFlowPCAPWriter {
         private var fd: Int32 = -1
         let path: String
+        private let captureQueue: DispatchQueue
+        private let stateLock = NSLock()
+        private let maximumBytes: Int
+        private let maximumPendingPackets = 64
+        private var pendingPackets = 0
+        private var bytesWritten = 0
+        private var packetsWritten = 0
+        private var droppedPackets = 0
+        private var limitReached = false
+        private var lastSyncBytes = 0
 
-        init?(url: URL) {
+        init?(url: URL, maximumBytes: Int) {
+            self.maximumBytes = max(64 * 1024, min(maximumBytes, 256 * 1_024 * 1_024))
+            self.captureQueue = DispatchQueue(label: "com.obstaclebridge.ipserver.packet-flow-pcap.\(url.lastPathComponent)")
             let opened = open(url.path, O_WRONLY | O_CREAT | O_TRUNC, mode_t(0o644))
             guard opened >= 0 else {
                 NSLog("ObstacleBridge IPServer packet-flow pcap open failed path=%@", url.path)
@@ -32,7 +44,46 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
             close()
         }
 
-        func writePacket(_ packet: Data, timestamp: Date = Date()) {
+        func enqueuePacket(_ packet: Data, timestamp: Date = Date()) {
+            stateLock.lock()
+            guard fd >= 0, !limitReached else {
+                droppedPackets += 1
+                stateLock.unlock()
+                return
+            }
+            guard pendingPackets < maximumPendingPackets else {
+                droppedPackets += 1
+                stateLock.unlock()
+                return
+            }
+            pendingPackets += 1
+            stateLock.unlock()
+            captureQueue.async { [weak self] in
+                self?.writePacket(packet, timestamp: timestamp)
+            }
+        }
+
+        func snapshot() -> [String: Any] {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return [
+                "path": path,
+                "max_bytes": maximumBytes,
+                "bytes_written": bytesWritten,
+                "packets_written": packetsWritten,
+                "pending_packets": pendingPackets,
+                "pending_capacity_packets": maximumPendingPackets,
+                "dropped_packets": droppedPackets,
+                "limit_reached": limitReached,
+            ]
+        }
+
+        private func writePacket(_ packet: Data, timestamp: Date) {
+            defer {
+                stateLock.lock()
+                pendingPackets = max(0, pendingPackets - 1)
+                stateLock.unlock()
+            }
             guard fd >= 0 else { return }
             let absolute = timestamp.timeIntervalSince1970
             let seconds = UInt32(absolute)
@@ -45,14 +96,42 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
             appendLE(capturedLength, to: &record)
             appendLE(capturedLength, to: &record)
 
+            let writeBytes = record.count + packet.count
+            stateLock.lock()
+            let exceedsLimit = bytesWritten + writeBytes > maximumBytes
+            if exceedsLimit {
+                limitReached = true
+            }
+            stateLock.unlock()
+            if exceedsLimit {
+                closeFile()
+                return
+            }
+
             guard writeAll(record), writeAll(packet) else {
                 NSLog("ObstacleBridge IPServer packet-flow pcap packet write failed path=%@", path)
                 return
             }
-            _ = fsync(fd)
+            stateLock.lock()
+            bytesWritten += writeBytes
+            packetsWritten += 1
+            let shouldSync = bytesWritten - lastSyncBytes >= 1_024 * 1_024
+            if shouldSync {
+                lastSyncBytes = bytesWritten
+            }
+            stateLock.unlock()
+            if shouldSync {
+                _ = fsync(fd)
+            }
         }
 
         func close() {
+            captureQueue.sync {
+                closeFile()
+            }
+        }
+
+        private func closeFile() {
             guard fd >= 0 else { return }
             _ = fsync(fd)
             _ = Darwin.close(fd)
@@ -71,6 +150,10 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
             guard writeAll(header) else {
                 return false
             }
+            stateLock.lock()
+            bytesWritten = header.count
+            lastSyncBytes = header.count
+            stateLock.unlock()
             _ = fsync(fd)
             return true
         }
@@ -112,6 +195,9 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
     private var outgoingPCAPWriter: PacketFlowPCAPWriter?
     private var incomingPCAPPath = ""
     private var outgoingPCAPPath = ""
+    private var pcapEnabled = false
+    private var pcapMaximumBytes = ObstacleBridgeRuntimeConfig.packetFlowPCAPDefaultMaximumBytes
+    private var pcapRetentionFiles = ObstacleBridgeRuntimeConfig.packetFlowPCAPDefaultRetentionFiles
     private var wakeupFD: Int32 = -1
     private var incomingPackets: [Data] = []
     private var incomingProtocols: [NSNumber] = []
@@ -154,13 +240,24 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
     private let outgoingQueueLevelBucketNanoseconds: UInt64 = 100_000_000
     private let outgoingQueueLevelWindowNanoseconds: UInt64 = 2_000_000_000
 
-    class func activate(provider: PacketTunnelProvider, tunnelAddress: String, mtu: Int) {
+    class func activate(
+        provider: PacketTunnelProvider,
+        tunnelAddress: String,
+        mtu: Int,
+        pcapEnabled: Bool,
+        pcapMaximumBytes: Int,
+        pcapRetentionFiles: Int
+    ) {
         let pcapFields = shared.queue.sync { () -> [String: Any] in
             shared.provider = provider
             shared.active = true
             shared.tunnelAddress = tunnelAddress
             shared.mtu = mtu
-            let capture = shared.configurePCAPWriters()
+            let capture = shared.configurePCAPWriters(
+                enabled: pcapEnabled,
+                maximumBytes: pcapMaximumBytes,
+                retentionFiles: pcapRetentionFiles
+            )
             shared.incomingPackets.removeAll(keepingCapacity: true)
             shared.incomingProtocols.removeAll(keepingCapacity: true)
             shared.packetsFromSystem = 0
@@ -227,6 +324,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 "outgoing_write_batches": shared.outgoingWriteBatches,
                 "incoming_pcap_path": shared.incomingPCAPPath,
                 "outgoing_pcap_path": shared.outgoingPCAPPath,
+                "packetflow_pcap": shared.pcapSnapshot(),
             ]
             shared.incomingPCAPWriter?.close()
             shared.outgoingPCAPWriter?.close()
@@ -257,7 +355,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
             guard shared.active else {
                 return ["reason": "bridge_inactive", "packet_bytes": packet.count]
             }
-            shared.incomingPCAPWriter?.writePacket(packet)
+            shared.incomingPCAPWriter?.enqueuePacket(packet)
             if shared.incomingPackets.count >= shared.maxQueuedPackets {
                 shared.droppedIncomingPackets += 1
                 return [
@@ -345,7 +443,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                     shared.outgoingDrainGeneration
                 )
             }
-            shared.outgoingPCAPWriter?.writePacket(data)
+            shared.outgoingPCAPWriter?.enqueuePacket(data)
             shared.packetsToSystem += 1
             shared.bytesToSystem += data.count
             shared.outgoingPendingPackets.append(data)
@@ -449,50 +547,87 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 "outgoing_write_batches": outgoingWriteBatches,
                 "incoming_pcap_path": incomingPCAPPath,
                 "outgoing_pcap_path": outgoingPCAPPath,
+                "packetflow_pcap": pcapSnapshot(),
                 "wakeup_fd": wakeupFD,
             ]
         }
     }
 
-    private func configurePCAPWriters() -> [String: Any] {
+    private func pcapSnapshot() -> [String: Any] {
+        [
+            "enabled": pcapEnabled,
+            "max_bytes_per_file": pcapMaximumBytes,
+            "retention_files_per_direction": pcapRetentionFiles,
+            "incoming": incomingPCAPWriter?.snapshot() ?? NSNull(),
+            "outgoing": outgoingPCAPWriter?.snapshot() ?? NSNull(),
+        ]
+    }
+
+    private func configurePCAPWriters(
+        enabled: Bool,
+        maximumBytes: Int,
+        retentionFiles: Int
+    ) -> [String: Any] {
         incomingPCAPWriter?.close()
         outgoingPCAPWriter?.close()
         incomingPCAPWriter = nil
         outgoingPCAPWriter = nil
         incomingPCAPPath = ""
         outgoingPCAPPath = ""
+        pcapEnabled = enabled
+        pcapMaximumBytes = max(64 * 1024, min(maximumBytes, 256 * 1_024 * 1_024))
+        pcapRetentionFiles = max(0, min(retentionFiles, 16))
+
+        guard enabled else {
+            return pcapSnapshot()
+        }
 
         guard let containerURL = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: "group.com.obstaclebridge.shared"
         ) else {
-            return ["pcap_enabled": false, "pcap_error": "missing_app_group_container"]
+            var snapshot = pcapSnapshot()
+            snapshot["error"] = "missing_app_group_container"
+            return snapshot
         }
 
         let logDirectory = containerURL.appendingPathComponent("logs", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
         } catch {
-            return [
-                "pcap_enabled": false,
-                "pcap_error": "create_logs_dir_failed",
-                "pcap_error_detail": error.localizedDescription,
-            ]
+            var snapshot = pcapSnapshot()
+            snapshot["error"] = "create_logs_dir_failed"
+            snapshot["error_detail"] = error.localizedDescription
+            return snapshot
         }
 
+        prunePCAPFiles(in: logDirectory, direction: "in", retaining: pcapRetentionFiles)
+        prunePCAPFiles(in: logDirectory, direction: "out", retaining: pcapRetentionFiles)
         let stamp = Self.captureTimestamp()
         let incomingURL = logDirectory.appendingPathComponent("ipserver-nepacketflow-in-\(stamp).pcap")
         let outgoingURL = logDirectory.appendingPathComponent("ipserver-nepacketflow-out-\(stamp).pcap")
 
-        incomingPCAPWriter = PacketFlowPCAPWriter(url: incomingURL)
-        outgoingPCAPWriter = PacketFlowPCAPWriter(url: outgoingURL)
+        incomingPCAPWriter = PacketFlowPCAPWriter(url: incomingURL, maximumBytes: pcapMaximumBytes)
+        outgoingPCAPWriter = PacketFlowPCAPWriter(url: outgoingURL, maximumBytes: pcapMaximumBytes)
         incomingPCAPPath = incomingPCAPWriter?.path ?? ""
         outgoingPCAPPath = outgoingPCAPWriter?.path ?? ""
 
-        return [
-            "pcap_enabled": incomingPCAPWriter != nil || outgoingPCAPWriter != nil,
-            "incoming_pcap_path": incomingPCAPPath,
-            "outgoing_pcap_path": outgoingPCAPPath,
-        ]
+        return pcapSnapshot()
+    }
+
+    private func prunePCAPFiles(in directory: URL, direction: String, retaining count: Int) {
+        let prefix = "ipserver-nepacketflow-\(direction)-"
+        let fileManager = FileManager.default
+        let urls = (try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        let captures = urls.filter {
+            $0.lastPathComponent.hasPrefix(prefix) && $0.pathExtension.lowercased() == "pcap"
+        }.sorted { $0.lastPathComponent > $1.lastPathComponent }
+        for url in captures.dropFirst(count) {
+            try? fileManager.removeItem(at: url)
+        }
     }
 
     private static func protocolFamily(for packet: Data) -> Int32 {

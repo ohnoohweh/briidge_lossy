@@ -1493,8 +1493,9 @@ REQ-MUX-009:
 
 REQ-MUX-010:
   # The iOS packet-flow source guard also pins bounded FIFO high-water fields
-  # for the TUN / Routing status endpoint: process-lifetime and trailing-two-
-  # second maxima are distinct from the current queued-packet level.
+  # and diagnostic-only PCAP capture: process-lifetime and trailing-two-
+  # second maxima are distinct from the current queued-packet level, while
+  # capture remains opt-in and bounded by writer backlog, file size, and retention.
   integration_tests:
     - tests/integration/test_ios_e2e.py::test_ios_m3_packet_tunnel_poc_provider_config_round_trips_packets
     - tests/integration/test_ios_e2e.py::test_ios_e2e_app_ws_overlay_udp_service_reaches_linux_peer_udp_echo

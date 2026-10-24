@@ -267,8 +267,16 @@ def test_native_packet_flow_bridge_source_exists() -> None:
     assert "shared.outgoingDrainGeneration == generation" in bridge
     assert "incoming_pcap_path" in bridge
     assert "outgoing_pcap_path" in bridge
+    assert "packetflow_pcap" in bridge
+    assert "guard enabled else" in bridge
+    assert "maximumPendingPackets = 64" in bridge
+    assert "bytesWritten - lastSyncBytes >= 1_024 * 1_024" in bridge
+    assert "prunePCAPFiles" in bridge
     assert "ipserver-nepacketflow-in-" in bridge
     assert "ipserver-nepacketflow-out-" in bridge
+
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    assert 'payload["packet_flow_capture"] = bridgeSnapshot["packetflow_pcap"]' in provider
 
 
 def test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence() -> None:
@@ -286,6 +294,8 @@ def test_ios_runtime_status_projects_shared_runtime_metrics() -> None:
     assert '"runtime_fifos"' in provider
     assert "ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessCPU()" in provider
     assert "enum ObstacleBridgeAppleRuntimeMetricsSampler" in shared
+    assert "packetFlowPCAPDefaultMaximumBytes" in shared
+    assert "packetFlowPCAPDefaultRetentionFiles" in shared
     assert "runtimeHealthRecordsPayload" in provider
 
 
@@ -325,7 +335,8 @@ def test_ios_runtime_metrics_include_atomic_leaf_boundaries() -> None:
     assert ".appleTransportTunSystemEnqueue" in (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     assert ".appleTransportTunSystemWrite" in packet_flow
     provider_source = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
-    assert "ObstacleBridgePacketFlowBridge.activate(provider: provider, tunnelAddress: tunnelAddress, mtu: settings.mtu)" in provider_source
+    assert "ObstacleBridgePacketFlowBridge.activate(" in provider_source
+    assert "pcapEnabled: captureEnabled" in provider_source
     assert "ObstacleBridgePacketFlowBridge.deactivate()" in provider_source
     assert "maxOutgoingQueuedPackets = ObstacleBridgeRuntimeConfig.packetFlowFIFOQueueCapacity" in packet_flow
     assert "outgoingDrainGeneration" in packet_flow
@@ -1798,6 +1809,9 @@ def test_native_ios_tun_connector_schema_is_shared_with_macos_host_runner() -> N
 
     assert "ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()" in runtime
     assert '"iOS_TUN_connector": [' in policy
-    for key in ("packetflow_connector", "bind_host", "bind_port", "peer_host", "peer_port", "ifname", "mtu"):
+    for key in (
+        "packetflow_connector", "bind_host", "bind_port", "peer_host", "peer_port", "ifname", "mtu",
+        "packetflow_pcap_enabled", "packetflow_pcap_max_bytes", "packetflow_pcap_retention_files",
+    ):
         assert f'schemaItem(key: "{key}"' in policy
     assert "ObstacleBridgeRuntimeConfig.configSchemaSnapshot()" in macos_runner

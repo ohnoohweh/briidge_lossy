@@ -61,7 +61,10 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
                 let routingRows = schema["TUN_routing"] as? [[String: Any]] ?? []
                 let proxyRows = schema["proxy_provider"] as? [[String: Any]] ?? []
                 let telemetryRows = schema["telemetry_client"] as? [[String: Any]] ?? []
+                let connectorRows = schema["iOS_TUN_connector"] as? [[String: Any]] ?? []
                 let adminPassword = adminRows.first { ($0["key"] as? String) == "admin_web_password" }
+                let packetFlowPCAPEnabled = connectorRows.first { ($0["key"] as? String) == "packetflow_pcap_enabled" }
+                let packetFlowPCAPMaxBytes = connectorRows.first { ($0["key"] as? String) == "packetflow_pcap_max_bytes" }
                 let output: [String: Any] = [
                     "websocket4": websocket.ipv4,
                     "websocket6": websocket.ipv6,
@@ -82,6 +85,8 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
                     "schema_routing_has_tunnel_address": routingRows.contains { ($0["key"] as? String) == "tunnel_address" },
                     "schema_proxy_has_policy": proxyRows.contains { ($0["key"] as? String) == "proxy_provider_policy" },
                     "schema_telemetry_has_endpoint": telemetryRows.contains { ($0["key"] as? String) == "telemetry_endpoint" },
+                    "schema_packetflow_pcap_disabled": packetFlowPCAPEnabled?["default"] as? Bool ?? true,
+                    "schema_packetflow_pcap_max_bytes": packetFlowPCAPMaxBytes?["default"] as? Int ?? 0,
                 ]
                 FileHandle.standardOutput.write(
                     try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
@@ -136,4 +141,6 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
         "schema_routing_has_tunnel_address": True,
         "schema_proxy_has_policy": True,
         "schema_telemetry_has_endpoint": True,
+        "schema_packetflow_pcap_disabled": False,
+        "schema_packetflow_pcap_max_bytes": 16 * 1024 * 1024,
     }
