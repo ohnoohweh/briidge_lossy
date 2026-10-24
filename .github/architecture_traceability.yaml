@@ -560,7 +560,7 @@ ARC-CMP-004:
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate
     - tests/unit/test_runtime_metrics.py::test_runner_monitor_is_one_owned_task_and_cancels_cleanly
-    # Covers Python/Swift transport and status peak sources, including Swift compression frame/encode/decode, SecureLink-worker, and Apple parse/per-payload SecureLink/delivery/ChannelMux/TUN/TCP/UDP plus TCP server/client/write/close and client-open Core/publication/connection/receive stages and egress/lifecycle. Inclusive owner-queue and payload-batch wrappers are prohibited; disabled-collector no-I/O and bounded projection remain covered.
+    # Covers Python/Swift transport and status peak sources, including Swift compression frame/encode/decode, SecureLink-worker, and Apple parse/per-payload SecureLink/ChannelMux/TUN/TCP/UDP plus TCP server/client/write/close and client-open Core/publication/connection/receive stages and egress/lifecycle. Inclusive owner-queue, payload-batch, and payload-delivery wrappers are prohibited; disabled-collector no-I/O and bounded projection remain covered.
     - tests/unit/test_runtime_metrics.py::test_runner_runtime_metrics_status_is_bounded_and_redacted
     - tests/unit/test_runtime_metrics.py::test_runner_records_completed_runtime_scope_without_retaining_individual_events
     - tests/unit/test_runtime_metrics.py::test_runner_keeps_webadmin_snapshot_components_separate

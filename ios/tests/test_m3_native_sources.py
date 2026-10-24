@@ -293,10 +293,11 @@ def test_ios_runtime_metrics_include_swift_worker_and_leaf_boundaries() -> None:
     compression = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompressLayerRuntime.swift").read_text(encoding="utf-8")
     adapter = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
     owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
-    for category in ("compression_encode", "compression_decode", "compression_frame", "securelink_worker", "apple_transport_parse_dispatch", "apple_transport_egress", "apple_transport_securelink_route", "apple_transport_delivered_payload", "apple_transport_mux_dispatch", "apple_transport_tun_payload", "apple_transport_tcp_payload", "apple_transport_udp_payload", "apple_transport_tcp_server_data", "apple_transport_tcp_client_open", "apple_transport_tcp_client_data", "apple_transport_tcp_write_enqueue", "apple_transport_tcp_close", "apple_transport_tcp_client_open_core", "apple_transport_tcp_client_open_publication", "apple_transport_tcp_connection_start", "apple_transport_tcp_receive_registration", "apple_transport_lifecycle"):
+    for category in ("compression_encode", "compression_decode", "compression_frame", "securelink_worker", "apple_transport_parse_dispatch", "apple_transport_egress", "apple_transport_securelink_route", "apple_transport_mux_dispatch", "apple_transport_tun_payload", "apple_transport_tcp_payload", "apple_transport_udp_payload", "apple_transport_tcp_server_data", "apple_transport_tcp_client_open", "apple_transport_tcp_client_data", "apple_transport_tcp_write_enqueue", "apple_transport_tcp_close", "apple_transport_tcp_client_open_core", "apple_transport_tcp_client_open_publication", "apple_transport_tcp_connection_start", "apple_transport_tcp_receive_registration", "apple_transport_lifecycle"):
         assert category in metrics
     assert "apple_transport_owner_queue" not in metrics
     assert "apple_transport_payload_route" not in metrics
+    assert "apple_transport_delivered_payload" not in metrics
     assert ".compressionEncode" in compression
     assert ".compressionDecode" in compression
     assert ".compressionFrame" in compression
@@ -306,7 +307,7 @@ def test_ios_runtime_metrics_include_swift_worker_and_leaf_boundaries() -> None:
     assert ".appleTransportEgress" in owner
     assert ".appleTransportPayloadRoute" not in owner
     assert ".appleTransportSecureLinkRoute" in owner
-    assert ".appleTransportDeliveredPayload" in owner
+    assert ".appleTransportDeliveredPayload" not in owner
     assert ".appleTransportMuxDispatch" in owner
     assert ".appleTransportTunPayload" in owner
     assert ".appleTransportTcpPayload" in owner

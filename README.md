@@ -1743,8 +1743,8 @@ the local smoke is socket/TUN-free, and the WebAdmin Runtime Analysis view
 shows lifetime and trailing-two-second peak CPU and uninterrupted-work signals;
 contributors across overlay receive preparation/data/idle/control, retransmit
 reported-missing/unconfirmed sweeps, SecureLink worker/crypto, compression
-frame/encode/decode, Apple transport parse/per-payload SecureLink/delivered-payload/
-ChannelMux/TUN/TCP/UDP/egress/lifecycle boundaries,
+frame/encode/decode, Apple transport parse/per-payload SecureLink/ChannelMux/
+TUN/TCP/UDP/egress/lifecycle boundaries,
 TCP server/client/write/close and client-open Core/publication/connection/receive
 boundaries, timer, status statistics,
 session summaries, worker state, telemetry state, TUN-helper state, peer-stack

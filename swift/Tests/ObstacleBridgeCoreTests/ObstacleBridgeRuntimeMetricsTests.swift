@@ -11,7 +11,6 @@ struct ObstacleBridgeRuntimeMetricsTests {
         metrics.record(.retransmitUnconfirmed, durationNS: 6_000_000, completedNS: 1_000_000_000)
         metrics.record(.secureLink, durationNS: 7_000_000, completedNS: 2_000_000_000)
         metrics.record(.compressionEncode, durationNS: 8_000_000, completedNS: 2_000_000_000)
-        metrics.record(.appleTransportDeliveredPayload, durationNS: 10_000_000, completedNS: 2_000_000_000)
         metrics.record(.appleTransportTunPayload, durationNS: 11_000_000, completedNS: 2_000_000_000)
         metrics.record(.appleTransportTcpWriteEnqueue, durationNS: 12_000_000, completedNS: 2_000_000_000)
         metrics.record(.appleTransportTcpConnectionStart, durationNS: 13_000_000, completedNS: 2_000_000_000)

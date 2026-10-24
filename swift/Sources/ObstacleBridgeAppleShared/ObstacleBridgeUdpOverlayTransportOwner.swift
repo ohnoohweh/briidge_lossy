@@ -1065,15 +1065,11 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                     return snapshot
                 }
                 for delivered in snapshot.deliveredPayloads {
-                    ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportDeliveredPayload) {
-                        handleOverlayPayload(delivered)
-                    }
+                    handleOverlayPayload(delivered)
                 }
                 continue
             }
-            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportDeliveredPayload) {
-                handleOverlayPayload(payload)
-            }
+            handleOverlayPayload(payload)
         }
     }
 
