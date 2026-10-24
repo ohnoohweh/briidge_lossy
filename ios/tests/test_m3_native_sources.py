@@ -723,6 +723,9 @@ def test_webadmin_server_source_exists() -> None:
     service_codec = (CORE_SWIFT_DIR / "ObstacleBridgeServiceCodec.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeWebAdminServer" in runtime
+    assert "func startAndWait(timeout: TimeInterval = 1) throws -> Int" in runtime
+    assert "guard startupSignal.wait(timeout: .now() + timeout) == .success else {\n            stop()" in runtime
+    assert "guard !startupFailed, startupPort > 0 else {\n            stop()" in runtime
     assert "normalizedListenerHost(" in runtime
     assert 'host == "0.0.0.0"' in runtime
     assert 'host == "localhost"' in runtime
