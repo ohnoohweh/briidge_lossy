@@ -79,6 +79,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private var resolvedPeerCandidates: [ResolvedAddress] = []
     private var pendingOutboundMessages: [URLSessionWebSocketTask.Message] = []
     private var outboundSendInFlight = false
+    private var secureLinkPayloadDrainScheduled = false
     private var overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
     private var lastOverlayRxWallNS: UInt64 = 0
     private var lastPeerPingTxNS: UInt64 = 0
@@ -198,6 +199,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         super.init()
         overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in
             self?.queue.async { self?.applyCoreEffects(effects) }
+        }
+        overlayLayerTransportAdapter?.setPendingSecureLinkPayloadWorkSink { [weak self] in
+            self?.scheduleSecureLinkPayloadDrain()
         }
     }
 
@@ -1223,6 +1227,23 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         guard !frames.isEmpty else { return }
         for frame in frames {
             sendOverlayTransportPayload(frame)
+        }
+    }
+
+    private func scheduleSecureLinkPayloadDrain() {
+        guard !secureLinkPayloadDrainScheduled else { return }
+        secureLinkPayloadDrainScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.secureLinkPayloadDrainScheduled = false
+            guard let adapter = self.overlayLayerTransportAdapter else { return }
+            do {
+                let snapshot = try adapter.drainOnePendingSecureLinkPayload()
+                snapshot.emittedFrames.forEach(self.sendRawOverlayWire)
+                if snapshot.queuedPayloads > 0 { self.scheduleSecureLinkPayloadDrain() }
+            } catch {
+                self.eventSink?("ws_overlay_secure_link_pending_payload_failed", ["error": error.localizedDescription])
+            }
         }
     }
 

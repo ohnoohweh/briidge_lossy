@@ -67,6 +67,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var reconnectWorkItem: DispatchWorkItem?
     private var nextReconnectAttemptDeadlineNS: UInt64?
     private var secureLinkDueTimer: DispatchSourceTimer?
+    private var secureLinkPayloadDrainScheduled = false
     private var lowerLayerFallbackWorkItem: DispatchWorkItem?
     private var lowerLayerFallbackDeadlineNS: UInt64?
     private var peerCandidates: [ResolvedAddress] = []
@@ -181,6 +182,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         }
         overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in
             self?.queue.async { self?.applyCoreEffects(effects) }
+        }
+        overlayLayerTransportAdapter?.setPendingSecureLinkPayloadWorkSink { [weak self] in
+            self?.scheduleSecureLinkPayloadDrain()
         }
     }
 
@@ -1211,6 +1215,23 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 }
             } else {
                 sendOverlayTransportPayload(frame)
+            }
+        }
+    }
+
+    private func scheduleSecureLinkPayloadDrain() {
+        guard !secureLinkPayloadDrainScheduled else { return }
+        secureLinkPayloadDrainScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.secureLinkPayloadDrainScheduled = false
+            guard let adapter = self.overlayLayerTransportAdapter else { return }
+            do {
+                let snapshot = try adapter.drainOnePendingSecureLinkPayload()
+                snapshot.emittedFrames.forEach(self.sendOverlayTransportPayload)
+                if snapshot.queuedPayloads > 0 { self.scheduleSecureLinkPayloadDrain() }
+            } catch {
+                self.eventSink?("tcp_overlay_secure_link_pending_payload_failed", ["error": error.localizedDescription])
             }
         }
     }

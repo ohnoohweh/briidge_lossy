@@ -68,6 +68,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private var coreRetryToken: UInt64?
     private var coreReceiveEpoch: UInt64?
     private var secureLinkDueTimer: DispatchSourceTimer?
+    private var secureLinkPayloadDrainScheduled = false
     private var lowerLayerFallbackWorkItem: DispatchWorkItem?
     private var lowerLayerFallbackDeadlineNS: UInt64?
     private var startupMuxFramesSent = false
@@ -184,6 +185,9 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         }
         overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in
             self?.queue.async { self?.applyCoreEffects(effects) }
+        }
+        overlayLayerTransportAdapter?.setPendingSecureLinkPayloadWorkSink { [weak self] in
+            self?.scheduleSecureLinkPayloadDrain()
         }
     }
 
@@ -859,6 +863,23 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
 
     private func sendMuxFrames(_ frames: [Data]) {
         sendFrames(frames)
+    }
+
+    private func scheduleSecureLinkPayloadDrain() {
+        guard !secureLinkPayloadDrainScheduled else { return }
+        secureLinkPayloadDrainScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.secureLinkPayloadDrainScheduled = false
+            guard let adapter = self.overlayLayerTransportAdapter else { return }
+            do {
+                let snapshot = try adapter.drainOnePendingSecureLinkPayload()
+                snapshot.emittedFrames.forEach(self.sendPayload)
+                if snapshot.queuedPayloads > 0 { self.scheduleSecureLinkPayloadDrain() }
+            } catch {
+                self.eventSink?("quic_overlay_secure_link_pending_payload_failed", ["error": error.localizedDescription])
+            }
+        }
     }
 
     private func sendFrames(_ frames: [Data]) {

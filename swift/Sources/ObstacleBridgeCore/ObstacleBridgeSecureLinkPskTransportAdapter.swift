@@ -25,6 +25,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
     private let unixTimeProvider: () -> TimeInterval
     private let diagnosticSink: DiagnosticSink?
     private var pendingPayloads: [Data] = []
+    private var pendingPayloadWorkSink: (() -> Void)?
     private var transportConnected = false
     private var transportConnectedAtMono: TimeInterval?
     private var handshakeStartedAtMono: TimeInterval?
@@ -76,6 +77,10 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
             authenticated: snapshot.authenticated,
             sessionID: snapshot.sessionID
         )
+    }
+
+    func setPendingPayloadWorkSink(_ sink: @escaping () -> Void) {
+        pendingPayloadWorkSink = sink
     }
 
     public func pollDueFrames() throws -> OutboundSnapshot {
@@ -161,8 +166,11 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
 
     public func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
         let status = runtime.statusSnapshot()
-        if status.appDataSendingBlocked {
+        if status.appDataSendingBlocked || !pendingPayloads.isEmpty {
             pendingPayloads.append(payload)
+            if status.authenticated {
+                pendingPayloadWorkSink?()
+            }
             return OutboundSnapshot(
                 emittedFrames: [],
                 queuedPayloads: pendingPayloads.count,
@@ -217,10 +225,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
             }
         }
         if status.authenticated, !status.appDataSendingBlocked, !pendingPayloads.isEmpty {
-            do {
-                emittedFrames.append(contentsOf: try flushPendingPayloads())
-            } catch {
-            }
+            pendingPayloadWorkSink?()
         }
         return InboundSnapshot(
             emittedFrames: emittedFrames,
@@ -232,21 +237,20 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         )
     }
 
-    private func flushPendingPayloads() throws -> [Data] {
+    /// Encrypt one FIFO payload and leave the rest for a later owner-queue
+    /// continuation.  A reconnect cannot turn a backlog into one large,
+    /// non-interruptible worker turn.
+    func drainOnePendingPayload() throws -> OutboundSnapshot {
         guard runtime.statusSnapshot().authenticated, !pendingPayloads.isEmpty else {
-            return []
+            let status = runtime.statusSnapshot()
+            return OutboundSnapshot(emittedFrames: [], queuedPayloads: pendingPayloads.count, authenticated: status.authenticated, sessionID: status.sessionID)
         }
-        let payloads = pendingPayloads
-        pendingPayloads.removeAll()
-        var emittedFrames: [Data] = []
+        let payload = pendingPayloads.removeFirst()
         do {
-            for payload in payloads {
-                let snapshot = try runtime.sendApp(payload)
-                emittedFrames.append(contentsOf: snapshot.emittedFrames)
-            }
-            return emittedFrames
+            let snapshot = try runtime.sendApp(payload)
+            return OutboundSnapshot(emittedFrames: snapshot.emittedFrames, queuedPayloads: pendingPayloads.count, authenticated: snapshot.authenticated, sessionID: snapshot.sessionID)
         } catch {
-            pendingPayloads = payloads + pendingPayloads
+            pendingPayloads.insert(payload, at: 0)
             throw error
         }
     }

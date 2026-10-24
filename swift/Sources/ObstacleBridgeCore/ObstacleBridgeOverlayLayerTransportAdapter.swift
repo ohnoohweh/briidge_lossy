@@ -21,6 +21,12 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
 
     public struct OutboundSnapshot {
         public let emittedFrames: [Data]
+        public let queuedPayloads: Int
+
+        public init(emittedFrames: [Data], queuedPayloads: Int = 0) {
+            self.emittedFrames = emittedFrames
+            self.queuedPayloads = queuedPayloads
+        }
     }
 
     public struct InboundSnapshot {
@@ -86,6 +92,10 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
 
     func setCoreEffectSink(_ sink: @escaping ([ObstacleBridgeOverlayCoordinatorEffect]) -> Void) {
         coreEffectSink = sink
+    }
+
+    func setPendingSecureLinkPayloadWorkSink(_ sink: @escaping () -> Void) {
+        secureLinkAdapter?.setPendingPayloadWorkSink(sink)
     }
 
     /// Starts the portable lifecycle only after the native owner has installed
@@ -240,20 +250,16 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         guard let secureLinkAdapter else {
             return OutboundSnapshot(emittedFrames: [])
         }
-        let snapshot = try ObstacleBridgeRuntimeMetrics.shared.measure(.secureLinkWorker) {
-            try secureLinkAdapter.requestSecureLinkRekey(sessionID: sessionID, clientNonce: clientNonce)
-        }
-        return OutboundSnapshot(emittedFrames: snapshot.emittedFrames)
+        let snapshot = try secureLinkAdapter.requestSecureLinkRekey(sessionID: sessionID, clientNonce: clientNonce)
+        return OutboundSnapshot(emittedFrames: snapshot.emittedFrames, queuedPayloads: snapshot.queuedPayloads)
     }
 
     public func pollSecureLinkDueFrames() throws -> OutboundSnapshot {
         guard let secureLinkAdapter else {
             return OutboundSnapshot(emittedFrames: [])
         }
-        let snapshot = try ObstacleBridgeRuntimeMetrics.shared.measure(.secureLinkWorker) {
-            try secureLinkAdapter.pollDueFrames()
-        }
-        return OutboundSnapshot(emittedFrames: snapshot.emittedFrames)
+        let snapshot = try secureLinkAdapter.pollDueFrames()
+        return OutboundSnapshot(emittedFrames: snapshot.emittedFrames, queuedPayloads: snapshot.queuedPayloads)
     }
 
     func connectionLayersSnapshot(
@@ -354,21 +360,17 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
             refreshOuterLifecycle(secureLinkStatus: nil)
             return OutboundSnapshot(emittedFrames: emittedFrames)
         }
-        let snapshot = try ObstacleBridgeRuntimeMetrics.shared.measure(.secureLinkWorker) {
-            try secureLinkAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce)
-        }
+        let snapshot = try secureLinkAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce)
         emittedFrames.append(contentsOf: snapshot.emittedFrames)
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter.statusSnapshot())
-        return OutboundSnapshot(emittedFrames: emittedFrames)
+        return OutboundSnapshot(emittedFrames: emittedFrames, queuedPayloads: snapshot.queuedPayloads)
     }
 
     public func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
         let outboundPayload = compressRuntime?.handleSendPayload(payload).wirePayload ?? payload
         if let secureLinkAdapter {
-            let snapshot = try ObstacleBridgeRuntimeMetrics.shared.measure(.secureLinkWorker) {
-                try secureLinkAdapter.handleOutboundPayload(outboundPayload)
-            }
-            return OutboundSnapshot(emittedFrames: snapshot.emittedFrames)
+            let snapshot = try secureLinkAdapter.handleOutboundPayload(outboundPayload)
+            return OutboundSnapshot(emittedFrames: snapshot.emittedFrames, queuedPayloads: snapshot.queuedPayloads)
         }
         return OutboundSnapshot(emittedFrames: [outboundPayload])
     }
@@ -395,9 +397,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         }
         let secureDelivered: [Data]
         if let secureLinkAdapter {
-            let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.secureLinkWorker) {
-                secureLinkAdapter.handleInboundFrame(payload)
-            }
+            let snapshot = secureLinkAdapter.handleInboundFrame(payload)
             emittedFrames.append(contentsOf: snapshot.emittedFrames)
             secureDelivered = snapshot.deliveredPayloads
         } else {
@@ -419,6 +419,15 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
 
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter?.statusSnapshot())
         return InboundSnapshot(emittedFrames: emittedFrames, deliveredPayloads: deliveredPayloads)
+    }
+
+    /// Runs exactly one queued SecureLink application payload.  This method is
+    /// deliberately not timed as a worker: the nested `securelink` scope is
+    /// the atomic encrypt/decrypt operation reported to WebAdmin.
+    func drainOnePendingSecureLinkPayload() throws -> OutboundSnapshot {
+        guard let secureLinkAdapter else { return OutboundSnapshot(emittedFrames: []) }
+        let snapshot = try secureLinkAdapter.drainOnePendingPayload()
+        return OutboundSnapshot(emittedFrames: snapshot.emittedFrames, queuedPayloads: snapshot.queuedPayloads)
     }
 
     private func observeTransportState(connected: Bool, reason: String = "transport_state") {
