@@ -230,6 +230,7 @@ macOS Swift-backed rule of thumb:
 
 - treat the host runner and app bundle as built products, not per-test source snippets
 - the primary macOS Swift-backed suite should build the normal host-runner artifact once per test session via [ios/scripts/build_macos_app.sh](../ios/scripts/build_macos_app.sh) and then reuse that binary across test cases
+- HostRunner proxy-worker coverage verifies that the built Admin endpoint is bound before private-worker bootstrap, so a status read cannot race a Python or native worker launch
 - the hosted macOS Swift-backed CI lane builds that complete app bundle once from its clean checkout, validates its nested executable signatures and plists, packages it with [package_macos_app.sh](../ios/scripts/package_macos_app.sh), and reuses the same bundle for its tests; its ZIP, SHA-256, and embedded build-info JSON are retained as the build-evidence artifact
 - if a test truly needs hooks that the normal product build should not carry, add them behind one dedicated `failure-injection` build variant instead of compiling bespoke Swift binaries for each test
 - tiny runtime contract probes can still compile focused one-file helpers when they are explicitly testing a low-level shared runtime in isolation, but the host-runner E2E surface should exercise the built artifact

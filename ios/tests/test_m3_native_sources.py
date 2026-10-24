@@ -1856,3 +1856,4 @@ def test_native_ios_tun_connector_schema_is_shared_with_macos_host_runner() -> N
     ):
         assert f'schemaItem(key: "{key}"' in policy
     assert "ObstacleBridgeRuntimeConfig.configSchemaSnapshot()" in macos_runner
+    assert "_ = try controlServer.startAndWait()" in macos_runner
