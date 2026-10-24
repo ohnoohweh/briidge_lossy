@@ -523,7 +523,7 @@ final class ObstacleBridgeHostRunner {
         // Bind the operator endpoint before potentially slow private-worker
         // bootstrap. This makes startup failures observable and keeps the
         // status surface available while Python/native workers negotiate.
-        _ = try controlServer.startAndWait()
+        _ = try controlServer.startAndWait(timeout: 5)
     }
 
     func start() throws {
