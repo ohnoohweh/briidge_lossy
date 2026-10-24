@@ -1707,7 +1707,7 @@ Important caveat:
   - opt-in simulator coverage for the standalone Briefcase E2E app: `OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1 pytest -q tests/integration/test_ios_simulator_e2e.py -m ios_simulator`
   - focused iOS companion/E2E Python tests: `pytest -q ios/tests`
 - Recent validation for this branch used the Windows-local unit suite, the Windows `windows_only` subset, the Windows elevated TUN subset, and the Linux shared integration subset; the dedicated Linux elevated subset is part of the split CI expectation as well.
-- The Linux shared integration subset is currently validated with the runtime-generated localhost TLS fixture set and the availability-aware loopback port allocator in the integration harness; concurrent native Admin cases use distinct loopback addresses as well as ports.
+- The Linux shared integration subset is currently validated with the runtime-generated localhost TLS fixture set, availability-aware loopback allocation, and bounded listener-service recovery probes after peer replacement; concurrent native Admin cases use distinct loopback addresses as well as ports.
 - Certificate revocation reload coverage now treats `/api/status` reload scope/result and dropped-peer counters as the stable post-disconnect signal, because the peer-scoped failed row can be transient after the revoked secure-link session is torn down.
 - The Linux shared subset also includes a listener stale-junk-peer regression that waits for `/api/peers` decode-error visibility before asserting stale-row reap behavior, which keeps the gate aligned with the admin snapshot's eventually consistent update path.
 - macOS elevated scripts preserve the GitHub Actions marker through sudo so hosted-runner diagnostic branches remain active after privilege escalation.

@@ -8544,7 +8544,22 @@ def test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip(tmp_
         assert python_proc.popen.wait(timeout=5.0) in (0, 143)
         python_proc = start_python_client()
         assert wait_for_swift_ready()['app_ready'] is True
-        assert_service_round_trip(b'python-client-after-replacement')
+        # SecureLink readiness precedes service-channel re-registration after a
+        # peer replacement, particularly for a WebSocket overlay carrying UDP.
+        # Wait for the listener to accept the recovered service rather than
+        # turning that short convergence window into a flaky refusal.
+        recovery_payload = b'python-client-after-replacement'
+        recovery_deadline = time.monotonic() + 10.0
+        recovery_error: OSError | AssertionError | None = None
+        while time.monotonic() < recovery_deadline:
+            try:
+                assert_service_round_trip(recovery_payload)
+                recovery_error = None
+                break
+            except (OSError, AssertionError) as exc:
+                recovery_error = exc
+                time.sleep(0.1)
+        assert recovery_error is None, f'Linux Swift service did not recover after Python runtime replacement: {recovery_error}'
     finally:
         for proc in (python_proc, swift_proc):
             if proc is not None and proc.popen.poll() is None:
