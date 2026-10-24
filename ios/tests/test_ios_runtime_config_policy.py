@@ -65,6 +65,11 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
                 let adminPassword = adminRows.first { ($0["key"] as? String) == "admin_web_password" }
                 let packetFlowPCAPEnabled = connectorRows.first { ($0["key"] as? String) == "packetflow_pcap_enabled" }
                 let packetFlowPCAPMaxBytes = connectorRows.first { ($0["key"] as? String) == "packetflow_pcap_max_bytes" }
+                let legacy = ObstacleBridgeRuntimeConfigPort.flatten([
+                    "runner": ["overlay_transport": "tcp"] as [String: Any],
+                    "udp_peer": NSNull(),
+                ])
+                let legacyJSON = try JSONSerialization.data(withJSONObject: legacy, options: [.sortedKeys])
                 let output: [String: Any] = [
                     "websocket4": websocket.ipv4,
                     "websocket6": websocket.ipv6,
@@ -87,6 +92,12 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
                     "schema_telemetry_has_endpoint": telemetryRows.contains { ($0["key"] as? String) == "telemetry_endpoint" },
                     "schema_packetflow_pcap_disabled": packetFlowPCAPEnabled?["default"] as? Bool ?? true,
                     "schema_packetflow_pcap_max_bytes": packetFlowPCAPMaxBytes?["default"] as? Int ?? 0,
+                    "legacy_transport": legacy["overlay_transport"]!,
+                    "legacy_udp_peer": legacy["udp_peer"]!,
+                    "legacy_tcp_peer": legacy["tcp_peer"]!,
+                    "legacy_log_channel_mux": legacy["log_channel_mux"]!,
+                    "legacy_packetflow_pcap_enabled": legacy["packetflow_pcap_enabled"]!,
+                    "legacy_has_json_null": String(data: legacyJSON, encoding: .utf8)!.contains("null"),
                 ]
                 FileHandle.standardOutput.write(
                     try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
@@ -143,4 +154,10 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
         "schema_telemetry_has_endpoint": True,
         "schema_packetflow_pcap_disabled": False,
         "schema_packetflow_pcap_max_bytes": 16 * 1024 * 1024,
+        "legacy_transport": "tcp",
+        "legacy_udp_peer": "",
+        "legacy_tcp_peer": "",
+        "legacy_log_channel_mux": "INFO",
+        "legacy_packetflow_pcap_enabled": False,
+        "legacy_has_json_null": False,
     }

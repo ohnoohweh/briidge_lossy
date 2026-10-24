@@ -61,6 +61,43 @@ enum ObstacleBridgeRuntimeConfigPolicy {
         return schema
     }
 
+    /// Returns the complete, schema-owned flat configuration. This is the
+    /// compatibility baseline for configuration files written by older
+    /// releases: a newly added setting must never reach a runtime as `null`
+    /// merely because that old file did not contain the key.
+    ///
+    /// Schema `NSNull` values describe an optional string in the UI. Runtime
+    /// configuration uses an empty string for that typed "not configured"
+    /// value, so serialized effective configurations remain null-free.
+    static func defaultFlatConfig() -> [String: Any] {
+        let schema = configSchemaSnapshot()
+        var defaults: [String: Any] = [:]
+        for section in knownGroupedSections {
+            guard let rows = schema[section] as? [[String: Any]] else { continue }
+            for row in rows {
+                let key = String(describing: row["key"] ?? "")
+                guard !key.isEmpty, let value = row["default"] else { continue }
+                defaults[key] = value is NSNull ? "" : value
+            }
+        }
+        applyCompatibilityAliases(to: &defaults)
+        return defaults
+    }
+
+    static func completingMissingDefaults(in payload: [String: Any]) -> [String: Any] {
+        let defaults = defaultFlatConfig()
+        var completed = defaults
+        for (key, value) in payload {
+            // A legacy JSON null for a known setting is equivalent to the
+            // setting being absent. Keep unknown null-valued extension data
+            // intact rather than silently changing its meaning.
+            if value is NSNull, defaults[key] != nil { continue }
+            completed[key] = value
+        }
+        applyCompatibilityAliases(to: &completed)
+        return completed
+    }
+
     static func intValue(from value: Any?) -> Int? {
         if let number = value as? NSNumber { return number.intValue }
         if let value = value as? Int { return value }
@@ -281,6 +318,12 @@ public enum ObstacleBridgeRuntimeConfigPort {
         ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()
     }
 
+    /// Product-wide effective defaults for configuration imported from older
+    /// product versions or supplied by platform hosts.
+    public static func defaultFlatConfig() -> [String: Any] {
+        ObstacleBridgeRuntimeConfigPolicy.defaultFlatConfig()
+    }
+
     /// Secret-bearing schema keys are Core-owned metadata. Adapters use this
     /// only for display and persistence projections, never to handle secrets.
     public static func secretKeys() -> Set<String> {
@@ -346,8 +389,7 @@ public enum ObstacleBridgeRuntimeConfigPort {
         for (key, value) in payload where !(value is [String: Any]) && merged[key] == nil {
             merged[key] = value
         }
-        ObstacleBridgeRuntimeConfigPolicy.applyCompatibilityAliases(to: &merged)
-        return merged
+        return ObstacleBridgeRuntimeConfigPolicy.completingMissingDefaults(in: merged)
     }
 
     public static func normalizedUpdates(_ updates: [String: Any], current: [String: Any]) -> [String: Any] {

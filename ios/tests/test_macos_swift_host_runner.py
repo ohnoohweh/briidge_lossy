@@ -3948,11 +3948,11 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
         }.issubset(proxy_provider_keys)
         assert config["config"]["udp_bind"] == "::"
         assert config["config"]["udp_own_port"] == 4433
-        assert config["config"]["udp_peer"] is None
+        assert config["config"]["udp_peer"] == ""
         assert config["config"]["udp_peer_port"] == 4433
         assert config["config"]["tcp_bind"] == "::"
         assert config["config"]["tcp_own_port"] == 8081
-        assert config["config"]["tcp_peer"] is None
+        assert config["config"]["tcp_peer"] == ""
         assert config["config"]["tcp_peer_port"] == 8081
         assert isinstance(config["config"]["own_servers"], list)
         assert isinstance(config["config"]["remote_servers"], list)

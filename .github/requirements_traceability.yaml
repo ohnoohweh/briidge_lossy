@@ -1180,6 +1180,12 @@ REQ-LIFE-012:
     - tests/unit/test_runner_tun_helper.py::test_runner_can_toggle_tun_enabled_state_through_helper_backend
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
 
+REQ-LIFE-013:
+  unit_tests:
+    - tests/unit/test_config_bootstrap_cli.py::test_parse_args_legacy_null_uses_registered_default
+    - ios/tests/test_ios_runtime_config_policy.py::test_runtime_config_peer_exclusions_are_portable_and_dual_stack
+    - ios/tests/test_m3_native_sources.py::test_runtime_config_source_exists
+
 REQ-LST-001:
   # Platform entrypoints and Linux adapters are co-located under swift/Sources.
   # Apple-only adapters remain co-located under swift/Sources/ObstacleBridgeAppleShared.

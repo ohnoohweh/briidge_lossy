@@ -4548,6 +4548,12 @@ class ConfigAwareCLI:
             a = actions.get(dest)
             if not a:  # unknown keys -> ignore (or raise if you want strict mode)
                 continue
+            # Older persisted JSON may contain null for a setting that was
+            # introduced after the file was written. Treat that exactly like
+            # an absent key so argparse retains the product default instead
+            # of overriding it with None.
+            if val is None:
+                continue
             defaults[dest] = self._coerce_for_action(val, a)
         if defaults:
             parser.set_defaults(**defaults)

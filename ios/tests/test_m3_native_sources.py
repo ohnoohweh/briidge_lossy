@@ -196,6 +196,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'summary["quic_runtime"] = "ready"' in provider
     assert "ObstacleBridgeAdminSnapshotSupport.transportRuntimeEnvelope(" in provider
     assert "provider?.recordPacketBridgeEvent(" in provider
+    assert "private func nativePacketDiagnosticsEnabled() -> Bool" in provider
+    assert "guard nativePacketDiagnosticsEnabled() else { return }" in provider
+    assert "if shouldRecordHeartbeat, self.nativePacketDiagnosticsEnabled()" in provider
     assert "private var peerTrafficRateState:" in provider
     assert "private var secureLinkConnectedSinceUnixTS:" in provider
     assert '"rx_bytes_per_sec": rxRate' in provider
@@ -690,6 +693,9 @@ def test_runtime_config_source_exists() -> None:
     assert "enum ObstacleBridgeRuntimeConfigPolicy" in policy
     assert "static func overlaySessionMaxAppPayload" in policy
     assert "static func configSchemaSnapshot()" in policy
+    assert "static func defaultFlatConfig()" in policy
+    assert "static func completingMissingDefaults(in payload: [String: Any])" in policy
+    assert "return ObstacleBridgeRuntimeConfigPolicy.completingMissingDefaults(in: merged)" in policy
     assert '"admin_web": [' in policy
     assert "log_TUN_routing" in policy
     assert "static func wsPeerAddresses(" in policy
