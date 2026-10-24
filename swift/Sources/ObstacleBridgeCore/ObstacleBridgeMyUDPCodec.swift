@@ -1,3 +1,4 @@
+import Dispatch
 import Foundation
 
 public enum ObstacleBridgeMyUDPCodecError: Error, Equatable { case payloadTooLarge, invalidFrame }
@@ -980,8 +981,12 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
     public func retransmit(nowNanoseconds: UInt64, retransmissionWindowNanoseconds: UInt64? = nil) throws -> Effect {
         let reportedWindow = retransmissionWindowNanoseconds ?? retransmissionWindow(rttEstimateMilliseconds: receiver.heartbeat.rttEstimateMilliseconds, multiplier: 1)
         let unconfirmedWindow = retransmissionWindowNanoseconds ?? retransmissionWindow(rttEstimateMilliseconds: receiver.heartbeat.rttEstimateMilliseconds, multiplier: 1.5)
+        let reportedStarted = DispatchTime.now().uptimeNanoseconds
         let reported = sender.retransmit(candidates: sender.peerReportedMissing, nowNanoseconds: nowNanoseconds, windowNanoseconds: reportedWindow, useFirstTransmitWhenNoRetransmission: true)
+        ObstacleBridgeRuntimeMetrics.shared.record(.retransmitReportedMissing, durationNS: DispatchTime.now().uptimeNanoseconds &- reportedStarted)
+        let unconfirmedStarted = DispatchTime.now().uptimeNanoseconds
         let unconfirmed = sender.retransmit(candidates: sender.outstandingCounters, nowNanoseconds: nowNanoseconds, windowNanoseconds: unconfirmedWindow, useFirstTransmitWhenNoRetransmission: true)
+        ObstacleBridgeRuntimeMetrics.shared.record(.retransmitUnconfirmed, durationNS: DispatchTime.now().uptimeNanoseconds &- unconfirmedStarted)
         let chunks = reported + unconfirmed
         let echo = ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(nowNanoseconds: nowNanoseconds, lastReceivedTransmitNanoseconds: receiver.heartbeat.lastReceivedTransmitNanoseconds, lastReceivedWallNanoseconds: receiver.heartbeat.lastReceivedWallNanoseconds)
         guard !chunks.isEmpty else { return .init(outboundDatagrams: [], outboundDataCounters: [], deliveredRecords: [], nextControlDeadlineNanoseconds: nil) }

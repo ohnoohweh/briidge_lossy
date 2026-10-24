@@ -25,7 +25,7 @@ from .bridge_telemetry import TelemetryEmitter, TelemetryRuntimeSettings, Teleme
 from .bridge_telemetry_credentials import client_certificate_paths
 from .bridge_telemetry_uploader import TelemetryUploader
 from .runtime_health import RuntimeHealthRecord, RuntimeHealthStore
-from .runtime_metrics import NANOSECONDS_PER_SECOND, RuntimeMetricAccumulator
+from .runtime_metrics import NANOSECONDS_PER_SECOND, RuntimeMetricAccumulator, bounded_runtime_scope
 
 _bridge = export_bridge_globals(globals())
 
@@ -272,8 +272,27 @@ class Runner:
         self._runtime_metrics_lag_probe_count = 0
         self._runtime_metrics = RuntimeMetricAccumulator((
             "channelmux_callback", "tun_callback", "overlay_receive", "overlay_send",
-            "securelink", "compression", "control_tick", "retransmit_tick",
-            "webadmin_snapshot", "logging",
+            "overlay_receive_prepare", "overlay_receive_data", "overlay_receive_idle",
+            "overlay_receive_control", "securelink", "compression", "control_tick",
+            "compression_encode", "compression_decode", "compression_frame",
+            "securelink_worker",
+            "apple_transport_parse_dispatch", "apple_transport_egress",
+            "apple_transport_lifecycle",
+            "apple_transport_securelink_route",
+            "apple_transport_mux_dispatch", "apple_transport_tun_data_guard",
+            "apple_transport_tun_fragment_reassembly", "apple_transport_tun_peer_relay",
+            "apple_transport_tun_system_enqueue", "apple_transport_tun_system_write",
+            "apple_transport_udp_payload",
+            "apple_transport_tcp_server_data", "apple_transport_tcp_client_open",
+            "apple_transport_tcp_client_data", "apple_transport_tcp_write_enqueue",
+            "apple_transport_tcp_close",
+            "apple_transport_tcp_client_open_core", "apple_transport_tcp_client_open_publication",
+            "apple_transport_tcp_connection_start", "apple_transport_tcp_receive_registration",
+            "retransmit_tick", "retransmit_reported_missing", "retransmit_unconfirmed",
+            "status_stats", "status_session_summaries", "status_worker_state",
+            "status_telemetry_state", "status_tun_helper_state", "status_peer_stack_state",
+            "runtime_metrics_projection", "connections_snapshot", "peers_snapshot",
+            "build_info", "security_advisor", "logging",
         ))
         self._runtime_metrics_started: Dict[str, int] = {}
         self._runtime_metrics_cpu_peaks: list[dict[str, Any]] = []
@@ -450,6 +469,19 @@ class Runner:
         enabled = bool(getattr(self.args, "telemetry_collector_enabled", False))
         proc = self._telemetry_collector_process
         running = bool(proc is not None and proc.returncode is None)
+        if not enabled and not running:
+            return {
+                "enabled": False,
+                "runtime_state": "disabled",
+                "pid": None,
+                "last_error": self._telemetry_collector_last_error or None,
+                "spool": {},
+                "accepted_batches": 0,
+                "rejected_batches": 0,
+                "last_accepted_unix_ts": None,
+                "last_rejected_unix_ts": None,
+                "ingest_last_error": None,
+            }
         spool_directory = str(getattr(self.args, "telemetry_collector_spool_directory", "") or "").strip()
         spool = {}
         if spool_directory:
@@ -2331,7 +2363,8 @@ class Runner:
 
     def get_status_snapshot(self) -> dict:
         try:
-            payload = dict(self.stats.snapshot_status())
+            with bounded_runtime_scope(self.record_runtime_duration, "status_stats"):
+                payload = dict(self.stats.snapshot_status())
         except Exception as exc:
             self.log.warning("[RUNNER] stats snapshot failed; returning minimal status: %r", exc)
             connected = False
@@ -2343,6 +2376,7 @@ class Runner:
                 "peer_state": STATE_CONNECTED if connected else STATE_DISCONNECTED,
                 "stats_snapshot_error": type(exc).__name__,
             }
+        session_summary_started_ns = time.monotonic_ns()
         payload["connection_layers"] = [
             {
                 "transport": str(label),
@@ -2411,6 +2445,11 @@ class Runner:
             "decompress_fail_total": sum(int(s.get("decompress_fail_total") or 0) for s in compress_enabled),
             "compression_saving_ratio": savings_ratio,
         }
+        self.record_runtime_duration(
+            "status_session_summaries", time.monotonic_ns() - session_summary_started_ns
+        )
+
+        worker_state_started_ns = time.monotonic_ns()
         payload["proxy_provider"] = self._proxy_provider_snapshot()
         from .bridge_logging_worker import managed_logging_status
         payload["logging_worker"] = managed_logging_status()
@@ -2426,13 +2465,33 @@ class Runner:
                 "restarts": getattr(admin_worker, "restarts", 0),
                 "failed_starts": getattr(admin_worker, "failed_starts", 0),
             }
+        self.record_runtime_duration(
+            "status_worker_state", time.monotonic_ns() - worker_state_started_ns
+        )
+
+        telemetry_state_started_ns = time.monotonic_ns()
         payload["telemetry"] = {
             "client": self.get_telemetry_client_snapshot(),
             "collector": self.get_telemetry_collector_snapshot(),
         }
+        self.record_runtime_duration(
+            "status_telemetry_state", time.monotonic_ns() - telemetry_state_started_ns
+        )
+
+        tun_helper_state_started_ns = time.monotonic_ns()
         payload["tun_helper"] = self._tun_helper_snapshot()
+        self.record_runtime_duration(
+            "status_tun_helper_state", time.monotonic_ns() - tun_helper_state_started_ns
+        )
+
+        runtime_metrics_started_ns = time.monotonic_ns()
         payload["runtime_metrics"] = self._runtime_metrics_status_fields()
         payload.update(self._runtime_health_status_fields())
+        self.record_runtime_duration(
+            "runtime_metrics_projection", time.monotonic_ns() - runtime_metrics_started_ns
+        )
+
+        peer_stack_state_started_ns = time.monotonic_ns()
         if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             snapshot = self._current_peer_stack_snapshot()
             if snapshot is not None:
@@ -2450,6 +2509,9 @@ class Runner:
                 "restarts": self._peer_stack_restarts,
                 "failed_starts": self._peer_stack_failed_starts,
             }
+        self.record_runtime_duration(
+            "status_peer_stack_state", time.monotonic_ns() - peer_stack_state_started_ns
+        )
         return payload
 
     def get_connections_snapshot(self) -> dict:

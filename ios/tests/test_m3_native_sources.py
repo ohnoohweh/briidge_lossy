@@ -288,6 +288,64 @@ def test_ios_runtime_status_projects_shared_runtime_metrics() -> None:
     assert "runtimeHealthRecordsPayload" in provider
 
 
+def test_ios_runtime_metrics_include_swift_worker_and_leaf_boundaries() -> None:
+    metrics = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeRuntimeMetrics.swift").read_text(encoding="utf-8")
+    compression = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompressLayerRuntime.swift").read_text(encoding="utf-8")
+    adapter = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    for category in ("compression_encode", "compression_decode", "compression_frame", "securelink_worker", "apple_transport_parse_dispatch", "apple_transport_egress", "apple_transport_securelink_route", "apple_transport_mux_dispatch", "apple_transport_tun_data_guard", "apple_transport_tun_fragment_reassembly", "apple_transport_tun_peer_relay", "apple_transport_tun_system_enqueue", "apple_transport_tun_system_write", "apple_transport_udp_payload", "apple_transport_tcp_server_data", "apple_transport_tcp_client_open", "apple_transport_tcp_client_data", "apple_transport_tcp_write_enqueue", "apple_transport_tcp_close", "apple_transport_tcp_client_open_core", "apple_transport_tcp_client_open_publication", "apple_transport_tcp_connection_start", "apple_transport_tcp_receive_registration", "apple_transport_lifecycle"):
+        assert category in metrics
+    assert "apple_transport_owner_queue" not in metrics
+    assert "apple_transport_payload_route" not in metrics
+    assert "apple_transport_delivered_payload" not in metrics
+    assert "apple_transport_tcp_payload" not in metrics
+    assert "apple_transport_tun_payload" not in metrics
+    assert ".compressionEncode" in compression
+    assert ".compressionDecode" in compression
+    assert ".compressionFrame" in compression
+    assert ".secureLinkWorker" in adapter
+    assert ".appleTransportOwnerQueue" not in owner
+    assert ".appleTransportParseDispatch" in owner
+    assert ".appleTransportEgress" in owner
+    assert ".appleTransportPayloadRoute" not in owner
+    assert ".appleTransportSecureLinkRoute" in owner
+    assert ".appleTransportDeliveredPayload" not in owner
+    assert ".appleTransportMuxDispatch" in owner
+    assert ".appleTransportTunPayload" not in owner
+    core = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    packet_flow = (IOS_SWIFT_DIR / "ObstacleBridgePacketFlowBridge.swift").read_text(encoding="utf-8")
+    assert ".appleTransportTunDataGuard" in core
+    assert ".appleTransportTunFragmentReassembly" in core
+    assert ".appleTransportTunPeerRelay" in core
+    assert ".appleTransportTunSystemEnqueue" in (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    assert ".appleTransportTunSystemWrite" in packet_flow
+    provider_source = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgePacketFlowBridge.activate(provider: provider, tunnelAddress: tunnelAddress, mtu: settings.mtu)" in provider_source
+    assert "ObstacleBridgePacketFlowBridge.deactivate()" in provider_source
+    assert "maxOutgoingQueuedPackets = ObstacleBridgeRuntimeConfig.packetFlowFIFOQueueCapacity" in packet_flow
+    assert "outgoingDrainGeneration" in packet_flow
+    assert "outgoingQueuedPacketsMaxSinceStart" in packet_flow
+    assert "outgoingQueueLevelBuckets" in packet_flow
+    assert "outgoing_queue_max_last_2_seconds" in packet_flow
+    assert "shared.observeOutgoingQueueLevel(shared.outgoingQueuedPackets)" in packet_flow
+    shared_runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    assert "packetFlowFIFOQueueCapacity = 2048" in shared_runtime_config
+    assert "ObstacleBridgeRuntimeConfig.packetFlowFIFOQueueCapacity" in packet_flow
+    assert ".appleTransportTcpPayload" not in owner
+    assert ".appleTransportUdpPayload" in owner
+    tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift").read_text(encoding="utf-8")
+    assert ".appleTransportTcpServerData" in tcp_owner
+    assert ".appleTransportTcpClientOpen" in tcp_owner
+    assert ".appleTransportTcpClientData" in tcp_owner
+    assert ".appleTransportTcpWriteEnqueue" in tcp_owner
+    assert ".appleTransportTcpClose" in tcp_owner
+    assert ".appleTransportTcpClientOpenCore" in tcp_owner
+    assert ".appleTransportTcpClientOpenPublication" in tcp_owner
+    assert ".appleTransportTcpConnectionStart" in tcp_owner
+    assert ".appleTransportTcpReceiveRegistration" in tcp_owner
+    assert ".appleTransportLifecycle" in owner
+
+
 def test_ipserver_extension_plist_and_entitlements_exist() -> None:
     info_plist = (IPSERVER_NATIVE_DIR / "Info.plist").read_text(encoding="utf-8")
     entitlements = (IPSERVER_NATIVE_DIR / "IPServer.entitlements").read_text(encoding="utf-8")
@@ -761,6 +819,15 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert '"commit": commit' in provider
     assert '"diff_sha": diffSHA' in provider
     assert '"build_timestamp_utc": timestamp' in provider
+    build_info_writer = (ROOT / "scripts" / "write_build_info.py").read_text(encoding="utf-8")
+    linux_build_script = (ROOT / "scripts" / "build_linux_app.sh").read_text(encoding="utf-8")
+    python_bridge = (ROOT / "src" / "obstacle_bridge" / "bridge.py").read_text(encoding="utf-8")
+    swift_tun_helper = (ROOT / "src" / "obstacle_bridge" / "bridge_swift_tun_helper.py").read_text(encoding="utf-8")
+    assert '["rev-parse", "--short=8", "HEAD"]' in build_info_writer
+    assert 'rev-parse --short=8 HEAD' in build_script
+    assert 'rev-parse --short=8 HEAD' in linux_build_script
+    assert '["git", "rev-parse", "--short=8", "HEAD"]' in python_bridge
+    assert '_git(root, "rev-parse", "--short=8", "HEAD")' in swift_tun_helper
     assert "Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)" in build_script
     assert "Set :CFBundleShortVersionString $(MARKETING_VERSION)" in build_script
     assert 'private func adminSnapshotCachingEnabled() -> Bool' in provider
@@ -782,6 +849,9 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert "private func adminPacketProcessingActive(bridgeSnapshot: [String: Any]? = nil) -> Bool" in provider
     assert 'if let active = snapshot["active"] as? Bool {' in provider
     assert 'payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)' in provider
+    assert 'payload["packet_flow_fifo"] = [' in provider
+    assert '"max_queued_packets_since_start": bridgeSnapshot["outgoing_queue_max_since_start"] ?? 0' in provider
+    assert '"max_queued_packets_last_2_seconds": bridgeSnapshot["outgoing_queue_max_last_2_seconds"] ?? 0' in provider
     assert 'payload["tun_control"] = ObstacleBridgeAdminAPI.tunControlSnapshot(' in provider
     assert 'private var packetTunnelConfiguration: ObstacleBridgePacketTunnelConfiguration?' in provider
     assert 'private var tunRoutingEnabled = false' in provider

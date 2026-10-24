@@ -860,8 +860,17 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func handleOverlayDatagram(_ datagram: Data) {
+        handleOverlayDatagramOnOwnerQueue(datagram)
+    }
+
+    /// The receive path records its individual uninterrupted work scopes rather
+    /// than an inclusive owner-queue transaction. A queue transaction spans
+    /// separately measurable subtasks and does not identify the blocking action.
+    private func handleOverlayDatagramOnOwnerQueue(_ datagram: Data) {
         let wasConnected = overlayConnected
-        guard let frame = ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(datagram) else {
+        guard let frame = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportParseDispatch, {
+            ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(datagram)
+        }) else {
             return
         }
         let nowNS = monotonicNowNS()
@@ -881,7 +890,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             }
             routeOverlayPayloads(snapshot.completedPayloads)
         case ObstacleBridgeUdpOverlayCodec.ptypeControl:
-            guard let control = ObstacleBridgeUdpOverlayCodec.parseControlFrame(datagram) else {
+            guard let control = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportParseDispatch, {
+                ObstacleBridgeUdpOverlayCodec.parseControlFrame(datagram)
+            }) else {
                 return
             }
             do {
@@ -923,14 +934,16 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             break
         }
         if !wasConnected && overlayConnected {
-            eventSink?("udp_overlay_connected", [
-                "peer_host": currentPeerAddress?.host ?? NSNull(),
-                "peer_port": currentPeerAddress?.port ?? NSNull(),
-                "resolved_peer_family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
-            ])
-            maybePrimeSecureLinkHandshake()
-            maybeSendStartupMuxFrames()
-            maybeOpenConfiguredTunIfReady()
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportLifecycle) {
+                eventSink?("udp_overlay_connected", [
+                    "peer_host": currentPeerAddress?.host ?? NSNull(),
+                    "peer_port": currentPeerAddress?.port ?? NSNull(),
+                    "resolved_peer_family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
+                ])
+                maybePrimeSecureLinkHandshake()
+                maybeSendStartupMuxFrames()
+                maybeOpenConfiguredTunIfReady()
+            }
         }
         lastOverlayConnectedState = overlayConnected
     }
@@ -1038,15 +1051,18 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
         for payload in payloads {
             if let adapter = overlayLayerTransportAdapter {
-                overlayRuntime.recordSecureLinkBoundaryFrame(direction: "to_securelink")
-                let snapshot = adapter.handleInboundFrame(
-                    payload,
-                    observedPeerHost: currentPeerAddress?.host,
-                    observedPeerPort: currentPeerAddress?.port
-                )
-                for emitted in snapshot.emittedFrames {
-                    overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
-                    sendOverlayTransportPayload(emitted)
+                let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportSecureLinkRoute) {
+                    overlayRuntime.recordSecureLinkBoundaryFrame(direction: "to_securelink")
+                    let snapshot = adapter.handleInboundFrame(
+                        payload,
+                        observedPeerHost: currentPeerAddress?.host,
+                        observedPeerPort: currentPeerAddress?.port
+                    )
+                    for emitted in snapshot.emittedFrames {
+                        overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+                        sendOverlayTransportPayload(emitted)
+                    }
+                    return snapshot
                 }
                 for delivered in snapshot.deliveredPayloads {
                     handleOverlayPayload(delivered)
@@ -1150,10 +1166,17 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func handleOverlayPayload(_ payload: Data) {
-        guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
+        guard let result = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportMuxDispatch, {
+            () -> (ObstacleBridgeChannelMuxCodec.MuxFrame, ObstacleBridgeAppleServiceCatalog.Install?)? in
+            guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
+                return nil
+            }
+            return (frame, serviceCatalog.receive(frame))
+        }) else {
             return
         }
-        if let install = serviceCatalog.receive(frame) {
+        let (frame, install) = result
+        if let install {
             serviceCatalogSink?(install)
             return
         }
@@ -1163,7 +1186,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         case .tcp:
             tcpTransportOwner.handleInboundMuxFrame(frame)
         case .udp:
-            handleInboundUDPMuxFrame(frame)
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportUdpPayload) {
+                handleInboundUDPMuxFrame(frame)
+            }
         }
     }
 
@@ -1416,19 +1441,21 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func sendDatagram(_ packet: Data) {
-        guard started, socketFD >= 0, let peerAddress = currentPeerAddress else {
-            return
-        }
-        packet.withUnsafeBytes { rawBuffer in
-            guard let base = rawBuffer.baseAddress else { return }
-            peerAddress.storage.withUnsafeBytes { peerBuffer in
-                guard let peerBase = peerBuffer.baseAddress else { return }
-                let sockaddrPtr = peerBase.assumingMemoryBound(to: sockaddr.self)
-                let sent = Darwin.sendto(socketFD, base, rawBuffer.count, 0, sockaddrPtr, peerAddress.length)
-                if sent < 0 {
-                    let err = errno
-                    eventSink?("udp_overlay_send_failed", ["errno": err, "packet_bytes": rawBuffer.count])
-                    handleImmediatePeerFallback(sendErrno: err)
+        ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportEgress) {
+            guard started, socketFD >= 0, let peerAddress = currentPeerAddress else {
+                return
+            }
+            packet.withUnsafeBytes { rawBuffer in
+                guard let base = rawBuffer.baseAddress else { return }
+                peerAddress.storage.withUnsafeBytes { peerBuffer in
+                    guard let peerBase = peerBuffer.baseAddress else { return }
+                    let sockaddrPtr = peerBase.assumingMemoryBound(to: sockaddr.self)
+                    let sent = Darwin.sendto(socketFD, base, rawBuffer.count, 0, sockaddrPtr, peerAddress.length)
+                    if sent < 0 {
+                        let err = errno
+                        eventSink?("udp_overlay_send_failed", ["errno": err, "packet_bytes": rawBuffer.count])
+                        handleImmediatePeerFallback(sendErrno: err)
+                    }
                 }
             }
         }

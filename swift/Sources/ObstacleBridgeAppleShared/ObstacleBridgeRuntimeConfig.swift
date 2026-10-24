@@ -13,6 +13,10 @@ enum ObstacleBridgeAppleRuntimeMetricsSampler {
 enum ObstacleBridgeRuntimeConfig {
     /// Version shared by desktop hosts when handing runtime configuration to an isolated worker.
     static let isolatedWorkerProtocolVersion = 1
+    /// The iOS packet-flow bridge is the only Apple runtime with this FIFO, but
+    /// its status schema and capacity are shared so WebAdmin payload consumers
+    /// do not need a platform-private vocabulary.
+    static let packetFlowFIFOQueueCapacity = 2048
     // Packaged-host qualification may provide an isolated runtime config
     // without changing either platform's durable app-scoped configuration.
     // The macOS primary app and host runner consume this shared vocabulary;

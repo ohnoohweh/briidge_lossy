@@ -66,7 +66,7 @@ mkdir -p "${OUTPUT_DIR}" "${SCRATCH_DIR}"
 # This file is intentionally ignored: it is an input to the executable, not
 # source state.  Python verifies this embedded identity before it reuses a
 # helper, so a copied sidecar cannot make an old binary appear current.
-COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
+COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short=8 HEAD 2>/dev/null || printf 'unknown')"
 if git -C "${REPO_ROOT}" status --porcelain | grep -q .; then
   DIRTY=true
 else

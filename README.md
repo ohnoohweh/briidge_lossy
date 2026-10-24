@@ -1090,7 +1090,7 @@ The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) 
 
 An open WebAdmin page receives status and peer updates through the shared `/api/live` WebSocket subscription; if a browser cannot keep that subscription, the page falls back to bounded HTTP polling.
 
-Packaged native clients also show their embedded build identity in the WebAdmin headline and Runtime Metadata view, including commit, build timestamp, and whether the build was tainted.
+Python, Linux, macOS, and iOS products show their build identity in the WebAdmin headline and Runtime Metadata view. The commit is always the standard first eight characters of the Git revision, with build timestamp and taint state.
 
 The broader security design note in [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md) summarizes secure-link protection, WebAdmin auth, encrypted config-secret persistence, controlled secret reveal, API attack scenarios, malformed-frame handling, file-access threats, and remaining deployment boundaries.
 
@@ -1741,11 +1741,27 @@ approved categories, while one Runner-owned task samples process CPU and
 event-loop lateness. Cached redacted status now exposes bounded aggregates;
 the local smoke is socket/TUN-free, and the WebAdmin Runtime Analysis view
 shows lifetime and trailing-two-second peak CPU and uninterrupted-work signals;
-contributors across overlay, SecureLink, compression, timer, snapshot,
-logging, ChannelMux, and TUN boundaries are displayed as event-loop occupancy
-estimates. The portable Swift Core supplies the same redacted runtime-metrics
+contributors across overlay receive preparation/data/idle/control, retransmit
+reported-missing/unconfirmed sweeps, SecureLink worker/crypto, compression
+frame/encode/decode, Apple transport parse/per-payload SecureLink/ChannelMux/
+TUN/TCP/UDP/egress/lifecycle boundaries,
+TCP server/client/write/close and client-open Core/publication/connection/receive
+boundaries, timer, status statistics,
+session summaries, worker state, telemetry state, TUN-helper state, peer-stack
+state, runtime-metrics/health projection,
+connections, peer inventory, build-info, security-advisor, logging, ChannelMux,
+and TUN boundaries are displayed as event-loop occupancy estimates. Inclusive
+queue, transaction, payload-batch, TCP-message-dispatch, or TUN-payload wrappers that span separately measurable subtasks are not
+shown as uninterrupted-work signals. The
+portable Swift Core supplies the same redacted runtime-metrics
 status shape to Linux, macOS, and iOS hosts for its shared overlay, SecureLink,
-compression, and timer boundaries.
+compression, timer, detailed myUDP receive/retransmit boundaries, and its
+actionable leaf transport boundaries. On iOS, the TUN / Routing page also
+shows the packet-flow FIFO high-water level for the trailing two seconds and
+since extension-process start, with its fixed 2,048-packet capacity.
+Trailing-two-second projection reads only
+the matching rolling slots per category, and Swift derives recent maxima in one
+pass over its bounded aggregate set.
 
 - Enable logging on the relevant component, generate log files, and analyze them carefully. In practice it is often effective to use AI assistance to summarize the logs and provide reasoning about the likely sequence of events.
 - Avoid guessing. If the evidence is not strong enough, extend the logging so that the next run produces harder facts instead of more assumptions.

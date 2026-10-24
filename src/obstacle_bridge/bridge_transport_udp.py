@@ -1601,12 +1601,21 @@ class PeerProtocol(asyncio.DatagramProtocol):
             self._schedule_completed_pending()
 
     def _process_one_rx_datagram(self) -> None:
-        with bounded_runtime_scope(getattr(self.session, "_runner_runtime_metric_cb", None), "overlay_receive"):
-            self._process_one_rx_datagram_timed()
+        self._process_one_rx_datagram_timed()
 
     def _process_one_rx_datagram_timed(self) -> None:
         if not self._rx_pending:
             return
+        metric_callback = getattr(self.session, "_runner_runtime_metric_cb", None)
+
+        def record_phase(category: str, started_ns: int) -> None:
+            if callable(metric_callback):
+                try:
+                    metric_callback(category, max(0, time.monotonic_ns() - started_ns))
+                except Exception:
+                    pass
+
+        receive_prepare_started_ns = time.monotonic_ns()
         data, addr = self._rx_pending.popleft()
         self.session.log.debug(
             "[PEER/RX/RAW-SOCKET] len=%d from=%r transport_sock=%r transport_peer=%r",
@@ -1671,6 +1680,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
 
         now_t = now_ns()
         kind, pkt, tx_ns, echo_ns = self._parse_and_count(data)
+        record_phase("overlay_receive_prepare", receive_prepare_started_ns)
         self.session.log.debug(
             "[PEER/RX/PARSE] from=%r kind=%r tx_ns=%d echo_ns=%d pkt=%s",
             addr,
@@ -1717,6 +1727,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
                 kind,
             )
         if kind == "idle":
+            idle_started_ns = time.monotonic_ns()
             #  Reflect only initial idle probes (echo==0)
             if echo_ns == 0:
                 try:
@@ -1740,8 +1751,10 @@ class PeerProtocol(asyncio.DatagramProtocol):
             )                    
             if self._rx_pending:
                 self._schedule_rx_pending()
+            record_phase("overlay_receive_idle", idle_started_ns)
             return
         if kind == "data" and pkt:
+            data_started_ns = time.monotonic_ns()
             chunks: List[StreamChunk] = pkt
             prev_missing = set(self.session.missing)
             completed: List[bytes] = []
@@ -1756,6 +1769,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
                     self.session.stream_decode_errors += 1
                 if self._rx_pending:
                     self._schedule_rx_pending()
+                record_phase("overlay_receive_data", data_started_ns)
                 return
             if isinstance(self.session, MyUDP2Session):
                 self.session.batch_datagrams_received += 1
@@ -1772,14 +1786,17 @@ class PeerProtocol(asyncio.DatagramProtocol):
                 self._schedule_completed_pending()
             if self._rx_pending:
                 self._schedule_rx_pending()
+            record_phase("overlay_receive_data", data_started_ns)
             return
         if kind == "control" and pkt:
+            control_started_ns = time.monotonic_ns()
             cp: ControlPacket = pkt
             self.session.confirm_with_feedback(cp.last_in_order_rx, cp.highest_rx, cp.missed)
             self._schedule_retrans(cp.missed)
             if self.send_port:
                 self.session.try_flush_send_queue(self.send_port)
             self._evaluate_control_policy_inbound(False)
+            record_phase("overlay_receive_control", control_started_ns)
         if self._rx_pending:
             self._schedule_rx_pending()
 
@@ -1826,8 +1843,9 @@ class PeerProtocol(asyncio.DatagramProtocol):
         try:
             while True:
                 await asyncio.sleep(RETRANSMIT_UNCONFIRMED_MS / 1000.0)
-                with bounded_runtime_scope(getattr(self.session, "_runner_runtime_metric_cb", None), "retransmit_tick"):
+                with bounded_runtime_scope(getattr(self.session, "_runner_runtime_metric_cb", None), "retransmit_reported_missing"):
                     self._retx_sweep_reported_missing()
+                with bounded_runtime_scope(getattr(self.session, "_runner_runtime_metric_cb", None), "retransmit_unconfirmed"):
                     self._retx_sweep_unconfirmed()
         except asyncio.CancelledError:
             return

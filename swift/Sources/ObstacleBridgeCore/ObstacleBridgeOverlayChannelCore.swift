@@ -484,27 +484,31 @@ enum ObstacleBridgeOverlayChannelCore {
 
         func handleDeliveredPacket(_ packet: Data, chanID: Int) {
             activeTunChanIDs.insert(chanID)
-            if let relay = tunRuntime.planSharedTunInboundPeerRelay(sourcePeerID: currentTunPeerID, packet: packet),
-               relay.relayToPeer {
+            let relay = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTunPeerRelay) {
+                tunRuntime.planSharedTunInboundPeerRelay(sourcePeerID: currentTunPeerID, packet: packet)
+            }
+            if let relay, relay.relayToPeer {
                 onInboundRelay?(TunInboundRelayEvent(
                     relay: relay,
                     sourceChanID: chanID,
                     packet: packet,
                     tunRuntime: tunRuntime
                 ))
-                for selectedChanID in relay.selectedChanIDs where selectedChanID != chanID {
-                    if let localSnapshot = try? tunRuntime.handleLocalTunPacket(
-                        packet: packet,
-                        mtu: tunMTU,
-                        existingChanID: selectedChanID,
-                        spec: localTunSpec,
-                        overlayConnected: overlayConnected,
-                        acceptingEnabled: true,
-                        bufferedFrames: bufferedFrames,
-                        nowNS: DispatchTime.now().uptimeNanoseconds,
-                        recordInflow: false
-                    ) {
-                        sendMuxFrames(localSnapshot.frames)
+                ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTunPeerRelay) {
+                    for selectedChanID in relay.selectedChanIDs where selectedChanID != chanID {
+                        if let localSnapshot = try? tunRuntime.handleLocalTunPacket(
+                            packet: packet,
+                            mtu: tunMTU,
+                            existingChanID: selectedChanID,
+                            spec: localTunSpec,
+                            overlayConnected: overlayConnected,
+                            acceptingEnabled: true,
+                            bufferedFrames: bufferedFrames,
+                            nowNS: DispatchTime.now().uptimeNanoseconds,
+                            recordInflow: false
+                        ) {
+                            sendMuxFrames(localSnapshot.frames)
+                        }
                     }
                 }
                 return
@@ -537,13 +541,15 @@ enum ObstacleBridgeOverlayChannelCore {
                 onOpenChunkRejected?(frame.chanID)
             }
         case .data:
-            let snapshot = tunRuntime.handleInboundTunDataSharedGuarded(
-                peerID: currentTunPeerID,
-                chanID: frame.chanID,
-                body: frame.body,
-                mtu: tunMTU,
-                counter: frame.counter
-            )
+            let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTunDataGuard) {
+                tunRuntime.handleInboundTunDataSharedGuarded(
+                    peerID: currentTunPeerID,
+                    chanID: frame.chanID,
+                    body: frame.body,
+                    mtu: tunMTU,
+                    counter: frame.counter
+                )
+            }
             if !snapshot.delivered {
                 if let reason = snapshot.dropReason {
                     recordDrop(
@@ -570,16 +576,20 @@ enum ObstacleBridgeOverlayChannelCore {
                 handleDeliveredPacket(packet, chanID: frame.chanID)
             }
         case .dataFrag:
-            let snapshot = tunRuntime.handleInboundTunFragment(chanID: frame.chanID, payload: frame.body, mtu: tunMTU, counter: frame.counter)
+            let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTunFragmentReassembly) {
+                tunRuntime.handleInboundTunFragment(chanID: frame.chanID, payload: frame.body, mtu: tunMTU, counter: frame.counter)
+            }
             if let packet = snapshot.packet, snapshot.delivered {
                 activeTunChanIDs.insert(frame.chanID)
-                let guarded = tunRuntime.handleInboundTunDataSharedGuarded(
-                    peerID: currentTunPeerID,
-                    chanID: frame.chanID,
-                    body: packet,
-                    mtu: tunMTU,
-                    boundChanID: frame.chanID
-                )
+                let guarded = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTunDataGuard) {
+                    tunRuntime.handleInboundTunDataSharedGuarded(
+                        peerID: currentTunPeerID,
+                        chanID: frame.chanID,
+                        body: packet,
+                        mtu: tunMTU,
+                        boundChanID: frame.chanID
+                    )
+                }
                 if !guarded.delivered {
                     if let reason = guarded.dropReason {
                         recordDrop(

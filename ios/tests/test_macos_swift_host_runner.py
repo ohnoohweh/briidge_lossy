@@ -246,6 +246,57 @@ def test_macos_host_runner_projects_shared_runtime_metrics() -> None:
     assert '"previous_runtime_lifetime_ended_cleanly"' in source
 
 
+def test_macos_runtime_metrics_keep_swift_worker_and_leaf_boundaries() -> None:
+    metrics = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeMetrics.swift").read_text(encoding="utf-8")
+    compression = (CORE_SWIFT_DIR / "ObstacleBridgeCompressLayerRuntime.swift").read_text(encoding="utf-8")
+    adapter = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    for category in ("compression_encode", "compression_decode", "compression_frame", "securelink_worker", "apple_transport_parse_dispatch", "apple_transport_egress", "apple_transport_securelink_route", "apple_transport_mux_dispatch", "apple_transport_tun_data_guard", "apple_transport_tun_fragment_reassembly", "apple_transport_tun_peer_relay", "apple_transport_tun_system_enqueue", "apple_transport_tun_system_write", "apple_transport_udp_payload", "apple_transport_tcp_server_data", "apple_transport_tcp_client_open", "apple_transport_tcp_client_data", "apple_transport_tcp_write_enqueue", "apple_transport_tcp_close", "apple_transport_tcp_client_open_core", "apple_transport_tcp_client_open_publication", "apple_transport_tcp_connection_start", "apple_transport_tcp_receive_registration", "apple_transport_lifecycle"):
+        assert category in metrics
+    assert "apple_transport_owner_queue" not in metrics
+    assert "apple_transport_payload_route" not in metrics
+    assert "apple_transport_delivered_payload" not in metrics
+    assert "apple_transport_tcp_payload" not in metrics
+    assert "apple_transport_tun_payload" not in metrics
+    assert ".compressionEncode" in compression
+    assert ".compressionDecode" in compression
+    assert ".compressionFrame" in compression
+    assert ".secureLinkWorker" in adapter
+    assert ".appleTransportOwnerQueue" not in owner
+    assert ".appleTransportParseDispatch" in owner
+    assert ".appleTransportEgress" in owner
+    assert ".appleTransportPayloadRoute" not in owner
+    assert ".appleTransportSecureLinkRoute" in owner
+    assert ".appleTransportDeliveredPayload" not in owner
+    assert ".appleTransportMuxDispatch" in owner
+    assert ".appleTransportTunPayload" not in owner
+    core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    packet_flow = (IOS_SWIFT_DIR / "ObstacleBridgePacketFlowBridge.swift").read_text(encoding="utf-8")
+    assert ".appleTransportTunDataGuard" in core
+    assert ".appleTransportTunFragmentReassembly" in core
+    assert ".appleTransportTunPeerRelay" in core
+    assert ".appleTransportTunSystemEnqueue" in (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    assert ".appleTransportTunSystemWrite" in packet_flow
+    provider_source = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgePacketFlowBridge.activate(provider: provider, tunnelAddress: tunnelAddress, mtu: settings.mtu)" in provider_source
+    assert "ObstacleBridgePacketFlowBridge.deactivate()" in provider_source
+    assert "maxOutgoingQueuedPackets = 2048" in packet_flow
+    assert "outgoingDrainGeneration" in packet_flow
+    assert ".appleTransportTcpPayload" not in owner
+    assert ".appleTransportUdpPayload" in owner
+    tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift").read_text(encoding="utf-8")
+    assert ".appleTransportTcpServerData" in tcp_owner
+    assert ".appleTransportTcpClientOpen" in tcp_owner
+    assert ".appleTransportTcpClientData" in tcp_owner
+    assert ".appleTransportTcpWriteEnqueue" in tcp_owner
+    assert ".appleTransportTcpClose" in tcp_owner
+    assert ".appleTransportTcpClientOpenCore" in tcp_owner
+    assert ".appleTransportTcpClientOpenPublication" in tcp_owner
+    assert ".appleTransportTcpConnectionStart" in tcp_owner
+    assert ".appleTransportTcpReceiveRegistration" in tcp_owner
+    assert ".appleTransportLifecycle" in owner
+
+
 def test_macos_host_runner_converts_portable_runtime_service_specs_at_the_host_boundary() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     native_service_spec = (CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift").read_text(encoding="utf-8")
@@ -297,6 +348,7 @@ def test_macos_host_runner_uses_shared_peer_client_channel_allocation() -> None:
     assert source.count("ObstacleBridgeChannelMuxTcpRuntime(allocation: .peerClient())") == 2
 SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
+IOS_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeiOS"
 APP_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeMacOS"
 IOS_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeiOS"
 

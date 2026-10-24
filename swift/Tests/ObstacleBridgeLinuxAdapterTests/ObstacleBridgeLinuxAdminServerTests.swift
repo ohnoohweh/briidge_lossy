@@ -315,7 +315,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
         ]
         let server = ObstacleBridgeLinuxAdminServer(
             runtime: runtime, adminConfiguration: configuration,
-            buildInfo: ["available": true, "commit": "0123456789ab", "build_timestamp_utc": "2026-10-18T00:00:00Z", "tainted": false, "tracked_changes": 0, "untracked_changes": 0],
+            buildInfo: ["available": true, "commit": "01234567", "build_timestamp_utc": "2026-10-18T00:00:00Z", "tainted": false, "tracked_changes": 0, "untracked_changes": 0],
             connectionsProvider: {
                 ["tcp": [
                     ["peer_id": "peer-b", "state": "connected", "local_port": 31_28, "remote_destination": "198.51.100.5:8080"],
@@ -332,7 +332,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let meta = try #require(try await getJSON(base + "/api/meta") as? [String: Any])
         #expect(meta["admin_web_name"] as? String == "Linux Admin")
         #expect((meta["build"] as? [String: Any])?["available"] as? Bool == true)
-        #expect((meta["build"] as? [String: Any])?["commit"] as? String == "0123456789ab")
+        #expect((meta["build"] as? [String: Any])?["commit"] as? String == "01234567")
         let profiles = try #require(try await getJSON(base + "/api/onboarding/connection-profiles") as? [String: Any])
         let profile = try #require((profiles["profiles"] as? [[String: Any]])?.first)
         #expect(profile["transport"] as? String == "tcp")

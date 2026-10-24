@@ -37,7 +37,7 @@ echo "[build_ios_app] refreshing embedded build metadata and VPN profile timesta
 IOS_MARKETING_VERSION="${OB_IOS_MARKETING_VERSION:-$(date -u +%Y.%m.%d)}"
 IOS_BUILD_NUMBER="${OB_IOS_BUILD_NUMBER:-$(git -C "${REPO_ROOT}" rev-list --count HEAD 2>/dev/null || true)}"
 IOS_BUILD_NUMBER="${IOS_BUILD_NUMBER:-1}"
-IOS_GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD 2>/dev/null || true)"
+IOS_GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short=8 HEAD 2>/dev/null || true)"
 IOS_GIT_COMMIT="${IOS_GIT_COMMIT:-unknown}"
 echo "[build_ios_app] bundle identity display=ObstacleBridge version=${IOS_MARKETING_VERSION} build=${IOS_BUILD_NUMBER} commit=${IOS_GIT_COMMIT}"
 

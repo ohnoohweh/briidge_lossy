@@ -1844,6 +1844,13 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
 
     private func adminTunRoutingSnapshotUncached(connections: [String: Any]? = nil) -> [String: Any] {
         var payload = ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: connections ?? adminConnectionsSnapshotUncached())
+        let bridgeSnapshot = ObstacleBridgePacketFlowBridge.bridgeStateSnapshot()
+        payload["packet_flow_fifo"] = [
+            "queued_packets": bridgeSnapshot["outgoing_queued_packets"] ?? 0,
+            "capacity_packets": ObstacleBridgeRuntimeConfig.packetFlowFIFOQueueCapacity,
+            "max_queued_packets_since_start": bridgeSnapshot["outgoing_queue_max_since_start"] ?? 0,
+            "max_queued_packets_last_2_seconds": bridgeSnapshot["outgoing_queue_max_last_2_seconds"] ?? 0,
+        ]
         if !effectivePacketTunnelSettingsState.isEmpty {
             payload["included_routes"] = Self.ipv4RouteCIDRList(effectivePacketTunnelSettingsState["included_routes"])
             payload["excluded_routes"] = Self.ipv4RouteCIDRList(effectivePacketTunnelSettingsState["excluded_routes"])
@@ -3547,6 +3554,7 @@ private final class SwiftSimpleUDPPeerBridge {
     func start() {
         guard !started, let provider else { return }
         started = true
+        ObstacleBridgePacketFlowBridge.activate(provider: provider, tunnelAddress: tunnelAddress, mtu: settings.mtu)
         startedAt = Date().timeIntervalSince1970
         currentPeerSelectedAtNS = monotonicNowNS()
         lastInboundDatagramNS = 0
@@ -3622,6 +3630,9 @@ private final class SwiftSimpleUDPPeerBridge {
     func stop() {
         guard started else { return }
         started = false
+        // Fence and discard deferred PacketFlow writes before stopping the
+        // transport owners, so a queued packet cannot cross a tunnel restart.
+        ObstacleBridgePacketFlowBridge.deactivate()
         peerFallbackTimer?.cancel()
         peerFallbackTimer = nil
         readSource?.cancel()
@@ -4109,10 +4120,13 @@ private final class SwiftSimpleUDPPeerBridge {
             recordTunICMPStage("from_peer_before_local_write")
             recordTunICMPStage("local_reply_virtual_probe_delivery")
         }
-        guard let provider else {
+        let accepted = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTunSystemEnqueue) {
+            ObstacleBridgePacketFlowBridge.writePacket(packet as NSData)
+        }
+        guard accepted else {
+            sendFailures += 1
             return
         }
-        provider.packetFlow.writePackets([packet], withProtocols: [NSNumber(value: Self.protocolFamily(for: packet))])
         packetsToSystem += 1
         bytesToSystem += packet.count
         writeBatches += 1

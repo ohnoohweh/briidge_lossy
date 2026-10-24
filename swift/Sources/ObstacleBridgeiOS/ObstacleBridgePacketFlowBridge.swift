@@ -4,6 +4,11 @@ import Darwin
 
 @objc(ObstacleBridgePacketFlowBridge)
 final class ObstacleBridgePacketFlowBridge: NSObject {
+    private struct OutgoingQueueLevelBucket {
+        var slot: UInt64 = 0
+        var maximum: Int = 0
+    }
+
     private final class PacketFlowPCAPWriter {
         private var fd: Int32 = -1
         let path: String
@@ -126,6 +131,15 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
     private var outgoingWriteLastFinishedAt = 0.0
     private var outgoingQueuedPackets = 0
     private var outgoingQueuedPacketsMax = 0
+    /// This is deliberately not reset by a TUN deactivate/reactivate cycle: the
+    /// WebAdmin "since start" high-water mark describes the extension process.
+    private var outgoingQueuedPacketsMaxSinceStart = 0
+    /// Fixed-size rolling high-water buckets avoid retaining one record per
+    /// packet while keeping the last-two-seconds view useful under load.
+    private var outgoingQueueLevelBuckets = Array(
+        repeating: OutgoingQueueLevelBucket(),
+        count: 21
+    )
     private var outgoingWriteBatches = 0
     private var outgoingPendingPackets: [Data] = []
     private var outgoingPendingProtocols: [NSNumber] = []
@@ -134,9 +148,11 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
     /// work queued before a stop from observing a rapid reactivation.
     private var outgoingDrainGeneration: UInt64 = 0
     private let maxQueuedPackets = 2048
-    private let maxOutgoingQueuedPackets = 2048
+    private let maxOutgoingQueuedPackets = ObstacleBridgeRuntimeConfig.packetFlowFIFOQueueCapacity
     private let maxOutgoingBatchPackets = 64
     private let outgoingDrainCoalesceDelayMs = 2
+    private let outgoingQueueLevelBucketNanoseconds: UInt64 = 100_000_000
+    private let outgoingQueueLevelWindowNanoseconds: UInt64 = 2_000_000_000
 
     class func activate(provider: PacketTunnelProvider, tunnelAddress: String, mtu: Int) {
         let pcapFields = shared.queue.sync { () -> [String: Any] in
@@ -163,6 +179,11 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
             shared.outgoingWriteLastFinishedAt = 0.0
             shared.outgoingQueuedPackets = 0
             shared.outgoingQueuedPacketsMax = 0
+            shared.outgoingQueueLevelBuckets = Array(
+                repeating: OutgoingQueueLevelBucket(),
+                count: shared.outgoingQueueLevelBuckets.count
+            )
+            shared.observeOutgoingQueueLevel(0)
             shared.outgoingWriteBatches = 0
             shared.outgoingPendingPackets.removeAll(keepingCapacity: false)
             shared.outgoingPendingProtocols.removeAll(keepingCapacity: false)
@@ -201,6 +222,8 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 "outgoing_write_last_finished_at": shared.outgoingWriteLastFinishedAt,
                 "outgoing_queued_packets": shared.outgoingQueuedPackets,
                 "outgoing_queued_packets_max": shared.outgoingQueuedPacketsMax,
+                "outgoing_queue_max_since_start": shared.outgoingQueuedPacketsMaxSinceStart,
+                "outgoing_queue_max_last_2_seconds": shared.recentOutgoingQueueLevelMax(),
                 "outgoing_write_batches": shared.outgoingWriteBatches,
                 "incoming_pcap_path": shared.incomingPCAPPath,
                 "outgoing_pcap_path": shared.outgoingPCAPPath,
@@ -329,6 +352,11 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
             shared.outgoingPendingProtocols.append(NSNumber(value: proto))
             shared.outgoingQueuedPackets = shared.outgoingPendingPackets.count
             shared.outgoingQueuedPacketsMax = max(shared.outgoingQueuedPacketsMax, shared.outgoingQueuedPackets)
+            shared.outgoingQueuedPacketsMaxSinceStart = max(
+                shared.outgoingQueuedPacketsMaxSinceStart,
+                shared.outgoingQueuedPackets
+            )
+            shared.observeOutgoingQueueLevel(shared.outgoingQueuedPackets)
             let shouldSchedule = !shared.outgoingDrainScheduled
             if shouldSchedule {
                 shared.outgoingDrainScheduled = true
@@ -416,6 +444,8 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 "outgoing_write_last_finished_at": outgoingWriteLastFinishedAt,
                 "outgoing_queued_packets": outgoingQueuedPackets,
                 "outgoing_queued_packets_max": outgoingQueuedPacketsMax,
+                "outgoing_queue_max_since_start": outgoingQueuedPacketsMaxSinceStart,
+                "outgoing_queue_max_last_2_seconds": recentOutgoingQueueLevelMax(),
                 "outgoing_write_batches": outgoingWriteBatches,
                 "incoming_pcap_path": incomingPCAPPath,
                 "outgoing_pcap_path": outgoingPCAPPath,
@@ -519,6 +549,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 guard !shared.outgoingPendingPackets.isEmpty else {
                     shared.outgoingDrainScheduled = false
                     shared.outgoingQueuedPackets = shared.outgoingPendingPackets.count
+                    shared.observeOutgoingQueueLevel(shared.outgoingQueuedPackets)
                     return ([], [], 0)
                 }
                 let count = min(shared.maxOutgoingBatchPackets, shared.outgoingPendingPackets.count)
@@ -527,6 +558,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 shared.outgoingPendingPackets.removeFirst(count)
                 shared.outgoingPendingProtocols.removeFirst(count)
                 shared.outgoingQueuedPackets = shared.outgoingPendingPackets.count
+                shared.observeOutgoingQueueLevel(shared.outgoingQueuedPackets)
                 shared.outgoingWriteInflight += packets.count
                 shared.outgoingWriteInflightMax = max(shared.outgoingWriteInflightMax, shared.outgoingWriteInflight)
                 shared.outgoingWriteBatches += 1
@@ -537,7 +569,9 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 return
             }
             let started = CFAbsoluteTimeGetCurrent()
-            provider.packetFlow.writePackets(batch.0, withProtocols: batch.1)
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTunSystemWrite) {
+                provider.packetFlow.writePackets(batch.0, withProtocols: batch.1)
+            }
             let elapsedMs = (CFAbsoluteTimeGetCurrent() - started) * 1000.0
             recordOutgoingWriteCompletion(
                 provider: provider,
@@ -580,6 +614,8 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 "outgoing_write_inflight_max": shared.outgoingWriteInflightMax,
                 "outgoing_queued_packets": shared.outgoingQueuedPackets,
                 "outgoing_queued_packets_max": shared.outgoingQueuedPacketsMax,
+                "outgoing_queue_max_since_start": shared.outgoingQueuedPacketsMaxSinceStart,
+                "outgoing_queue_max_last_2_seconds": shared.recentOutgoingQueueLevelMax(),
                 "outgoing_write_batches": shared.outgoingWriteBatches,
             ]
         }
@@ -588,6 +624,28 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
         }
         if durationMs >= 20.0 {
             provider.recordPacketBridgeEvent("packet_bridge_outgoing_write_slow", fields: payload)
+        }
+    }
+
+    private func observeOutgoingQueueLevel(_ level: Int, now: UInt64 = DispatchTime.now().uptimeNanoseconds) {
+        let slot = now / outgoingQueueLevelBucketNanoseconds
+        let index = Int(slot % UInt64(outgoingQueueLevelBuckets.count))
+        if outgoingQueueLevelBuckets[index].slot != slot {
+            outgoingQueueLevelBuckets[index] = OutgoingQueueLevelBucket(slot: slot, maximum: level)
+        } else {
+            outgoingQueueLevelBuckets[index].maximum = max(outgoingQueueLevelBuckets[index].maximum, level)
+        }
+    }
+
+    private func recentOutgoingQueueLevelMax(now: UInt64 = DispatchTime.now().uptimeNanoseconds) -> Int {
+        let currentSlot = now / outgoingQueueLevelBucketNanoseconds
+        let windowSlots = outgoingQueueLevelWindowNanoseconds / outgoingQueueLevelBucketNanoseconds
+        let earliestSlot = currentSlot > windowSlots ? currentSlot - windowSlots : 0
+        return outgoingQueueLevelBuckets.reduce(0) { maximum, bucket in
+            guard bucket.slot >= earliestSlot, bucket.slot <= currentSlot else {
+                return maximum
+            }
+            return max(maximum, bucket.maximum)
         }
     }
 }

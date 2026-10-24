@@ -487,13 +487,11 @@ class AdminWebUI:
         return out
 
     def _run_snapshot_builder(self, topic: str, builder: Callable[[], dict], *, timeout: float = 0.35) -> dict:
-        callback = getattr(self.runner, "record_runtime_duration", None)
-
         def timed_builder() -> dict:
             # _call_runner executes this closure on the runner loop, so this
-            # excludes WebAdmin socket wait time and measures build work only.
-            with bounded_runtime_scope(callback, "webadmin_snapshot"):
-                return builder()
+            # excludes WebAdmin socket wait time. Individual synchronous
+            # components instrument themselves so one slow field is visible.
+            return builder()
 
         try:
             payload = self._call_runner(timed_builder, timeout=timeout)
@@ -505,6 +503,12 @@ class AdminWebUI:
         if not isinstance(payload, dict):
             payload = {"ok": False, "error": "invalid snapshot payload"}
         return self._fresh_snapshot_payload(topic, payload)
+
+    def _snapshot_component(self, category: str, builder: Callable[[], Any]) -> Any:
+        """Measure one bounded WebAdmin build component on the runner loop."""
+        callback = getattr(self.runner, "record_runtime_duration", None)
+        with bounded_runtime_scope(callback, category):
+            return builder()
 
     async def _handle_client(self, reader, writer):
         self._active_client_writers.add(writer)
@@ -694,7 +698,7 @@ class AdminWebUI:
                 await writer.wait_closed()
 
     def _build_connections_payload_now(self) -> dict:
-        payload = self.runner.get_connections_snapshot()
+        payload = self._snapshot_component("connections_snapshot", self.runner.get_connections_snapshot)
         payload["app"] = "udp-bidirectional-mux"
         payload["milestone"] = "C"
         return payload
@@ -1062,7 +1066,7 @@ class AdminWebUI:
         }
 
     def _build_tun_routing_payload_now(self) -> dict:
-        snapshot = self.runner.get_connections_snapshot() or {}
+        snapshot = self._snapshot_component("connections_snapshot", self.runner.get_connections_snapshot) or {}
         status_snapshot = self.runner.get_status_snapshot() or {}
         tun_rows = list(snapshot.get("tun") or [])
         tun_cfg = TunRoutingSettings.from_mapping(vars(self.args))
@@ -1792,7 +1796,7 @@ class AdminWebUI:
             "overlay_transport": getattr(self.runner.args, "overlay_transport", None),
             "dashboard_enabled": getattr(self.runner.args, "dashboard", None),
             "milestone": "C",
-            "build": _detect_build_info(),
+            "build": self._snapshot_component("build_info", _detect_build_info),
             "runtime_dependencies": _runtime_dependency_status_for_platform(platform),
         }
 
@@ -2052,7 +2056,7 @@ class AdminWebUI:
         await self._send_json(writer, code, payload)
 
     def _build_peers_payload_now(self) -> dict:
-        payload = self.runner.get_peer_connections_snapshot()
+        payload = self._snapshot_component("peers_snapshot", self.runner.get_peer_connections_snapshot)
         # `/api/peers` is an operator summary.  Do not leak the byte-window
         # quota fields that belonged to the retired ingress-throttle design
         # when an older runner or wrapper contributes a raw throttle snapshot.
@@ -2742,7 +2746,7 @@ class AdminWebUI:
     def _build_status_payload_now(self) -> dict:
         from .admin_api_contract import logging_worker_status
         payload = self.runner.get_status_snapshot()
-        connections_snapshot = self.runner.get_connections_snapshot() or {}
+        connections_snapshot = self._snapshot_component("connections_snapshot", self.runner.get_connections_snapshot) or {}
         for aggregate_key in ("open_connections", "traffic", "compress_layer"):
             payload.pop(aggregate_key, None)
         payload.update(self._status_tun_support_payload(connections_snapshot, payload))
@@ -2751,8 +2755,8 @@ class AdminWebUI:
         payload["app"] = "udp-bidirectional-mux"
         payload["milestone"] = "B"
         payload["admin_ui"] = self._build_admin_ui_payload()
-        payload["security_advisor"] = self._build_security_advisor_payload()
-        payload["build"] = _detect_build_info()
+        payload["security_advisor"] = self._snapshot_component("security_advisor", self._build_security_advisor_payload)
+        payload["build"] = self._snapshot_component("build_info", _detect_build_info)
         provider = getattr(self.runner.args, "_admin_logging_worker_status", None)
         payload["logging_worker"] = logging_worker_status(provider() if callable(provider) else None)
         return payload

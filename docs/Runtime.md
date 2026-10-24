@@ -609,11 +609,66 @@ owns exactly one cancellable monitor task that samples process CPU against
 monotonic elapsed time once per second and records event-loop probe lateness at
 a 250 ms cadence. The primitives retain aggregates only. Approved synchronous
 scopes cover overlay receive/send, SecureLink encode/decode, compression,
-control and retransmit ticks, WebAdmin snapshot construction, logging, and the
-existing ChannelMux/TUN callbacks. A scope reports just its category and
+control and retransmit ticks, WebAdmin snapshot components, logging, and the
+existing ChannelMux/TUN callbacks. Python WebAdmin splits status construction
+into base statistics, session-layer summaries, worker state, telemetry state,
+TUN-helper state, peer-stack state, and runtime-metrics/health projection.
+Disabled telemetry collectors return a fixed disabled summary without opening,
+scanning, or reading their spool. Connections, peer inventory, build-info, and
+security-advisor construction remain separate categories, so a snapshot
+peak identifies the responsible component instead of grouping all admin work
+together. A scope reports just its category and
 completed duration into fixed summaries; it retains neither packet content nor
 per-callback history. Focused unit tests use deterministic inputs and do not
 need a live bridge, root privileges, TUN, a network peer, or Swift.
+
+Python and Swift myUDP receive timing distinguishes preparation/frame decoding,
+data delivery, idle handling, and control handling. Their retransmission timer
+separately measures peer-reported-missing and unconfirmed-send sweeps. Those
+component scopes replace the aggregate receive/retransmit timer scopes,
+avoiding nested occupancy accounting while exposing the source of a long
+transport slice.
+
+Swift additionally separates compression frame handling, zlib encode, and
+zlib decode. It records SecureLink worker boundaries across every wrapped
+transport and splits Apple myUDP owner work into protocol parse/dispatch,
+per-payload SecureLink handoff, ChannelMux dispatch, and TUN/TCP/UDP payload work,
+ChannelMux dispatch/service-catalog processing, and TUN/TCP/UDP payload
+branches. TCP payload work further distinguishes server data, client
+open/data, local-write enqueue, and close work. Client-open work further
+separates Core admission, service/event publication, `NWConnection`
+creation/start, and receive registration/immediate activation. Socket egress
+and connection lifecycle remain separate. Runtime Analysis records only an
+individual uninterrupted work scope. It does not emit inclusive queue,
+transaction, or request-wrapper rows that span separately measurable
+subtasks: such a row can look like the longest block without identifying one
+actionable uninterrupted operation. Consequently,
+`apple_transport_owner_queue`, `apple_transport_payload_route`,
+`apple_transport_delivered_payload`, and `apple_transport_tcp_payload` are not
+metric categories; their former aggregates are replaced by receive,
+per-payload SecureLink, ChannelMux-dispatch, TCP message-type, and TUN/UDP leaf
+scopes that identify the leading uninterrupted operation. The fixed,
+aggregate-only vocabulary permits up to 56 categories.
+
+`apple_transport_tun_payload` is likewise absent. TUN analysis records shared
+data admission/filtering, fragment reassembly, peer relay, bounded system-write
+enqueue, and the dedicated packet-flow write separately. The iOS system-write
+handoff is a FIFO capped at 2,048 packets, writes batches of at most 64 packets
+on its own serial queue, and generation-fences/drains queued work on stop so a
+stale packet cannot cross a tunnel lifecycle boundary.
+
+The `TUN / Routing` WebAdmin page reports the iOS packet-flow FIFO high-water
+level both since extension-process start and for the trailing two seconds. The
+bridge records enqueue and drain levels in fixed 100 ms buckets (21 buckets),
+so the rolling metric has bounded memory and its collection cannot grow with
+packet traffic. The values are queue slots, displayed together with the fixed
+2,048-packet capacity; platforms without this Network Extension handoff show
+`n/a` rather than a synthetic value.
+
+The Runtime Analysis trailing-two-second projection reads only the matching
+fixed rolling slots for each category rather than scanning the full retained
+minute. The equivalent Swift projection derives all recent category maxima in
+one pass over its bounded recent aggregate set.
 
 #### CPU-load and contributor semantics
 

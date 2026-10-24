@@ -11,11 +11,51 @@ public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
         case tunCallback = "tun_callback"
         case overlayReceive = "overlay_receive"
         case overlaySend = "overlay_send"
+        case overlayReceivePrepare = "overlay_receive_prepare"
+        case overlayReceiveData = "overlay_receive_data"
+        case overlayReceiveIdle = "overlay_receive_idle"
+        case overlayReceiveControl = "overlay_receive_control"
         case secureLink = "securelink"
         case compression
+        case compressionEncode = "compression_encode"
+        case compressionDecode = "compression_decode"
+        case compressionFrame = "compression_frame"
+        case appleTransportParseDispatch = "apple_transport_parse_dispatch"
+        case appleTransportEgress = "apple_transport_egress"
+        case appleTransportSecureLinkRoute = "apple_transport_securelink_route"
+        case appleTransportMuxDispatch = "apple_transport_mux_dispatch"
+        case appleTransportTunDataGuard = "apple_transport_tun_data_guard"
+        case appleTransportTunFragmentReassembly = "apple_transport_tun_fragment_reassembly"
+        case appleTransportTunPeerRelay = "apple_transport_tun_peer_relay"
+        case appleTransportTunSystemEnqueue = "apple_transport_tun_system_enqueue"
+        case appleTransportTunSystemWrite = "apple_transport_tun_system_write"
+        case appleTransportUdpPayload = "apple_transport_udp_payload"
+        case appleTransportTcpServerData = "apple_transport_tcp_server_data"
+        case appleTransportTcpClientOpen = "apple_transport_tcp_client_open"
+        case appleTransportTcpClientData = "apple_transport_tcp_client_data"
+        case appleTransportTcpWriteEnqueue = "apple_transport_tcp_write_enqueue"
+        case appleTransportTcpClose = "apple_transport_tcp_close"
+        case appleTransportTcpClientOpenCore = "apple_transport_tcp_client_open_core"
+        case appleTransportTcpClientOpenPublication = "apple_transport_tcp_client_open_publication"
+        case appleTransportTcpConnectionStart = "apple_transport_tcp_connection_start"
+        case appleTransportTcpReceiveRegistration = "apple_transport_tcp_receive_registration"
+        case appleTransportLifecycle = "apple_transport_lifecycle"
+        case secureLinkWorker = "securelink_worker"
         case controlTick = "control_tick"
         case retransmitTick = "retransmit_tick"
-        case webAdminSnapshot = "webadmin_snapshot"
+        case retransmitReportedMissing = "retransmit_reported_missing"
+        case retransmitUnconfirmed = "retransmit_unconfirmed"
+        case statusStats = "status_stats"
+        case statusSessionSummaries = "status_session_summaries"
+        case statusWorkerState = "status_worker_state"
+        case statusTelemetryState = "status_telemetry_state"
+        case statusTunHelperState = "status_tun_helper_state"
+        case statusPeerStackState = "status_peer_stack_state"
+        case runtimeMetricsProjection = "runtime_metrics_projection"
+        case connectionsSnapshot = "connections_snapshot"
+        case peersSnapshot = "peers_snapshot"
+        case buildInfo = "build_info"
+        case securityAdvisor = "security_advisor"
         case logging
     }
 
@@ -77,9 +117,16 @@ public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
         let observationNow = nowNS ?? DispatchTime.now().uptimeNanoseconds
         lock.lock(); defer { lock.unlock() }
         trim(nowNS: observationNow)
+        var recentMaxByCategory = [Category: UInt64]()
+        for sample in recent {
+            recentMaxByCategory[sample.category] = max(
+                recentMaxByCategory[sample.category] ?? 0,
+                sample.durationNS
+            )
+        }
         let rows: [[String: Any]] = Category.allCases.map { category in
             let value = lifetime[category] ?? .init()
-            let recentMax = recent.filter { $0.category == category }.map(\.durationNS).max()
+            let recentMax = recentMaxByCategory[category]
             return ["category": category.rawValue, "count": value.count,
                     "total_ms": Double(value.totalNS) / 1_000_000, "mean_ms": value.count == 0 ? NSNull() : Double(value.totalNS) / Double(value.count) / 1_000_000,
                     "p95_ms": NSNull(), "p99_ms": NSNull(), "max_ms": value.count == 0 ? NSNull() : Double(value.maxNS) / 1_000_000,
