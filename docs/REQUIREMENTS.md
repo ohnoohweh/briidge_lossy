@@ -624,6 +624,8 @@ Implementation note: the in-process runtime-monitoring foundation supplies depen
 
 Runtime Analysis excludes `apple_transport_payload_route` and `apple_transport_delivered_payload`: they are routing/delivery wrappers, not one actionable uninterrupted operation. Per-payload SecureLink handoff, ChannelMux dispatch, and TUN/TCP/UDP branch metrics remain eligible to identify the leading work.
 
+Runtime Analysis also excludes `apple_transport_tcp_payload`: it wraps TCP OPEN/DATA/CLOSE handling. TCP server-data, client-open, client-data, write-enqueue, and close metrics remain eligible to identify the leading work.
+
 The Runner status projection exposes only cached aggregate timing summaries, lifetime/trailing-two-second maxima, and the source category for each uninterrupted peak; WebAdmin renders compact top-bar meters and Runtime Analysis supplies the textual detail.
 The trailing-two-second metrics projection reads only its matching fixed rolling slots per category; Swift derives recent category maxima in one pass over its bounded aggregate set.
 The local lifecycle smoke requires neither a TUN device nor an overlay peer.

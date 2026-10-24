@@ -1186,9 +1186,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 handleInboundTunMuxFrame(frame)
             }
         case .tcp:
-            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpPayload) {
-                tcpTransportOwner.handleInboundMuxFrame(frame)
-            }
+            tcpTransportOwner.handleInboundMuxFrame(frame)
         case .udp:
             ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportUdpPayload) {
                 handleInboundUDPMuxFrame(frame)

@@ -280,7 +280,7 @@ class Runner:
             "apple_transport_lifecycle",
             "apple_transport_securelink_route",
             "apple_transport_mux_dispatch", "apple_transport_tun_payload",
-            "apple_transport_tcp_payload", "apple_transport_udp_payload",
+            "apple_transport_udp_payload",
             "apple_transport_tcp_server_data", "apple_transport_tcp_client_open",
             "apple_transport_tcp_client_data", "apple_transport_tcp_write_enqueue",
             "apple_transport_tcp_close",
