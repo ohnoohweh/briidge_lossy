@@ -8,6 +8,8 @@ import io
 import pathlib
 import re
 import shutil
+import subprocess
+import sys
 import tarfile
 import tempfile
 from typing import List, Sequence
@@ -133,6 +135,16 @@ def stage_payload(root: pathlib.Path, payload_root: pathlib.Path) -> List[str]:
     return staged
 
 
+def stage_python_build_info(root: pathlib.Path, payload_root: pathlib.Path) -> pathlib.Path:
+    target = payload_root / "src" / "obstacle_bridge" / "_generated" / "build_info_generated.py"
+    subprocess.run(
+        [sys.executable, str(root / "scripts" / "write_build_info.py"), "--python-target", str(target)],
+        cwd=root,
+        check=True,
+    )
+    return target
+
+
 def make_tgz(source_dir: pathlib.Path, out_path: pathlib.Path) -> None:
     with tarfile.open(out_path, "w:gz", format=tarfile.USTAR_FORMAT) as archive:
         for path in _iter_archive_files(source_dir):
@@ -176,6 +188,7 @@ def build_spk(
         _reset_tree(payload_root)
         _reset_tree(spk_root)
         stage_payload(root, payload_root)
+        stage_python_build_info(root, payload_root)
         _copy_metadata(root, spk_root)
         _write_info(spk_root / "INFO", version, build_number=build_number)
         make_tgz(payload_root, spk_root / "package.tgz")

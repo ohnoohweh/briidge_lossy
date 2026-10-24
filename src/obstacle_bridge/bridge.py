@@ -207,6 +207,50 @@ def _detect_build_info() -> dict:
         "untracked_changes": 0,
         "available": False,
     }
+    try:
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+    except Exception:
+        repo_root = None
+    if repo_root is not None:
+        try:
+            rev = subprocess.run(
+                ["git", "rev-parse", "--short=8", "HEAD"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if rev.returncode == 0:
+                info["commit"] = str(rev.stdout or "").strip() or "unknown"
+                info["repo_root"] = str(repo_root)
+                info["available"] = True
+                status = subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    cwd=str(repo_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                    check=False,
+                )
+                if status.returncode == 0:
+                    tracked = 0
+                    untracked = 0
+                    for line in str(status.stdout or "").splitlines():
+                        item = line.strip()
+                        if not item:
+                            continue
+                        if item.startswith("??"):
+                            untracked += 1
+                        else:
+                            tracked += 1
+                    info["tracked_changes"] = tracked
+                    info["untracked_changes"] = untracked
+                    info["tainted"] = bool(tracked or untracked)
+                _BUILD_INFO_CACHE = dict(info)
+                return dict(info)
+        except Exception:
+            pass
     generated_info = _load_generated_build_info()
     if generated_info:
         info.update(generated_info)
@@ -231,48 +275,6 @@ def _detect_build_info() -> dict:
             return dict(info)
     except Exception:
         pass
-    try:
-        repo_root = pathlib.Path(__file__).resolve().parents[2]
-    except Exception:
-        repo_root = None
-    if repo_root is not None:
-        try:
-            rev = subprocess.run(
-                ["git", "rev-parse", "--short=8", "HEAD"],
-                cwd=str(repo_root),
-                capture_output=True,
-                text=True,
-                timeout=2,
-                check=False,
-            )
-            if rev.returncode == 0:
-                info["commit"] = str(rev.stdout or "").strip() or "unknown"
-                info["repo_root"] = str(repo_root)
-                info["available"] = True
-            status = subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=str(repo_root),
-                capture_output=True,
-                text=True,
-                timeout=2,
-                check=False,
-            )
-            if status.returncode == 0:
-                tracked = 0
-                untracked = 0
-                for line in str(status.stdout or "").splitlines():
-                    item = line.strip()
-                    if not item:
-                        continue
-                    if item.startswith("??"):
-                        untracked += 1
-                    else:
-                        tracked += 1
-                info["tracked_changes"] = tracked
-                info["untracked_changes"] = untracked
-                info["tainted"] = bool(tracked or untracked)
-        except Exception:
-            pass
     _BUILD_INFO_CACHE = dict(info)
     return dict(info)
 

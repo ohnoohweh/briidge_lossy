@@ -9,6 +9,7 @@ USER_NAME="${USER_NAME:-root}"
 HOST="${HOST:-127.0.0.1}"
 DEST_DIR="${DEST_DIR:-~/quicbr}"
 SOURCE_DIR="${SOURCE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 RSYNC_SSH=(ssh -p "${PORT}")
 RSYNC_EXCLUDES=(
@@ -22,6 +23,9 @@ copy_path() {
   rsync -avz --delete "${RSYNC_EXCLUDES[@]}" -e "${RSYNC_SSH[*]}" \
     "${SOURCE_DIR}/${rel_path}" "${USER_NAME}@${HOST}:${DEST_DIR}/"
 }
+
+echo "Generating build metadata from ${SOURCE_DIR}"
+"${PYTHON_BIN}" "${SOURCE_DIR}/scripts/write_build_info.py"
 
 copy_path "ObstacleBridge.py"
 copy_path "obstacle_bridge"

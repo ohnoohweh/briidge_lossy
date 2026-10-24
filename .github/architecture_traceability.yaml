@@ -837,6 +837,11 @@ ARC-CMP-005:
   # vocabulary and payload-free host operational events.
   # The private Admin-worker boundary returns that same envelope.
   unit_tests:
+    - tests/unit/test_build_info.py::test_detect_build_info_prefers_live_git_over_generated_stamp
+    - tests/unit/test_build_info.py::test_detect_build_info_uses_generated_stamp_without_git
+    - tests/unit/test_build_info.py::test_vps_updater_refreshes_build_metadata_before_syncing
+    - tests/unit/test_build_info.py::test_python_preview_workflow_stamps_and_probes_the_extracted_artifact
+    - tests/unit/test_build_info.py::test_synology_preview_workflow_probes_the_extracted_payload
     - tests/unit/test_managed_logging_worker.py::test_peer_child_logs_follow_collector_replacement
     - tests/unit/test_peer_stack_worker.py::test_peer_worker_inherits_stderr_without_managed_collector
     - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates
