@@ -7,6 +7,9 @@ import ObstacleBridgeDesktopShared
 /// shared private spool, and the optional uploader drains that spool outside
 /// the foreground runtime's callback path.
 public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
+    private static let diagnosticLogMaximumBytes = 1_048_576
+    private static let diagnosticLogBackupCount = 5
+    private static let diagnosticLogMaximumPendingWrites = 64
     private let lock = NSLock()
     private let logWorker: ObstacleBridgeLogWorkerSupervisor?
     private let fileURL: URL?
@@ -28,8 +31,8 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
         let logging = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("debug_logging", from: configuration)
         let logPath = (logging["log_file"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         fileURL = logPath.isEmpty ? nil : URL(fileURLWithPath: logPath)
-        logMaximumBytes = max(0, logging["log_file_max_bytes"] as? Int ?? ObstacleBridgeRuntimeConfig.diagnosticLogMaximumBytes)
-        logBackupCount = max(1, logging["log_file_backup_count"] as? Int ?? ObstacleBridgeRuntimeConfig.diagnosticLogBackupCount)
+        logMaximumBytes = max(0, logging["log_file_max_bytes"] as? Int ?? Self.diagnosticLogMaximumBytes)
+        logBackupCount = max(1, logging["log_file_backup_count"] as? Int ?? Self.diagnosticLogBackupCount)
         maximumRecentLines = max(1, min(logging["admin_web_log_max_lines"] as? Int ?? 1_200, 10_000))
         let telemetry = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("telemetry_client", from: configuration)
         let enabled = telemetry["telemetry_enabled"] as? Bool ?? false
@@ -114,7 +117,7 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
         guard let fileURL else { return }
         let data = Data(line.utf8)
         pendingWriteLock.lock()
-        guard pendingWrites < ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogMaximumPendingWrites else {
+        guard pendingWrites < Self.diagnosticLogMaximumPendingWrites else {
             pendingWriteLock.unlock()
             return
         }
