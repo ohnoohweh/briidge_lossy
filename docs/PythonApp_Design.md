@@ -90,8 +90,9 @@ experimentation, or a manually stamped deployment:
 
 1. verify the archive against the intended commit/tag in GitHub;
 2. extract it into a staging directory;
-3. run `scripts/write_build_info.py` only if the staging directory has enough
-   trusted revision context to create an accurate stamp;
+3. from a separate trusted checkout at that exact revision, run
+   `scripts/write_build_info.py --python-target` against the extracted
+   archive's `src/obstacle_bridge/_generated/build_info_generated.py` path;
 4. otherwise leave identity unavailable rather than claiming a revision;
 5. create a virtual environment, install dependencies, configure, and start.
 
