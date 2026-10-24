@@ -307,7 +307,7 @@
     },
     {
       "id": "lifecycle-and-listeners",
-      "requirements": ["REQ-LIFE-001", "REQ-LIFE-002", "REQ-LIFE-003", "REQ-LIFE-004", "REQ-LIFE-005", "REQ-LIFE-006", "REQ-LIFE-007", "REQ-LIFE-008", "REQ-LIFE-009", "REQ-LIFE-010", "REQ-LIFE-011", "REQ-LIFE-012", "REQ-LST-001", "REQ-LST-002", "REQ-LST-003", "REQ-LST-004", "REQ-LST-005", "REQ-LST-006", "REQ-LST-007"],
+      "requirements": ["REQ-LIFE-001", "REQ-LIFE-002", "REQ-LIFE-003", "REQ-LIFE-004", "REQ-LIFE-005", "REQ-LIFE-006", "REQ-LIFE-007", "REQ-LIFE-008", "REQ-LIFE-009", "REQ-LIFE-010", "REQ-LIFE-011", "REQ-LIFE-012", "REQ-LIFE-013", "REQ-LST-001", "REQ-LST-002", "REQ-LST-003", "REQ-LST-004", "REQ-LST-005", "REQ-LST-006", "REQ-LST-007"],
       "python_implementations": ["src/obstacle_bridge/bridge_connection_lifecycle.py", "src/obstacle_bridge/bridge_runner.py", "src/obstacle_bridge/bridge_transport_common.py"],
       "swift_implementations": ["swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxLiveRuntime.swift", "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxReconnectSupervisor.swift", "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTCPListener.swift", "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxStreamListenerPeers.swift"],
       "python_tests": ["tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect"],

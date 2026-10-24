@@ -564,7 +564,7 @@ The runtime config surface reserves a `tun_execution` section for helper-backed 
 
 Prefer WebAdmin for routine parameter editing once the process is reachable. It reduces command-line mistakes, keeps related settings visible in one place, and is the most practical way to review exposure, transport, and security options together before saving them.
 
-Saved runtime configuration contains only registered settings grouped by their component. JSON configuration therefore uses top-level sections such as `runner`, `udp_session`, `admin_web`, and `secure_link`; unsectioned root options are ignored. Unregistered data is not retained when WebAdmin or the CLI writes the configuration file.
+Saved runtime configuration contains only registered settings grouped by their component. JSON configuration therefore uses top-level sections such as `runner`, `udp_session`, `admin_web`, and `secure_link`; unsectioned root options are ignored. Unregistered data is not retained when WebAdmin or the CLI writes the configuration file. When an older saved file lacks a known setting or contains JSON `null`, the runtime uses that setting's current typed default; effective Admin configuration never represents a known setting as `null`.
 
 ![WebAdmin Config Editor](docs/refered_docs/WebAdmin%20ConfigEditor.png)
 
@@ -1637,17 +1637,17 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `78` | `1151` |
+| Python CLI/runtime, including macOS Python | `78` | `1154` |
 | macOS Swift app | `1` | `88` |
-| iOS app/extension | `32` | `214` |
+| iOS app/extension | `32` | `216` |
 
 #### Requirement traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
-| macOS Swift app | `5/92 = 5.4%` | `9/92 = 9.8%` | `14/92 = 15.2%` |
-| iOS app/extension | `10/92 = 10.9%` | `25/92 = 27.2%` | `27/92 = 29.3%` |
+| Python CLI/runtime, including macOS Python | `82/93 = 88.2%` | `91/93 = 97.8%` | `91/93 = 97.8%` |
+| macOS Swift app | `5/93 = 5.4%` | `9/93 = 9.7%` | `14/93 = 15.1%` |
+| iOS app/extension | `10/93 = 10.8%` | `26/93 = 28.0%` | `28/93 = 30.1%` |
 
 #### Architecture traceability
 
