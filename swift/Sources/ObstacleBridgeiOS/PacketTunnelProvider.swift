@@ -148,6 +148,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         writeNativeProviderLog(event, fields: fields)
     }
 
+    /// Packet and heartbeat traces carry high-rate snapshots. They are useful
+    /// only while diagnosing a ChannelMux data path, never as normal INFO
+    /// operational logging.
+    private func nativePacketDiagnosticsEnabled() -> Bool {
+        ObstacleBridgeRuntimeConfig.nativeChannelMuxDiagnosticsEnabled(
+            runtimeConfig: adminRuntimeConfigPayload() ?? [:]
+        )
+    }
+
     private func providerStateURL() -> URL? {
         guard let containerURL = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: "group.com.obstaclebridge.shared"
@@ -302,6 +311,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     func recordPacketBridgeEvent(_ event: String, fields: [String: Any] = [:]) {
+        guard nativePacketDiagnosticsEnabled() else { return }
         recordNativeEvent(event, fields: fields)
     }
 
@@ -595,21 +605,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             self.heartbeatTickCount += 1
-            let processMemory = Self.processMemorySnapshot()
-            let bridgeSnapshot = self.swiftSimpleUDPPeerBridge?.snapshot() ?? [:]
-            var fields: [String: Any] = [
-                "uptime": ProcessInfo.processInfo.systemUptime,
-                "physical_memory": ProcessInfo.processInfo.physicalMemory,
-                "runtime_mode": self.runtimeMode,
-                "packet_pump_running": self.adminPacketProcessingActive(bridgeSnapshot: bridgeSnapshot),
-                "bridge_state": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
-            ]
-            if !bridgeSnapshot.isEmpty {
-                fields["swift_udp_bridge_state"] = bridgeSnapshot
-            }
-            for (key, value) in processMemory {
-                fields[key] = value
-            }
             let shouldRecordHeartbeat: Bool
             let shouldUpdateState: Bool
             if self.swiftUDPRuntimeActive {
@@ -619,13 +614,29 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 shouldRecordHeartbeat = true
                 shouldUpdateState = true
             }
-            if shouldRecordHeartbeat {
+            if shouldRecordHeartbeat, self.nativePacketDiagnosticsEnabled() {
+                let processMemory = Self.processMemorySnapshot()
+                let bridgeSnapshot = self.swiftSimpleUDPPeerBridge?.snapshot() ?? [:]
+                var fields: [String: Any] = [
+                    "uptime": ProcessInfo.processInfo.systemUptime,
+                    "physical_memory": ProcessInfo.processInfo.physicalMemory,
+                    "runtime_mode": self.runtimeMode,
+                    "packet_pump_running": self.adminPacketProcessingActive(bridgeSnapshot: bridgeSnapshot),
+                    "bridge_state": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
+                ]
+                if !bridgeSnapshot.isEmpty {
+                    fields["swift_udp_bridge_state"] = bridgeSnapshot
+                }
+                for (key, value) in processMemory {
+                    fields[key] = value
+                }
                 self.recordNativeEvent(
                     "provider_heartbeat",
                     fields: fields
                 )
             }
             if shouldUpdateState {
+                let processMemory = Self.processMemorySnapshot()
                 self.enqueueTelemetryHealth(
                     counter: self.heartbeatTickCount,
                     bridgeSnapshot: ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),

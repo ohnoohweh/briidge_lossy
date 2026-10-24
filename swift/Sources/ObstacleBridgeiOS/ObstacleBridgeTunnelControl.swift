@@ -2164,7 +2164,8 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
 
     private class func loadRuntimeConfiguration() -> [String: Any] {
-        let defaults: [String: Any] = [
+        var defaults = ObstacleBridgeRuntimeConfig.defaultFlatConfig()
+        defaults.merge([
             "admin_web": true,
             "admin_web_bind": webAdminBind,
             "admin_web_port": webAdminPort,
@@ -2175,7 +2176,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
             "log": "DEBUG",
             "file_level": "DEBUG",
             "console_level": "INFO",
-        ]
+        ]) { _, platformValue in platformValue }
         guard let root = appRuntimeRootURL() else {
             return defaults
         }

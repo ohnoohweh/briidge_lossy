@@ -42,6 +42,12 @@ enum ObstacleBridgeRuntimeConfig {
         ObstacleBridgeRuntimeConfigPolicy.defaultTelemetryConfig()
     }
 
+    /// Shared effective defaults for every Apple host. Keep this delegated to
+    /// Core so iOS, macOS, Linux and embedded callers share one migration rule.
+    static func defaultFlatConfig() -> [String: Any] {
+        ObstacleBridgeRuntimeConfigPolicy.defaultFlatConfig()
+    }
+
     /// Native ChannelMux packet/frame diagnostics are explicitly opt-in.
     /// Hosts use this before attaching an event sink so disabled traces incur
     /// no per-event dictionary construction or JSON formatting.
@@ -126,7 +132,7 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     static func maskedConfigSnapshot(_ runtimeConfig: [String: Any]) -> [String: Any] {
-        var payload = runtimeConfig
+        var payload = flatten(runtimeConfig)
         normalizeFlatPayloadForSchema(&payload)
         // The admin configuration form posts every visible telemetry-client
         // field. Return schema-typed defaults for unset values so a
@@ -390,7 +396,7 @@ enum ObstacleBridgeRuntimeConfig {
             }
         }
         applyCompatibilityAliases(to: &merged)
-        return merged
+        return ObstacleBridgeRuntimeConfigPolicy.completingMissingDefaults(in: merged)
     }
 
     static func looksGrouped(_ payload: [String: Any]) -> Bool {
