@@ -1780,6 +1780,11 @@ rotation with bounded retained backups; their Admin fallback readers use a
 fixed-size tail, and Linux native lifecycle writes run on a bounded utility
 queue. Set the file-size limit to zero only when unbounded retention is
 explicitly required.
+Native ChannelMux frame diagnostics are opt-in: set
+`channel_mux.log_channel_mux` to `DEBUG` (and on Linux also set
+`debug_logging.debug_enabled`) only for a focused trace. Otherwise native
+transport owners do not install the high-rate event sink, avoiding per-frame
+diagnostic formatting on the data path.
 Static WebAdmin asset reads similarly wait for operating-system-backed I/O
 outside the serving queue; ObstacleBridge keeps no duplicate in-memory asset
 cache.

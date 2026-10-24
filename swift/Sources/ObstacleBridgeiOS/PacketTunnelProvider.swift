@@ -3383,6 +3383,18 @@ private final class SwiftSimpleUDPPeerBridge {
     private var bytesToSystem = 0
     private var readBatches = 0
     private var writeBatches = 0
+
+    /// High-rate native transport events are opt-in. Returning `nil` means
+    /// the transport owner never constructs per-frame diagnostic fields.
+    private func packetBridgeDiagnosticEventSink() -> ((String, [String: Any]) -> Void)? {
+        guard ObstacleBridgeRuntimeConfig.nativeChannelMuxDiagnosticsEnabled(
+            runtimeConfig: settings.runtimeConfig
+        ) else { return nil }
+        return { [weak self] event, fields in
+            self?.provider?.recordPacketBridgeEvent(event, fields: fields)
+        }
+    }
+
     private var sendFailures = 0
     private var recvFailures = 0
     private var packetFlowCallbacks = 0
@@ -3473,9 +3485,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
                     muxInstanceID: muxInstanceID,
                     muxConnectionSeq: muxConnectionSeq,
-                    eventSink: { [weak self] event, fields in
-                        self?.provider?.recordPacketBridgeEvent(event, fields: fields)
-                    }
+                    eventSink: packetBridgeDiagnosticEventSink()
                 )
             } else if selectedTransport == "ws" {
                 let payloadMode = ObstacleBridgeRuntimeConfig.stringValue(from: settings.runtimeConfig["ws_payload_mode"]) ?? "binary"
@@ -3525,9 +3535,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
                     muxInstanceID: muxInstanceID,
                     muxConnectionSeq: muxConnectionSeq,
-                    eventSink: { [weak self] event, fields in
-                        self?.provider?.recordPacketBridgeEvent(event, fields: fields)
-                    }
+                    eventSink: packetBridgeDiagnosticEventSink()
                 )
             } else if selectedTransport == "quic" {
                 if #available(iOS 15.0, *) {
@@ -3566,9 +3574,7 @@ private final class SwiftSimpleUDPPeerBridge {
                         tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
                         muxInstanceID: muxInstanceID,
                         muxConnectionSeq: muxConnectionSeq,
-                        eventSink: { [weak self] event, fields in
-                            self?.provider?.recordPacketBridgeEvent(event, fields: fields)
-                        }
+                        eventSink: packetBridgeDiagnosticEventSink()
                     )
                 }
             } else {
@@ -3618,9 +3624,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     },
                     muxInstanceID: muxInstanceID,
                     muxConnectionSeq: muxConnectionSeq,
-                    eventSink: { [weak self] event, fields in
-                        self?.provider?.recordPacketBridgeEvent(event, fields: fields)
-                    }
+                    eventSink: packetBridgeDiagnosticEventSink()
                 )
             }
         } else {

@@ -126,6 +126,10 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "nativeProviderLogQueue" in provider
     assert "nativeProviderLogMaximumPendingWrites" in provider
     assert "tailNativeProviderLog" in provider
+    assert "packetBridgeDiagnosticEventSink" in provider
+    assert "nativeChannelMuxDiagnosticsEnabled" in provider
+    assert "eventSink: packetBridgeDiagnosticEventSink()" in provider
+    assert "the transport owner never constructs per-frame diagnostic fields" in provider
     assert "ObstacleBridgeAdminAPI" in provider
     assert '"admin_api_request"' in provider
     assert "setTunnelNetworkSettings" in provider

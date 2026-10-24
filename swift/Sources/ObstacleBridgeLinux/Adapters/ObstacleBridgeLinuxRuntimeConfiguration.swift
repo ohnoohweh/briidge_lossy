@@ -532,9 +532,13 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue(error.localizedDescription)
         }
         let receiveIdleTimeoutMilliseconds = max(1, integer(flat["secure_link_receive_idle_timeout_ms"]) ?? 5_000)
-        let debugLogging = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("debug_logging", from: root)
-        let debugLoggingEnabled = boolean(debugLogging["debug_enabled"]) ?? false
         let channelMux = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("channel_mux", from: root)
+        let debugLogging = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("debug_logging", from: root)
+        // Keep the existing explicit debug switch, but let the Python-parity
+        // ChannelMux level suppress native per-frame traces before producers
+        // allocate their event fields.
+        let channelMuxLevel = (string(channelMux["log_channel_mux"]) ?? "DEBUG").uppercased()
+        let debugLoggingEnabled = (boolean(debugLogging["debug_enabled"]) ?? false) && channelMuxLevel == "DEBUG"
         let listenerRemoteServicePublicationEnabled = boolean(channelMux["channel_mux_listener_publish_remote_services"]) ?? false
         let candidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !candidates.isEmpty else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires at least one non-empty \(sessionName).\(peerKey)") }

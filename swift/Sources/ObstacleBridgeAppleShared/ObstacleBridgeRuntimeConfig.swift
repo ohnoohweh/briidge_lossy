@@ -42,6 +42,16 @@ enum ObstacleBridgeRuntimeConfig {
         ObstacleBridgeRuntimeConfigPolicy.defaultTelemetryConfig()
     }
 
+    /// Native ChannelMux packet/frame diagnostics are explicitly opt-in.
+    /// Hosts use this before attaching an event sink so disabled traces incur
+    /// no per-event dictionary construction or JSON formatting.
+    static func nativeChannelMuxDiagnosticsEnabled(runtimeConfig: [String: Any]) -> Bool {
+        let level = stringValue(from: runtimeConfig["log_channel_mux"])
+            ?? stringValue(from: runtimeConfig["log"])
+            ?? "WARNING"
+        return level.uppercased() == "DEBUG"
+    }
+
     static func configSchemaSnapshot() -> [String: Any] {
         ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()
     }
