@@ -826,7 +826,7 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert '["rev-parse", "--short=8", "HEAD"]' in build_info_writer
     assert 'rev-parse --short=8 HEAD' in build_script
     assert 'rev-parse --short=8 HEAD' in linux_build_script
-    assert '["git", "rev-parse", "--short=8", "HEAD"]' in python_bridge
+    assert '["git", "-c", f"safe.directory={repo_root}", "rev-parse", "--short=8", "HEAD"]' in python_bridge
     assert '_git(root, "rev-parse", "--short=8", "HEAD")' in swift_tun_helper
     assert "Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)" in build_script
     assert "Set :CFBundleShortVersionString $(MARKETING_VERSION)" in build_script
