@@ -103,8 +103,19 @@ class SimpleUDPPeerRuntime:
 
 def _append_jsonl(path: platform.Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    line = platform.json.dumps(payload, sort_keys=True, default=repr) + "\n"
+    maximum_bytes = 1_048_576
+    backup_count = 2
+    if path.exists() and path.stat().st_size > 0 and path.stat().st_size + len(line.encode("utf-8")) > maximum_bytes:
+        for index in range(backup_count, 0, -1):
+            destination = path.with_suffix(path.suffix + f".{index}")
+            source = path if index == 1 else path.with_suffix(path.suffix + f".{index - 1}")
+            if destination.exists():
+                destination.unlink()
+            if source.exists():
+                source.replace(destination)
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(platform.json.dumps(payload, sort_keys=True, default=repr) + "\n")
+        fh.write(line)
 
 
 def _write_json(path: platform.Path, payload: dict[str, Any]) -> None:

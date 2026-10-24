@@ -1774,7 +1774,12 @@ Packet-flow PCAP capture is an opt-in, bounded iOS diagnostic facility rather
 than a standard forwarding feature; its status reports capture limits and
 writer state when enabled. Native provider diagnostics likewise use bounded
 asynchronous file writes, retained rotation, and fixed-size Admin tail reads,
-so requesting logs cannot load an unbounded file into the extension.
+so requesting logs cannot load an unbounded file into the extension. Configured
+Python, macOS, Linux, and iOS local file logs likewise default to 1 MiB
+rotation with bounded retained backups; their Admin fallback readers use a
+fixed-size tail, and Linux native lifecycle writes run on a bounded utility
+queue. Set the file-size limit to zero only when unbounded retention is
+explicitly required.
 Static WebAdmin asset reads similarly wait for operating-system-backed I/O
 outside the serving queue; ObstacleBridge keeps no duplicate in-memory asset
 cache.

@@ -91,6 +91,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         producer.recordForegroundLifecycle(state: "connecting", transport: "myudp")
         producer.recordForegroundLifecycle(state: "connected", transport: "myudp")
         producer.recordForegroundLifecycle(state: "stopped", transport: "myudp")
+        producer.stop()
 
         let logContents = String(decoding: try Data(contentsOf: log), as: UTF8.self)
         #expect(logContents.contains("runtime.lifecycle"))

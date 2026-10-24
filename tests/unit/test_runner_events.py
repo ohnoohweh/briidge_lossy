@@ -136,6 +136,20 @@ class RunnerDebugLogTests(unittest.TestCase):
             finally:
                 bridge_runner.DEBUG_LOG_RING = original_ring
 
+    def test_get_debug_logs_reads_only_a_bounded_file_tail(self):
+        args = self._make_args()
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8", delete=True) as handle:
+            handle.write(("discarded\n" * 40_000) + "recent-1\nrecent-2\n")
+            handle.flush()
+            args.log_file = handle.name
+            runner = Runner(args)
+            original_ring = bridge_runner.DEBUG_LOG_RING
+            bridge_runner.DEBUG_LOG_RING = type(original_ring)([], maxlen=original_ring.maxlen)
+            try:
+                self.assertEqual(runner.get_debug_logs(limit=2), ["recent-1", "recent-2"])
+            finally:
+                bridge_runner.DEBUG_LOG_RING = original_ring
+
 
 class RunnerProcessBreadcrumbTests(unittest.TestCase):
     def _make_args(self):

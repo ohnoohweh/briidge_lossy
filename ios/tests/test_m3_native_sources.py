@@ -123,6 +123,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     snapshot_support = (CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
 
     assert "NEPacketTunnelProvider" in provider
+    assert "nativeProviderLogQueue" in provider
+    assert "nativeProviderLogMaximumPendingWrites" in provider
+    assert "tailNativeProviderLog" in provider
     assert "ObstacleBridgeAdminAPI" in provider
     assert '"admin_api_request"' in provider
     assert "setTunnelNetworkSettings" in provider

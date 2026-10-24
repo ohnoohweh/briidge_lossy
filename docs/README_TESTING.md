@@ -1118,6 +1118,10 @@ Client-open timing further distinguishes Core admission, service/event
 publication, `NWConnection` creation/start, and receive registration or
 immediate activation.
 
+### Bounded local diagnostic logs
+
+Focused Admin-log fallback, iOS JSONL rotation, and native Linux observability tests verify bounded local log retention and fixed-size tail retrieval without requiring a device.
+
 ### Run the full unit suite
 
 ```bash

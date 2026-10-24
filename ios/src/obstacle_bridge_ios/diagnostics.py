@@ -18,6 +18,10 @@ from obstacle_bridge.crypto_extract import available_crypto_extract
 
 _HOOKS_INSTALLED = False
 _BUILD_INFO_CACHE: dict[str, Any] | None = None
+DIAGNOSTIC_LOG_MAX_BYTES = 1_048_576
+DIAGNOSTIC_LOG_BACKUP_COUNT = 2
+DIAGNOSTIC_LOG_TAIL_MAX_BYTES = 256 * 1024
+DIAGNOSTIC_LOG_TAIL_BLOCK_BYTES = 16 * 1024
 
 
 def _detect_build_info() -> dict[str, Any]:
@@ -112,8 +116,44 @@ def log_event(documents_root: Path, event: str, **fields: Any) -> None:
 
 def append_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(dict(payload), sort_keys=True, default=_json_default) + "\n"
+    if path.exists() and path.stat().st_size > 0 and path.stat().st_size + len(line.encode("utf-8")) > DIAGNOSTIC_LOG_MAX_BYTES:
+        for index in range(DIAGNOSTIC_LOG_BACKUP_COUNT, 0, -1):
+            destination = path.with_suffix(path.suffix + f".{index}")
+            source = path if index == 1 else path.with_suffix(path.suffix + f".{index - 1}")
+            if destination.exists():
+                destination.unlink()
+            if source.exists():
+                source.replace(destination)
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(dict(payload), sort_keys=True, default=_json_default) + "\n")
+        fh.write(line)
+
+
+def read_jsonl_tail(path: Path, max_events: int) -> list[str]:
+    """Read recent diagnostic records without materializing the complete file."""
+    wanted = max(1, int(max_events))
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            offset = fh.tell()
+            chunks: list[bytes] = []
+            total = 0
+            while offset > 0 and total < DIAGNOSTIC_LOG_TAIL_MAX_BYTES:
+                count = min(DIAGNOSTIC_LOG_TAIL_BLOCK_BYTES, offset, DIAGNOSTIC_LOG_TAIL_MAX_BYTES - total)
+                offset -= count
+                fh.seek(offset)
+                chunk = fh.read(count)
+                chunks.append(chunk)
+                total += len(chunk)
+                if sum(item.count(b"\n") for item in chunks) > wanted:
+                    break
+        data = b"".join(reversed(chunks))
+        if offset > 0:
+            newline = data.find(b"\n")
+            data = data[newline + 1:] if newline >= 0 else b""
+        return data.decode("utf-8", errors="replace").splitlines()[-wanted:]
+    except Exception:
+        return []
 
 
 def write_state(path: Path, payload: Mapping[str, Any]) -> None:
@@ -226,8 +266,7 @@ def snapshot(documents_root: Path, *, max_events: int = 40) -> dict[str, Any]:
     path = event_log_path(root)
     if path.exists():
         try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-            for line in lines[-max_events:]:
+            for line in read_jsonl_tail(path, max_events):
                 try:
                     events.append(json.loads(line))
                 except Exception:

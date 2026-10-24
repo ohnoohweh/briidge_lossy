@@ -902,6 +902,8 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_requires_password_proof_and_returns_encrypted_envelope
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_insecure_context_notice_prefers_own_server_path
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
+    - tests/unit/test_runner_events.py::test_get_debug_logs_reads_only_a_bounded_file_tail
+    - ios/tests/test_diagnostics.py::test_diagnostic_jsonl_rotates_and_snapshot_uses_a_bounded_tail
     - tests/unit/test_debug_logging_aliases.py::test_log_file_moves_previous_session_to_lastsession_on_start
     - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
     - tests/unit/test_native_log_collector.py::test_native_collector_accepts_python_records_and_queries

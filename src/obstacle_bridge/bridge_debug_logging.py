@@ -14,6 +14,9 @@ from typing import Deque, Optional
 from .runtime_metrics import bounded_runtime_scope
 
 DEFAULT_ADMIN_WEB_LOG_MAX_LINES = 1200
+DEFAULT_FILE_LOG_MAX_BYTES = 1_048_576
+DEFAULT_FILE_LOG_TAIL_MAX_BYTES = 256 * 1024
+DEFAULT_FILE_LOG_TAIL_BLOCK_BYTES = 16 * 1024
 DEBUG_LOG_RING: Deque[str] = deque(maxlen=DEFAULT_ADMIN_WEB_LOG_MAX_LINES)
 _RUNTIME_TIMING_CALLBACK = None
 
@@ -40,6 +43,34 @@ def configure_debug_log_ring(max_lines: int) -> None:
     global DEBUG_LOG_RING
     limit = max(1, int(max_lines))
     DEBUG_LOG_RING = deque(DEBUG_LOG_RING, maxlen=limit)
+
+
+def read_log_tail(path: str, limit: int, *, maximum_bytes: int = DEFAULT_FILE_LOG_TAIL_MAX_BYTES) -> list[str]:
+    """Return recent file-log lines without allocating the complete file."""
+    wanted = max(1, min(int(limit), 1000))
+    budget = max(1, int(maximum_bytes))
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            offset = handle.tell()
+            chunks: list[bytes] = []
+            size = 0
+            while offset > 0 and size < budget:
+                count = min(DEFAULT_FILE_LOG_TAIL_BLOCK_BYTES, offset, budget - size)
+                offset -= count
+                handle.seek(offset)
+                chunk = handle.read(count)
+                chunks.append(chunk)
+                size += len(chunk)
+                if sum(chunk.count(b"\n") for chunk in chunks) > wanted:
+                    break
+        data = b"".join(reversed(chunks))
+        if offset > 0:
+            marker = data.find(b"\n")
+            data = data[marker + 1:] if marker >= 0 else b""
+        return data.decode("utf-8", errors="replace").splitlines()[-wanted:]
+    except Exception:
+        return []
 
 
 def debug_print(msg: str):
@@ -106,8 +137,8 @@ class DebugLoggingConfigurator:
             p.add_argument(
                 "--log-file-max-bytes",
                 type=int,
-                default=0,
-                help="maximum on-disk log file size in bytes before rotation; 0 disables rotation",
+                default=DEFAULT_FILE_LOG_MAX_BYTES,
+                help="maximum on-disk log file size in bytes before rotation (default 1 MiB; 0 disables rotation)",
             )
         if not _has("--log-file-backup-count"):
             p.add_argument(

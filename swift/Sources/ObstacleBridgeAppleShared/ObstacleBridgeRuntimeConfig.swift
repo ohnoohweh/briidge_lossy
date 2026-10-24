@@ -21,9 +21,11 @@ enum ObstacleBridgeRuntimeConfig {
     /// configuration and status vocabulary does not need platform-private values.
     static let packetFlowPCAPDefaultMaximumBytes = 16 * 1_024 * 1_024
     static let packetFlowPCAPDefaultRetentionFiles = 2
-    /// The native provider log is iOS-only, but its bounded diagnostic policy
-    /// remains shared with Apple hosts so operator-facing diagnostic limits do
-    /// not acquire a platform-private vocabulary.
+    /// Bound local diagnostic logs and Admin tail reads on every Apple host.
+    /// The iOS provider uses a smaller retention count because its App Group
+    /// storage is especially constrained.
+    static let diagnosticLogMaximumBytes = 1_048_576
+    static let diagnosticLogBackupCount = 5
     static let nativeProviderDiagnosticLogMaximumBytes = 1_048_576
     static let nativeProviderDiagnosticLogBackupCount = 2
     static let nativeProviderDiagnosticLogTailMaximumBytes = 256 * 1_024

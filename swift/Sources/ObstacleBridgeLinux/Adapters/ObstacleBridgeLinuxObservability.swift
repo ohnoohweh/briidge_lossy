@@ -10,6 +10,11 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
     private let lock = NSLock()
     private let logWorker: ObstacleBridgeLogWorkerSupervisor?
     private let fileURL: URL?
+    private let logMaximumBytes: Int
+    private let logBackupCount: Int
+    private let fileWriteQueue = DispatchQueue(label: "org.obstaclebridge.linux.diagnostic-log", qos: .utility)
+    private let pendingWriteLock = NSLock()
+    private var pendingWrites = 0
     private let emitter: ObstacleBridgeTelemetryEmitter?
     private let spool: ObstacleBridgeTelemetrySpool?
     private let uploader: ObstacleBridgeLinuxTelemetryUploader?
@@ -23,6 +28,8 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
         let logging = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("debug_logging", from: configuration)
         let logPath = (logging["log_file"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         fileURL = logPath.isEmpty ? nil : URL(fileURLWithPath: logPath)
+        logMaximumBytes = max(0, logging["log_file_max_bytes"] as? Int ?? ObstacleBridgeRuntimeConfig.diagnosticLogMaximumBytes)
+        logBackupCount = max(1, logging["log_file_backup_count"] as? Int ?? ObstacleBridgeRuntimeConfig.diagnosticLogBackupCount)
         maximumRecentLines = max(1, min(logging["admin_web_log_max_lines"] as? Int ?? 1_200, 10_000))
         let telemetry = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("telemetry_client", from: configuration)
         let enabled = telemetry["telemetry_enabled"] as? Bool ?? false
@@ -95,7 +102,7 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
         return Array(recentLines.suffix(max(1, min(limit, maximumRecentLines))))
     }
 
-    public func stop() { uploadTimer?.cancel(); uploadTimer = nil; uploader?.uploadOnce(); uploader?.cancel() }
+    public func stop() { uploadTimer?.cancel(); uploadTimer = nil; uploader?.uploadOnce(); uploader?.cancel(); fileWriteQueue.sync {} }
 
     private func writeLog(_ message: String) {
         lock.lock(); defer { lock.unlock() }
@@ -106,8 +113,30 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
         }
         guard let fileURL else { return }
         let data = Data(line.utf8)
+        pendingWriteLock.lock()
+        guard pendingWrites < ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogMaximumPendingWrites else {
+            pendingWriteLock.unlock()
+            return
+        }
+        pendingWrites += 1
+        pendingWriteLock.unlock()
+        fileWriteQueue.async { [weak self] in
+            guard let self else { return }
+            defer {
+                self.pendingWriteLock.lock(); self.pendingWrites -= 1; self.pendingWriteLock.unlock()
+            }
+            self.appendLogLine(data, to: fileURL)
+        }
+    }
+
+    /// Runs only on the utility queue.  File failures are diagnostic-only.
+    private func appendLogLine(_ data: Data, to fileURL: URL) {
         let manager = FileManager.default
         try? manager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let currentSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        if logMaximumBytes > 0, currentSize > 0, currentSize + data.count > logMaximumBytes {
+            rotateLog(at: fileURL, manager: manager)
+        }
         if !manager.fileExists(atPath: fileURL.path) {
             _ = manager.createFile(atPath: fileURL.path, contents: nil)
         }
@@ -119,6 +148,17 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
                 // Logging is best effort; the runtime must remain available if the log cannot be written.
             }
             _ = try? handle.close()
+        }
+    }
+
+    /// Runs only on `fileWriteQueue`.
+    private func rotateLog(at fileURL: URL, manager: FileManager) {
+        guard manager.fileExists(atPath: fileURL.path) else { return }
+        for index in stride(from: logBackupCount, through: 1, by: -1) {
+            let destination = fileURL.appendingPathExtension("\(index)")
+            try? manager.removeItem(at: destination)
+            let source = index == 1 ? fileURL : fileURL.appendingPathExtension("\(index - 1)")
+            if manager.fileExists(atPath: source.path) { try? manager.moveItem(at: source, to: destination) }
         }
     }
 
