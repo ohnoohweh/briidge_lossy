@@ -181,12 +181,18 @@ The final extracted-artifact probe is the release acceptance criterion. It
 prevents a source archive, an outdated stamp, or an archive exclusion rule from
 silently changing the identity shown to operators.
 
-## Current limitations and next work
+## Design decisions
 
-The following are delivered behaviors, not limitations:
+The following decisions define the supported identity behavior:
 
 - The VPS updater refreshes the generated stamp before copying source.
 - Source checkouts prefer live Git identity over a generated stamp.
+- The WebAdmin badge reports unavailable identity as `build unknown`; a dirty
+  source checkout reports `commit <id> tainted (<tracked> tracked, <untracked>
+  untracked)`. These strings make a missing revision and a non-clean revision
+  visible without opening the Runtime Metadata view.
+
+## Current limitations and next work
 
 The remaining limitation is intentional: generic GitHub download/source-code
 archives have no stamp, so they cannot report an auditable runtime identity
