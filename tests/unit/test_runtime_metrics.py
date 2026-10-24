@@ -237,6 +237,46 @@ def test_disabled_collector_status_skips_spool_filesystem_snapshot(monkeypatch):
     }
 
 
+def test_enabled_collector_status_uses_async_throttled_spool_snapshot(monkeypatch, tmp_path):
+    async def exercise():
+        runner = Runner.__new__(Runner)
+        runner.args = SimpleNamespace(
+            telemetry_collector_enabled=True,
+            telemetry_collector_spool_directory=str(tmp_path),
+        )
+        runner._telemetry_collector_process = None
+        runner._telemetry_collector_last_error = ""
+        runner._telemetry_collector_status_snapshot = {}
+        runner._telemetry_collector_status_task = None
+        runner._telemetry_collector_status_directory = ""
+        runner._telemetry_collector_status_refreshed_monotonic = 0.0
+        calls = []
+
+        class FakeSpool:
+            def __init__(self, directory):
+                self.directory = directory
+
+            def status(self):
+                calls.append(self.directory)
+                return {"pending_events": 3, "pending_bytes": 99}
+
+        monkeypatch.setattr("obstacle_bridge.bridge_runner.TelemetrySpool", FakeSpool)
+        first = runner.get_telemetry_collector_snapshot()
+        assert first["spool"] == {}
+        assert calls == []
+        refresh = runner._telemetry_collector_status_task
+        assert refresh is not None
+        await refresh
+        refreshed = runner.get_telemetry_collector_snapshot()
+        assert refreshed["spool"] == {"pending_events": 3, "pending_bytes": 99}
+        assert calls == [str(tmp_path)]
+        assert runner._telemetry_collector_status_task is None
+        assert runner.get_telemetry_collector_snapshot()["spool"] == refreshed["spool"]
+        assert calls == [str(tmp_path)]
+
+    asyncio.run(exercise())
+
+
 def test_linux_local_runtime_metrics_smoke_lifecycle():
     """Socket/TUN-free local smoke coverage for the monitor/status lifecycle."""
     async def exercise():
