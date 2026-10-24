@@ -790,6 +790,7 @@ ARC-CMP-004:
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_prefers_local_ios_tun_hook_env
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_ignores_remote_tun_metadata
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::debugLoggingIsOptInFromTheGroupedConfiguration
     # Also pins the first-eight-character build commit shown by Python, Linux, macOS, and iOS WebAdmin.
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_address_setup
@@ -902,6 +903,8 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_requires_password_proof_and_returns_encrypted_envelope
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_insecure_context_notice_prefers_own_server_path
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
+    - tests/unit/test_runner_events.py::test_get_debug_logs_reads_only_a_bounded_file_tail
+    - ios/tests/test_diagnostics.py::test_diagnostic_jsonl_rotates_and_snapshot_uses_a_bounded_tail
     - tests/unit/test_debug_logging_aliases.py::test_log_file_moves_previous_session_to_lastsession_on_start
     - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
     - tests/unit/test_native_log_collector.py::test_native_collector_accepts_python_records_and_queries
@@ -913,9 +916,13 @@ ARC-CMP-005:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_logging_worker
     - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener
     - ios/tests/test_m3_native_sources.py::test_runtime_config_source_exists
+    - ios/tests/test_m3_native_sources.py::test_ios_native_provider_log_reads_are_bounded_and_tail_chunked
+    - ios/tests/test_m3_native_sources.py::test_webadmin_server_source_exists
+    - tests/unit/test_admin_web_payloads.py::test_static_file_reads_leave_the_asyncio_loop
     - tests/integration/test_overlay_e2e.py::test_linux_swift_supervises_logging_worker
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_child_logs_follow_collector_and_proxy_restarts
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_proxy_logs_follow_collector
+    # The Linux matrix gives each concurrent case a distinct loopback Admin endpoint.
     - tests/integration/test_overlay_e2e.py::test_linux_swift_proxy_logs_follow_collector
     - tests/unit/test_native_log_supervisor.py::test_swift_host_proxy_log_level_configuration
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_child_honors_component_log_level
@@ -1152,6 +1159,7 @@ ARC-CMP-006:
     # Covers separate overlay-readiness and listener-publication convergence,
     # including transient pre-send refusal/abort retries with fresh sockets.
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_runtime_linux_swift_service_round_trip
+    # Includes bounded listener-service recovery after Python peer replacement.
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_remote_catalog_listener_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path

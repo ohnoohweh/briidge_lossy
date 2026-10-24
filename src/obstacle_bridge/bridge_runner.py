@@ -2879,11 +2879,8 @@ class Runner:
         log_file = str(getattr(self.args, "log_file", "") or "").strip()
         if not log_file:
             return []
-        try:
-            with open(log_file, "r", encoding="utf-8", errors="replace") as handle:
-                return handle.read().splitlines()[-lim:]
-        except Exception:
-            return []
+        from .bridge_debug_logging import read_log_tail
+        return read_log_tail(log_file, lim)
 
     def _unwrap_snapshot_session(self, session_obj):
         current = session_obj

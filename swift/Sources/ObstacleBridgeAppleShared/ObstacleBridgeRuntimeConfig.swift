@@ -21,6 +21,16 @@ enum ObstacleBridgeRuntimeConfig {
     /// configuration and status vocabulary does not need platform-private values.
     static let packetFlowPCAPDefaultMaximumBytes = 16 * 1_024 * 1_024
     static let packetFlowPCAPDefaultRetentionFiles = 2
+    /// Bound local diagnostic logs and Admin tail reads on every Apple host.
+    /// The iOS provider uses a smaller retention count because its App Group
+    /// storage is especially constrained.
+    static let diagnosticLogMaximumBytes = 1_048_576
+    static let diagnosticLogBackupCount = 5
+    static let nativeProviderDiagnosticLogMaximumBytes = 1_048_576
+    static let nativeProviderDiagnosticLogBackupCount = 2
+    static let nativeProviderDiagnosticLogTailMaximumBytes = 256 * 1_024
+    static let nativeProviderDiagnosticLogTailReadBlockBytes = 16 * 1_024
+    static let nativeProviderDiagnosticLogMaximumPendingWrites = 64
     // Packaged-host qualification may provide an isolated runtime config
     // without changing either platform's durable app-scoped configuration.
     // The macOS primary app and host runner consume this shared vocabulary;
@@ -30,6 +40,16 @@ enum ObstacleBridgeRuntimeConfig {
 
     static func defaultTelemetryConfig() -> [String: Any] {
         ObstacleBridgeRuntimeConfigPolicy.defaultTelemetryConfig()
+    }
+
+    /// Native ChannelMux packet/frame diagnostics are explicitly opt-in.
+    /// Hosts use this before attaching an event sink so disabled traces incur
+    /// no per-event dictionary construction or JSON formatting.
+    static func nativeChannelMuxDiagnosticsEnabled(runtimeConfig: [String: Any]) -> Bool {
+        let level = stringValue(from: runtimeConfig["log_channel_mux"])
+            ?? stringValue(from: runtimeConfig["log"])
+            ?? "WARNING"
+        return level.uppercased() == "DEBUG"
     }
 
     static func configSchemaSnapshot() -> [String: Any] {

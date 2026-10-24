@@ -33,6 +33,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     static let defaultTunnelPrefix6 = 126
     static let defaultIncludedRoutes6 = ["::/0"]
     static let defaultExcludedRoutes6 = ["::1/128"]
+    /// Native provider events are diagnostic-only.  Keep their file bounded so
+    /// an on-demand Admin log request cannot turn a long-running tunnel into a
+    /// large allocation or an unbounded App Group write.
+    private static let nativeProviderLogMaximumBytes = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogMaximumBytes
+    private static let nativeProviderLogBackupCount = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogBackupCount
+    private static let nativeProviderLogTailMaximumBytes = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogTailMaximumBytes
+    private static let nativeProviderLogTailReadBlockBytes = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogTailReadBlockBytes
+    private static let nativeProviderLogMaximumPendingWrites = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogMaximumPendingWrites
 
     private static let packetTunnelDefaults = ObstacleBridgePacketTunnelDefaults(
         tunnelAddress: defaultTunnelAddress,
@@ -53,6 +61,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var runtimeHealthSequence: UInt64 = 0
     private var previousRuntimeLifetimeEndedCleanly: Bool?
     private let runtimeHealthQueue = DispatchQueue(label: "PacketTunnelProvider.RuntimeHealth")
+    private let nativeProviderLogQueue = DispatchQueue(
+        label: "PacketTunnelProvider.NativeProviderLog",
+        qos: .utility
+    )
+    private let nativeProviderLogPendingLock = NSLock()
+    private var nativeProviderLogPendingWrites = 0
     private let telemetryQueue = DispatchQueue(label: "PacketTunnelProvider.Telemetry")
     private var telemetryTimer: DispatchSourceTimer?
     private var telemetryEmitter: ObstacleBridgeTelemetryEmitter?
@@ -297,9 +311,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         ) else {
             return
         }
-        let logDirectory = containerURL.appendingPathComponent("logs", isDirectory: true)
-        try? FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
-        let logURL = logDirectory.appendingPathComponent("ipserver-native-provider.jsonl")
+        let logURL = containerURL
+            .appendingPathComponent("logs", isDirectory: true)
+            .appendingPathComponent("ipserver-native-provider.jsonl")
         var payload = fields
         payload["native_event"] = event
         payload["pid"] = ProcessInfo.processInfo.processIdentifier
@@ -310,15 +324,55 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         else {
             return
         }
-        if let handle = try? FileHandle(forWritingTo: logURL) {
-            defer {
-                try? handle.close()
-            }
-            handle.seekToEndOfFile()
-            handle.write(Data((text + "\n").utf8))
+        let line = Data((text + "\n").utf8)
+        nativeProviderLogPendingLock.lock()
+        guard nativeProviderLogPendingWrites < Self.nativeProviderLogMaximumPendingWrites else {
+            nativeProviderLogPendingLock.unlock()
             return
         }
-        try? (text + "\n").write(to: logURL, atomically: true, encoding: .utf8)
+        nativeProviderLogPendingWrites += 1
+        nativeProviderLogPendingLock.unlock()
+        nativeProviderLogQueue.async { [weak self] in
+            guard let self else { return }
+            defer {
+                self.nativeProviderLogPendingLock.lock()
+                self.nativeProviderLogPendingWrites -= 1
+                self.nativeProviderLogPendingLock.unlock()
+            }
+            self.appendNativeProviderLogLine(line, to: logURL)
+        }
+    }
+
+    /// Runs only on `nativeProviderLogQueue`.  Rotation happens before an
+    /// append, so the current file never grows beyond one log line over the
+    /// configured bound.
+    private func appendNativeProviderLogLine(_ line: Data, to logURL: URL) {
+        let fileManager = FileManager.default
+        try? fileManager.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let currentSize = (try? logURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        if currentSize > 0, currentSize + line.count > Self.nativeProviderLogMaximumBytes {
+            rotateNativeProviderLog(at: logURL, fileManager: fileManager)
+        }
+        if let handle = try? FileHandle(forWritingTo: logURL) {
+            defer { try? handle.close() }
+            handle.seekToEndOfFile()
+            handle.write(line)
+        } else {
+            try? line.write(to: logURL, options: .atomic)
+        }
+    }
+
+    /// Runs only on `nativeProviderLogQueue`.
+    private func rotateNativeProviderLog(at logURL: URL, fileManager: FileManager) {
+        guard fileManager.fileExists(atPath: logURL.path) else { return }
+        for index in stride(from: Self.nativeProviderLogBackupCount, through: 1, by: -1) {
+            let destination = logURL.appendingPathExtension("\(index)")
+            try? fileManager.removeItem(at: destination)
+            let source = index == 1 ? logURL : logURL.appendingPathExtension("\(index - 1)")
+            if fileManager.fileExists(atPath: source.path) {
+                try? fileManager.moveItem(at: source, to: destination)
+            }
+        }
     }
 
     private var heartbeatTimer: DispatchSourceTimer?
@@ -2265,12 +2319,47 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     }
 
     func adminLogLines(limit: Int) -> [String] {
-        guard let url = adminNativeProviderLogURL(),
-              let text = try? String(contentsOf: url, encoding: .utf8) else {
+        guard let url = adminNativeProviderLogURL() else {
             return []
         }
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        return Array(lines.suffix(max(1, min(limit, 1000))))
+        let boundedLimit = max(1, min(limit, 1000))
+        return nativeProviderLogQueue.sync {
+            Self.tailNativeProviderLog(at: url, limit: boundedLimit)
+        }
+    }
+
+    /// Reads at most `nativeProviderLogTailMaximumBytes` from the end of the
+    /// current file.  This intentionally returns fewer than `limit` lines if
+    /// the requested history exceeds that byte budget.
+    private static func tailNativeProviderLog(at url: URL, limit: Int) -> [String] {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { try? handle.close() }
+        let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard fileSize > 0 else { return [] }
+
+        var offset = UInt64(fileSize)
+        var tail = Data()
+        while offset > 0, tail.count < nativeProviderLogTailMaximumBytes {
+            let count = min(nativeProviderLogTailReadBlockBytes, Int(offset), nativeProviderLogTailMaximumBytes - tail.count)
+            offset -= UInt64(count)
+            try? handle.seek(toOffset: offset)
+            let block = handle.readData(ofLength: count)
+            tail.insert(contentsOf: block, at: 0)
+            if tail.reduce(into: 0, { $0 += $1 == 0x0A ? 1 : 0 }) > limit {
+                break
+            }
+        }
+
+        var text = String(decoding: tail, as: UTF8.self)
+        if offset > 0, let newline = text.firstIndex(of: "\n") {
+            text.removeSubrange(...newline)
+        }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        if offset > 0 {
+            let retained = Array(lines.suffix(max(0, limit - 1)))
+            return ["[older native provider diagnostic lines omitted by bounded Admin tail read]"] + retained
+        }
+        return Array(lines.suffix(limit))
     }
 
     func adminLoggingWorkerStatus() -> [String: Any] {
@@ -3294,6 +3383,18 @@ private final class SwiftSimpleUDPPeerBridge {
     private var bytesToSystem = 0
     private var readBatches = 0
     private var writeBatches = 0
+
+    /// High-rate native transport events are opt-in. Returning `nil` means
+    /// the transport owner never constructs per-frame diagnostic fields.
+    private func packetBridgeDiagnosticEventSink() -> ((String, [String: Any]) -> Void)? {
+        guard ObstacleBridgeRuntimeConfig.nativeChannelMuxDiagnosticsEnabled(
+            runtimeConfig: settings.runtimeConfig
+        ) else { return nil }
+        return { [weak self] event, fields in
+            self?.provider?.recordPacketBridgeEvent(event, fields: fields)
+        }
+    }
+
     private var sendFailures = 0
     private var recvFailures = 0
     private var packetFlowCallbacks = 0
@@ -3384,9 +3485,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
                     muxInstanceID: muxInstanceID,
                     muxConnectionSeq: muxConnectionSeq,
-                    eventSink: { [weak self] event, fields in
-                        self?.provider?.recordPacketBridgeEvent(event, fields: fields)
-                    }
+                    eventSink: packetBridgeDiagnosticEventSink()
                 )
             } else if selectedTransport == "ws" {
                 let payloadMode = ObstacleBridgeRuntimeConfig.stringValue(from: settings.runtimeConfig["ws_payload_mode"]) ?? "binary"
@@ -3436,9 +3535,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
                     muxInstanceID: muxInstanceID,
                     muxConnectionSeq: muxConnectionSeq,
-                    eventSink: { [weak self] event, fields in
-                        self?.provider?.recordPacketBridgeEvent(event, fields: fields)
-                    }
+                    eventSink: packetBridgeDiagnosticEventSink()
                 )
             } else if selectedTransport == "quic" {
                 if #available(iOS 15.0, *) {
@@ -3477,9 +3574,7 @@ private final class SwiftSimpleUDPPeerBridge {
                         tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
                         muxInstanceID: muxInstanceID,
                         muxConnectionSeq: muxConnectionSeq,
-                        eventSink: { [weak self] event, fields in
-                            self?.provider?.recordPacketBridgeEvent(event, fields: fields)
-                        }
+                        eventSink: packetBridgeDiagnosticEventSink()
                     )
                 }
             } else {
@@ -3529,9 +3624,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     },
                     muxInstanceID: muxInstanceID,
                     muxConnectionSeq: muxConnectionSeq,
-                    eventSink: { [weak self] event, fields in
-                        self?.provider?.recordPacketBridgeEvent(event, fields: fields)
-                    }
+                    eventSink: packetBridgeDiagnosticEventSink()
                 )
             }
         } else {

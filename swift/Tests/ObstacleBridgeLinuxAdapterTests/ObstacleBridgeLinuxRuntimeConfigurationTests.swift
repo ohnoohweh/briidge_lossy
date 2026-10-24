@@ -35,6 +35,12 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             data: try JSONSerialization.data(withJSONObject: enabled)
         )
         #expect(configured.debugLoggingEnabled)
+
+        enabled["channel_mux"] = ["log_channel_mux": "INFO"]
+        let channelMuxSuppressed = try ObstacleBridgeLinuxRuntimeConfiguration.parse(
+            data: try JSONSerialization.data(withJSONObject: enabled)
+        )
+        #expect(!channelMuxSuppressed.debugLoggingEnabled)
     }
 
     @Test func managedTunHelperElevatesOnlyTheSeparateHelperProcess() {
@@ -91,6 +97,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         producer.recordForegroundLifecycle(state: "connecting", transport: "myudp")
         producer.recordForegroundLifecycle(state: "connected", transport: "myudp")
         producer.recordForegroundLifecycle(state: "stopped", transport: "myudp")
+        producer.stop()
 
         let logContents = String(decoding: try Data(contentsOf: log), as: UTF8.self)
         #expect(logContents.contains("runtime.lifecycle"))

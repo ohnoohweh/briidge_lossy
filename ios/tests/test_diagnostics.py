@@ -33,3 +33,17 @@ def test_build_diagnostics_use_package_metadata_without_server_runtime() -> None
     build = diagnostics._detect_build_info()
     assert build["repo_root"] == ""
     assert "commit" in build
+
+
+def test_diagnostic_jsonl_rotates_and_snapshot_uses_a_bounded_tail(tmp_path) -> None:
+    path = diagnostics.event_log_path(tmp_path)
+    original_maximum = diagnostics.DIAGNOSTIC_LOG_MAX_BYTES
+    try:
+        diagnostics.DIAGNOSTIC_LOG_MAX_BYTES = 64
+        diagnostics.append_jsonl(path, {"event": "first", "payload": "x" * 40})
+        diagnostics.append_jsonl(path, {"event": "second", "payload": "x" * 40})
+    finally:
+        diagnostics.DIAGNOSTIC_LOG_MAX_BYTES = original_maximum
+
+    assert path.with_suffix(".jsonl.1").exists()
+    assert [json.loads(line)["event"] for line in diagnostics.read_jsonl_tail(path, 10)] == ["second"]

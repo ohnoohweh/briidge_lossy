@@ -1707,7 +1707,7 @@ Important caveat:
   - opt-in simulator coverage for the standalone Briefcase E2E app: `OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1 pytest -q tests/integration/test_ios_simulator_e2e.py -m ios_simulator`
   - focused iOS companion/E2E Python tests: `pytest -q ios/tests`
 - Recent validation for this branch used the Windows-local unit suite, the Windows `windows_only` subset, the Windows elevated TUN subset, and the Linux shared integration subset; the dedicated Linux elevated subset is part of the split CI expectation as well.
-- The Linux shared integration subset is currently validated with the runtime-generated localhost TLS fixture set and the availability-aware loopback port allocator in the integration harness.
+- The Linux shared integration subset is currently validated with the runtime-generated localhost TLS fixture set, availability-aware loopback allocation, and bounded listener-service recovery probes after peer replacement; concurrent native Admin cases use distinct loopback addresses as well as ports.
 - Certificate revocation reload coverage now treats `/api/status` reload scope/result and dropped-peer counters as the stable post-disconnect signal, because the peer-scoped failed row can be transient after the revoked secure-link session is torn down.
 - The Linux shared subset also includes a listener stale-junk-peer regression that waits for `/api/peers` decode-error visibility before asserting stale-row reap behavior, which keeps the gate aligned with the admin snapshot's eventually consistent update path.
 - macOS elevated scripts preserve the GitHub Actions marker through sudo so hosted-runner diagnostic branches remain active after privilege escalation.
@@ -1772,7 +1772,22 @@ shows the packet-flow FIFO high-water level for the trailing two seconds and
 since extension-process start, with its fixed 2,048-packet capacity.
 Packet-flow PCAP capture is an opt-in, bounded iOS diagnostic facility rather
 than a standard forwarding feature; its status reports capture limits and
-writer state when enabled.
+writer state when enabled. Native provider diagnostics likewise use bounded
+asynchronous file writes, retained rotation, and fixed-size Admin tail reads,
+so requesting logs cannot load an unbounded file into the extension. Configured
+Python, macOS, Linux, and iOS local file logs likewise default to 1 MiB
+rotation with bounded retained backups; their Admin fallback readers use a
+fixed-size tail, and Linux native lifecycle writes run on a bounded utility
+queue. Set the file-size limit to zero only when unbounded retention is
+explicitly required.
+Native ChannelMux frame diagnostics are opt-in: set
+`channel_mux.log_channel_mux` to `DEBUG` (and on Linux also set
+`debug_logging.debug_enabled`) only for a focused trace. Otherwise native
+transport owners do not install the high-rate event sink, avoiding per-frame
+diagnostic formatting on the data path.
+Static WebAdmin asset reads similarly wait for operating-system-backed I/O
+outside the serving queue; ObstacleBridge keeps no duplicate in-memory asset
+cache.
 Trailing-two-second projection reads only
 the matching rolling slots per category, and Swift derives recent maxima in one
 pass over its bounded aggregate set.

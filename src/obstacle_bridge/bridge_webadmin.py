@@ -2713,7 +2713,13 @@ class AdminWebUI:
 
         return configured.resolve()
 
-    async def _handle_static(self, writer, req_path):
+    def _read_static_file(self, req_path: str) -> tuple[int, bytes, str]:
+        """Run blocking static-asset filesystem work outside the asyncio loop.
+
+        This deliberately leaves caching to the operating system.  A request
+        awaits this result, but packet/runtime callbacks and other Admin
+        clients keep making progress while the asset is read.
+        """
         base = self._resolve_static_base()
 
         if req_path in ("", "/"):
@@ -2727,20 +2733,22 @@ class AdminWebUI:
         full = (base / rel).resolve()
 
         if not str(full).startswith(str(base)):
-            await self._send(writer, 403, b"Forbidden", "text/plain; charset=utf-8")
-            return
+            return 403, b"Forbidden", "text/plain; charset=utf-8"
 
         if not full.exists() or not full.is_file():
-            await self._send(writer, 404, b"Not Found", "text/plain; charset=utf-8")
-            return
+            return 404, b"Not Found", "text/plain; charset=utf-8"
 
         data = full.read_bytes()
         ctype, _ = mimetypes.guess_type(str(full))
+        return 200, data, ctype or "application/octet-stream"
+
+    async def _handle_static(self, writer, req_path):
+        status, data, content_type = await asyncio.to_thread(self._read_static_file, req_path)
         await self._send(
             writer,
-            200,
+            status,
             data,
-            ctype or "application/octet-stream",
+            content_type,
         )
 
     def _build_status_payload_now(self) -> dict:

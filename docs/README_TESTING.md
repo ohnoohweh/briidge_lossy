@@ -112,6 +112,7 @@ Representative anchors for those areas:
 - The foreground myudp listener probes retain separate authenticated child projections in local Admin, and pin rejection of a second endpoint once the configured admission bound is full.
 - The same listener tests reject ambiguous local-service maps rather than binding one configured port independently for every admitted peer.
 - Listener-lifecycle coverage also expires an idle child and verifies that the listener removes it rather than attempting an outbound reconnect.
+- Linux Swift listener recovery coverage waits for the re-registered TCP or UDP service to accept traffic after a Python peer replacement, because SecureLink readiness can precede service-channel restoration.
 - the native Swift overlay-owner source guard pins a fresh shared-TUN epoch, authenticated-readiness local TUN `OPEN`, and ChannelMux remote-service catalog regeneration for UDP, TCP, WebSocket, and QUIC; it requires the regenerated catalog to precede that OPEN in the same ordered mux batch, preserves the reserved local-TUN service identifier `0` through the Core facade, while the Python listener-mode regression pins the authenticated-readiness `OPEN` for every configured local TUN listener before its first packet
 - the stream reconnect regression also closes suspended Python TCP, QUIC, and WebSocket reconnect coroutines after their event loops stop, ensuring shutdown cleanup uses the task identity captured while the loop was active and emits no secondary `no running event loop` exception
 - current coverage includes Linux hook assertions for IPv4-mapped IPv6 overlay exclusions, exact-route snapshotting for excluded routes, and preserving excluded local subnets on their original interfaces during full-tunnel route installation
@@ -130,7 +131,8 @@ Representative anchors for those areas:
 - current Admin Web payload coverage includes Python peer-metric fallback parity for connected rows while preserving null transport metrics on passive listener rows
 - current Admin Web resilience coverage pins the minimal live-session status fallback used when stats snapshotting fails before a cached status payload exists
 - current TUN / Routing Admin Web coverage also pins shared-TUN diagnostics so the page renders one configured ownership peer per row with bound/not-bound state, a protocol-qualified connection identity, learned addresses, and binding-scoped RX/TX counters, while retaining interface-facing flow counters, shared-drop totals, per-reason drop summaries, and latest-drop context without inventing a second backend-only diagnostic path
-- current iOS packet-flow coverage pins the bounded FIFO high-water status contract and the TUN / Routing display for both trailing-two-second and extension-process-lifetime levels, plus opt-in-only PCAP diagnostic capture with bounded writer backlog, file size, and retained captures
+- current iOS packet-flow coverage pins the bounded FIFO high-water status contract and the TUN / Routing display for both trailing-two-second and extension-process-lifetime levels, plus opt-in-only PCAP diagnostic capture with bounded writer backlog, file size, and retained captures; native provider diagnostics use a bounded asynchronous writer, retained rotation, and fixed-size Admin tail reads; Python and shared Apple WebAdmin servers dispatch static-asset reads outside their serving queues without an application-level file cache
+- current Linux Swift proxy-collector integration coverage runs its Python/native worker matrix under xdist with a case-specific loopback Admin address and port, preventing transient Admin-listener bind collisions between concurrent cases
 - current TUN / Routing Admin Web coverage also pins helper lifecycle visibility and runtime health warnings so the page surfaces helper startup/recovery degradation and local TUN address-missing faults instead of failing silently
 - current runtime-health coverage pins the portable Core record/ring/file contract and the Python, Linux Swift, macOS Swift, and iOS owners' redacted retained-lifetime wiring, including bounded prior records that remain queryable after restart, clean-versus-unclean classification, and the exclusion of protected traffic
 - current TUN / Routing Admin Web coverage also pins the non-blocking verification path so peer/global internal ICMP probe checks return `pending`, `skipped`, or cached results while background refresh runs off the admin snapshot thread and outside the iOS packet-tunnel bridge queue, keeping the TUN page and remote WebAdmin surface responsive under live verification
@@ -1117,6 +1119,10 @@ local-write enqueue, and close handling.
 Client-open timing further distinguishes Core admission, service/event
 publication, `NWConnection` creation/start, and receive registration or
 immediate activation.
+
+### Bounded local diagnostic logs
+
+Focused Admin-log fallback, iOS JSONL rotation, and native Linux observability tests verify bounded local log retention and fixed-size tail retrieval without requiring a device.
 
 ### Run the full unit suite
 

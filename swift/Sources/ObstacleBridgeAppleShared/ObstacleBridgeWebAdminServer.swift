@@ -43,6 +43,13 @@ final class ObstacleBridgeWebAdminServer {
 
     private let listener: NWListener
     private let queue = DispatchQueue(label: "ObstacleBridgeWebAdminServer")
+    /// Disk reads for the fixed WebAdmin bundle must never occupy the request
+    /// queue.  There is intentionally no application-level asset cache: the
+    /// operating system owns file caching and memory-pressure policy.
+    private let staticFileReadQueue = DispatchQueue(
+        label: "ObstacleBridgeWebAdminServer.StaticFileRead",
+        qos: .utility
+    )
     private let statusProvider: () -> [String: Any]
     private let apiProvider: APIProvider
     private let staticFileProvider: StaticFileProvider
@@ -216,10 +223,56 @@ final class ObstacleBridgeWebAdminServer {
             session.start(headers: request.headers)
             return
         }
-        let response = response(for: request)
-        connection.send(content: response, completion: .contentProcessed { _ in
-            connection.cancel()
-        })
+        guard !request.path.hasPrefix("/api/"), request.path != "/status", request.path != "/healthz" else {
+            let response = response(for: request)
+            connection.send(content: response, completion: .contentProcessed { _ in
+                connection.cancel()
+            })
+            return
+        }
+        respondWithStaticFile(for: request, connection: connection)
+    }
+
+    /// Starts the synchronous Foundation read off the serial WebAdmin request
+    /// queue.  The connection remains pending until the read completes, then
+    /// response construction and the Network send resume on that request queue.
+    private func respondWithStaticFile(for request: HTTPRequest, connection: NWConnection) {
+        staticFileReadQueue.async { [weak self] in
+            guard let self else {
+                connection.cancel()
+                return
+            }
+            let staticFile = self.staticFileProvider(request.path)
+            self.queue.async { [weak self] in
+                guard let self else {
+                    connection.cancel()
+                    return
+                }
+                let response: Data
+                if let staticFile {
+                    response = Self.httpResponse(
+                        statusLine: "HTTP/1.1 200 OK",
+                        contentType: staticFile.contentType,
+                        body: staticFile.body
+                    )
+                } else {
+                    let snapshot = self.statusProvider()
+                    let html = Self.htmlIndex(
+                        title: self.fallbackIndexTitle,
+                        subtitle: self.fallbackIndexSubtitle,
+                        snapshot: snapshot
+                    )
+                    response = Self.httpResponse(
+                        statusLine: "HTTP/1.1 200 OK",
+                        contentType: "text/html; charset=utf-8",
+                        body: Data(html.utf8)
+                    )
+                }
+                connection.send(content: response, completion: .contentProcessed { _ in
+                    connection.cancel()
+                })
+            }
+        }
     }
 
     private func response(for request: HTTPRequest) -> Data {
@@ -239,33 +292,13 @@ final class ObstacleBridgeWebAdminServer {
                 body: Self.jsonBody(snapshot["bootstrap_state"] ?? [:])
             )
         }
-        if request.path.hasPrefix("/api/") {
-            if let result = apiProvider(request.method, request.path, request.headers, request.body) {
-                return Self.httpResponse(statusLine: result.statusLine, contentType: result.contentType, body: result.body, headers: result.headers)
-            }
-            return Self.httpResponse(
-                statusLine: "HTTP/1.1 404 Not Found",
-                contentType: "application/json; charset=utf-8",
-                body: Self.jsonBody(["ok": false, "error": "not found", "path": request.path])
-            )
+        if let result = apiProvider(request.method, request.path, request.headers, request.body) {
+            return Self.httpResponse(statusLine: result.statusLine, contentType: result.contentType, body: result.body, headers: result.headers)
         }
-        if let staticFile = staticFileProvider(request.path) {
-            return Self.httpResponse(
-                statusLine: "HTTP/1.1 200 OK",
-                contentType: staticFile.contentType,
-                body: staticFile.body
-            )
-        }
-        let snapshot = statusProvider()
-        let html = Self.htmlIndex(
-            title: fallbackIndexTitle,
-            subtitle: fallbackIndexSubtitle,
-            snapshot: snapshot
-        )
         return Self.httpResponse(
-            statusLine: "HTTP/1.1 200 OK",
-            contentType: "text/html; charset=utf-8",
-            body: Data(html.utf8)
+            statusLine: "HTTP/1.1 404 Not Found",
+            contentType: "application/json; charset=utf-8",
+            body: Self.jsonBody(["ok": false, "error": "not found", "path": request.path])
         )
     }
 

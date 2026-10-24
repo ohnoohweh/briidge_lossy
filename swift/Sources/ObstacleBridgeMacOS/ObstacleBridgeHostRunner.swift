@@ -2255,12 +2255,29 @@ final class ObstacleBridgeHostRunner {
     private func readLogLines(limit: Int) -> [String] {
         loggingWorkerLock.lock(); let worker = loggingWorker; let configured = loggingWorkerConfigured; loggingWorkerLock.unlock()
         if configured { return worker?.fetch(limit: limit)["lines"] as? [String] ?? [] }
-        guard let path = configStore.debugLogFilePath(), !path.isEmpty,
-              let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+        guard let path = configStore.debugLogFilePath(), !path.isEmpty else {
             return []
         }
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        return Array(lines.suffix(max(1, min(limit, 1000))))
+        return Self.tailLogLines(at: URL(fileURLWithPath: path), limit: limit)
+    }
+
+    private static func tailLogLines(at url: URL, limit: Int) -> [String] {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { try? handle.close() }
+        let maximumBytes = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogTailMaximumBytes
+        let blockBytes = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogTailReadBlockBytes
+        let wanted = max(1, min(limit, 1000))
+        let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        var offset = UInt64(max(0, fileSize)); var tail = Data()
+        while offset > 0, tail.count < maximumBytes {
+            let count = min(blockBytes, Int(offset), maximumBytes - tail.count)
+            offset -= UInt64(count); try? handle.seek(toOffset: offset)
+            tail.insert(contentsOf: handle.readData(ofLength: count), at: 0)
+            if tail.reduce(into: 0, { $0 += $1 == 0x0A ? 1 : 0 }) > wanted { break }
+        }
+        var text = String(decoding: tail, as: UTF8.self)
+        if offset > 0, let newline = text.firstIndex(of: "\n") { text.removeSubrange(...newline) }
+        return Array(text.split(separator: "\n", omittingEmptySubsequences: true).suffix(wanted)).map(String.init)
     }
 
     private func buildSummary() -> [String: Any] {
