@@ -130,6 +130,7 @@ Representative anchors for those areas:
 - current Admin Web payload coverage includes Python peer-metric fallback parity for connected rows while preserving null transport metrics on passive listener rows
 - current Admin Web resilience coverage pins the minimal live-session status fallback used when stats snapshotting fails before a cached status payload exists
 - current TUN / Routing Admin Web coverage also pins shared-TUN diagnostics so the page renders one configured ownership peer per row with bound/not-bound state, a protocol-qualified connection identity, learned addresses, and binding-scoped RX/TX counters, while retaining interface-facing flow counters, shared-drop totals, per-reason drop summaries, and latest-drop context without inventing a second backend-only diagnostic path
+- current iOS packet-flow coverage pins the bounded FIFO high-water status contract and the TUN / Routing display for both trailing-two-second and extension-process-lifetime levels
 - current TUN / Routing Admin Web coverage also pins helper lifecycle visibility and runtime health warnings so the page surfaces helper startup/recovery degradation and local TUN address-missing faults instead of failing silently
 - current runtime-health coverage pins the portable Core record/ring/file contract and the Python, Linux Swift, macOS Swift, and iOS owners' redacted retained-lifetime wiring, including bounded prior records that remain queryable after restart, clean-versus-unclean classification, and the exclusion of protected traffic
 - current TUN / Routing Admin Web coverage also pins the non-blocking verification path so peer/global internal ICMP probe checks return `pending`, `skipped`, or cached results while background refresh runs off the admin snapshot thread and outside the iOS packet-tunnel bridge queue, keeping the TUN page and remote WebAdmin surface responsive under live verification
@@ -1105,10 +1106,10 @@ The CI workflow labels the platform-local lifecycle matrix as PXY-3B and its exa
 
 Runtime-metrics coverage includes the bounded Swift category vocabulary for
 compression frame/encode/decode, SecureLink worker boundaries, Apple myUDP
-parse/dispatch, payload-routing, SecureLink handoff, delivered-payload, egress,
-ChannelMux dispatch/service catalog, TUN/TCP/UDP branches, lifecycle, and the inclusive
-transport-owner queue measurement. The queue-boundary row is diagnostic and
-is not additive with contained Core timing scopes.
+parse/dispatch, per-payload SecureLink handoff, egress, ChannelMux
+dispatch/service catalog, TUN/TCP/UDP branches, and lifecycle leaf scopes.
+Inclusive transport-owner, payload-routing, payload-delivery, TCP-message, and
+TUN-payload wrappers are excluded because they span separately measurable work.
 
 The TCP delivery split separately covers server data, client open/data,
 local-write enqueue, and close handling.

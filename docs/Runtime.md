@@ -657,6 +657,14 @@ handoff is a FIFO capped at 2,048 packets, writes batches of at most 64 packets
 on its own serial queue, and generation-fences/drains queued work on stop so a
 stale packet cannot cross a tunnel lifecycle boundary.
 
+The `TUN / Routing` WebAdmin page reports the iOS packet-flow FIFO high-water
+level both since extension-process start and for the trailing two seconds. The
+bridge records enqueue and drain levels in fixed 100 ms buckets (21 buckets),
+so the rolling metric has bounded memory and its collection cannot grow with
+packet traffic. The values are queue slots, displayed together with the fixed
+2,048-packet capacity; platforms without this Network Extension handoff show
+`n/a` rather than a synthetic value.
+
 The Runtime Analysis trailing-two-second projection reads only the matching
 fixed rolling slots for each category rather than scanning the full retained
 minute. The equivalent Swift projection derives all recent category maxima in

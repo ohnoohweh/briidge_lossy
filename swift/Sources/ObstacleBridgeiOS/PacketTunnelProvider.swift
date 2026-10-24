@@ -1844,6 +1844,13 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
 
     private func adminTunRoutingSnapshotUncached(connections: [String: Any]? = nil) -> [String: Any] {
         var payload = ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: connections ?? adminConnectionsSnapshotUncached())
+        let bridgeSnapshot = ObstacleBridgePacketFlowBridge.bridgeStateSnapshot()
+        payload["packet_flow_fifo"] = [
+            "queued_packets": bridgeSnapshot["outgoing_queued_packets"] ?? 0,
+            "capacity_packets": ObstacleBridgeRuntimeConfig.packetFlowFIFOQueueCapacity,
+            "max_queued_packets_since_start": bridgeSnapshot["outgoing_queue_max_since_start"] ?? 0,
+            "max_queued_packets_last_2_seconds": bridgeSnapshot["outgoing_queue_max_last_2_seconds"] ?? 0,
+        ]
         if !effectivePacketTunnelSettingsState.isEmpty {
             payload["included_routes"] = Self.ipv4RouteCIDRList(effectivePacketTunnelSettingsState["included_routes"])
             payload["excluded_routes"] = Self.ipv4RouteCIDRList(effectivePacketTunnelSettingsState["excluded_routes"])

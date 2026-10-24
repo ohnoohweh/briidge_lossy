@@ -3345,6 +3345,13 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingActiveBindings', fmtInteger(j.summary?.shared_active_peer_bindings ?? 0));
   setText('tunRoutingSharedDrops', fmtInteger(j.summary?.shared_drop_total ?? 0));
   setText('tunRoutingSharedDropReasons', fmtDropReasonStats(j.summary || {}));
+  const packetFlowFifo = j.packet_flow_fifo;
+  const packetFlowFifoCapacity = packetFlowFifo?.capacity_packets;
+  const fmtPacketFlowFifo = (level) => packetFlowFifo
+    ? `${fmtInteger(level ?? 0)} / ${fmtInteger(packetFlowFifoCapacity ?? 0)} packets`
+    : 'n/a';
+  setText('tunRoutingPacketFlowFifoLast2Seconds', fmtPacketFlowFifo(packetFlowFifo?.max_queued_packets_last_2_seconds));
+  setText('tunRoutingPacketFlowFifoSinceStart', fmtPacketFlowFifo(packetFlowFifo?.max_queued_packets_since_start));
   setText('tunRoutingIcmpStageCounters', fmtIcmpStageCounters(j.summary || {}));
   setText('tunRoutingProbeBoundaryCounters', fmtProbeBoundaryCounters(j.summary || {}));
   setText('tunRoutingLocalReplyStageCounters', fmtLocalReplyStageCounters(j.summary || {}));

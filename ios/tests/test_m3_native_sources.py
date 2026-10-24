@@ -322,8 +322,15 @@ def test_ios_runtime_metrics_include_swift_worker_and_leaf_boundaries() -> None:
     provider_source = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgePacketFlowBridge.activate(provider: provider, tunnelAddress: tunnelAddress, mtu: settings.mtu)" in provider_source
     assert "ObstacleBridgePacketFlowBridge.deactivate()" in provider_source
-    assert "maxOutgoingQueuedPackets = 2048" in packet_flow
+    assert "maxOutgoingQueuedPackets = ObstacleBridgeRuntimeConfig.packetFlowFIFOQueueCapacity" in packet_flow
     assert "outgoingDrainGeneration" in packet_flow
+    assert "outgoingQueuedPacketsMaxSinceStart" in packet_flow
+    assert "outgoingQueueLevelBuckets" in packet_flow
+    assert "outgoing_queue_max_last_2_seconds" in packet_flow
+    assert "shared.observeOutgoingQueueLevel(shared.outgoingQueuedPackets)" in packet_flow
+    shared_runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    assert "packetFlowFIFOQueueCapacity = 2048" in shared_runtime_config
+    assert "ObstacleBridgeRuntimeConfig.packetFlowFIFOQueueCapacity" in packet_flow
     assert ".appleTransportTcpPayload" not in owner
     assert ".appleTransportUdpPayload" in owner
     tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift").read_text(encoding="utf-8")
@@ -842,6 +849,9 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert "private func adminPacketProcessingActive(bridgeSnapshot: [String: Any]? = nil) -> Bool" in provider
     assert 'if let active = snapshot["active"] as? Bool {' in provider
     assert 'payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)' in provider
+    assert 'payload["packet_flow_fifo"] = [' in provider
+    assert '"max_queued_packets_since_start": bridgeSnapshot["outgoing_queue_max_since_start"] ?? 0' in provider
+    assert '"max_queued_packets_last_2_seconds": bridgeSnapshot["outgoing_queue_max_last_2_seconds"] ?? 0' in provider
     assert 'payload["tun_control"] = ObstacleBridgeAdminAPI.tunControlSnapshot(' in provider
     assert 'private var packetTunnelConfiguration: ObstacleBridgePacketTunnelConfiguration?' in provider
     assert 'private var tunRoutingEnabled = false' in provider

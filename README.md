@@ -1756,7 +1756,9 @@ shown as uninterrupted-work signals. The
 portable Swift Core supplies the same redacted runtime-metrics
 status shape to Linux, macOS, and iOS hosts for its shared overlay, SecureLink,
 compression, timer, detailed myUDP receive/retransmit boundaries, and its
-inclusive transport-owner queue boundary.
+actionable leaf transport boundaries. On iOS, the TUN / Routing page also
+shows the packet-flow FIFO high-water level for the trailing two seconds and
+since extension-process start, with its fixed 2,048-packet capacity.
 Trailing-two-second projection reads only
 the matching rolling slots per category, and Swift derives recent maxima in one
 pass over its bounded aggregate set.
