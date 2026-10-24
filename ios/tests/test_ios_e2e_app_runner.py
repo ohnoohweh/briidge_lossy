@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import sys
 from pathlib import Path
@@ -36,9 +37,21 @@ def _unused_udp_port() -> int:
 
 
 def _unused_tcp_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+    worker_id = str(os.environ.get("PYTEST_XDIST_WORKER", "gw0") or "gw0")
+    digits = "".join(character for character in worker_id if character.isdigit())
+    worker_index = int(digits or 0)
+    worker_count = max(1, int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1") or "1"))
+    base = 60000
+    per_worker_budget = 5000 // worker_count
+    for port in range(base + worker_index * per_worker_budget, base + (worker_index + 1) * per_worker_budget):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
+    raise RuntimeError("no available worker-partitioned TCP port")
 
 
 async def _with_websocket_echo() -> tuple[str, list[dict[str, Any]], Any]:
@@ -66,7 +79,7 @@ def test_e2e_runner_websocket_probe_reports_success() -> None:
             server.close()
             await server.wait_closed()
 
-        assert report["ok"] is True
+        assert report["ok"] is True, report.get("detail", report)
         assert report["app"] == "obstacle_bridge_ios_e2e"
         assert report["probe"] == "host-websocket"
         assert report["url"] == url

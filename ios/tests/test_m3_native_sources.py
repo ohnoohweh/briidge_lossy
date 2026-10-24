@@ -723,6 +723,9 @@ def test_webadmin_server_source_exists() -> None:
     service_codec = (CORE_SWIFT_DIR / "ObstacleBridgeServiceCodec.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeWebAdminServer" in runtime
+    assert "func startAndWait(timeout: TimeInterval = 1) throws -> Int" in runtime
+    assert "guard startupSignal.wait(timeout: .now() + timeout) == .success else {\n            stop()" in runtime
+    assert "guard !startupFailed, startupPort > 0 else {\n            stop()" in runtime
     assert "normalizedListenerHost(" in runtime
     assert 'host == "0.0.0.0"' in runtime
     assert 'host == "localhost"' in runtime
@@ -1856,3 +1859,4 @@ def test_native_ios_tun_connector_schema_is_shared_with_macos_host_runner() -> N
     ):
         assert f'schemaItem(key: "{key}"' in policy
     assert "ObstacleBridgeRuntimeConfig.configSchemaSnapshot()" in macos_runner
+    assert "_ = try controlServer.startAndWait(timeout: 5)" in macos_runner

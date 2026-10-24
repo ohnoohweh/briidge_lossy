@@ -133,9 +133,15 @@ final class ObstacleBridgeWebAdminServer {
 
     func startAndWait(timeout: TimeInterval = 1) throws -> Int {
         start()
-        guard startupSignal.wait(timeout: .now() + timeout) == .success else { throw ObstacleBridgeWebAdminServerError.startupTimedOut }
+        guard startupSignal.wait(timeout: .now() + timeout) == .success else {
+            stop()
+            throw ObstacleBridgeWebAdminServerError.startupTimedOut
+        }
         startupLock.lock(); defer { startupLock.unlock() }
-        guard !startupFailed, startupPort > 0 else { throw ObstacleBridgeWebAdminServerError.startupFailed }
+        guard !startupFailed, startupPort > 0 else {
+            stop()
+            throw ObstacleBridgeWebAdminServerError.startupFailed
+        }
         return startupPort
     }
 

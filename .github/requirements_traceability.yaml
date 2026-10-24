@@ -960,6 +960,9 @@ REQ-LIFE-009:
     - tests/unit/test_launcher_entrypoint.py::test_launcher_continues_when_dependency_install_declined
 
 REQ-LIFE-010:
+  # macOS HostRunner binds its local Admin endpoint before private worker
+  # bootstrap, making bind failure synchronous and status available during
+  # worker capability negotiation.
   # Kernel-connected excluded LANs remain on their direct main-table device;
   # full-tunnel policy rules must not rewrite them through an Internet underlay.
   # Elevated route/DNS verification is host-local and deterministic; the
