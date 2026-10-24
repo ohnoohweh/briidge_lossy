@@ -283,6 +283,7 @@ def test_ios_runtime_status_projects_shared_runtime_metrics() -> None:
     provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     shared = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     assert '"runtime_metrics": ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()' in provider
+    assert '"runtime_fifos"' in provider
     assert "ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessCPU()" in provider
     assert "enum ObstacleBridgeAppleRuntimeMetricsSampler" in shared
     assert "runtimeHealthRecordsPayload" in provider

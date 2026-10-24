@@ -83,6 +83,8 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         pendingPayloadWorkSink = sink
     }
 
+    func pendingPayloadCount() -> Int { pendingPayloads.count }
+
     public func pollDueFrames() throws -> OutboundSnapshot {
         var emittedFrames = try runtime.pollDueFrames()
         if emittedFrames.isEmpty,

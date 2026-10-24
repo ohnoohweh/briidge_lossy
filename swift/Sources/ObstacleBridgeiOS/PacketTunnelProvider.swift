@@ -1808,6 +1808,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "previous_runtime_lifetime_ended_cleanly": runtimeHealth["previous_runtime_lifetime_ended_cleanly"] ?? NSNull(),
                 "runtime_health_recent_records": runtimeHealth["runtime_health_recent_records"] ?? [],
                 "runtime_metrics": ObstacleBridgeRuntimeMetrics.shared.snapshotPayload(),
+                "runtime_fifos": ((bridgeSnapshot["transport_runtime"] as? [String: Any])?["fifo_levels"] as? [String: Any]) ?? [:],
                 "bridge_state": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
                 "shared_overlay_bootstrap_state": sharedOverlayBootstrapState,
                 "proxy_provider": proxyProviderSnapshot(),

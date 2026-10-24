@@ -123,9 +123,12 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private var lastOverlayConnectedState = false
     private var batchFlushScheduled = false
     private var secureLinkPayloadDrainScheduled = false
+    private var secureLinkPayloadQueuedMax = 0
     private var pendingOutboundMuxFrames: [Data] = []
+    private var pendingOutboundMuxFramesMax = 0
     private var outboundMuxFrameDrainScheduled = false
     private var pendingInboundOverlayPayloads: [Data] = []
+    private var pendingInboundOverlayPayloadsMax = 0
     private var inboundOverlayPayloadDrainScheduled = false
     private var coreRetryToken: UInt64?
     private var coreRetryWorkItem: DispatchWorkItem?
@@ -532,6 +535,11 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             snapshot["rtt_est_ms"] = overlayRuntime.rttEstMS
             snapshot["transmit_delay_est_ms"] = overlayRuntime.transmitDelayEstMS
             snapshot["protocol_stats"] = protocolStats
+            snapshot["fifo_levels"] = [
+                "secure_link_pending_payloads": ["queued_messages": overlayLayerTransportAdapter?.pendingSecureLinkPayloadCount() ?? 0, "max_queued_messages_since_start": secureLinkPayloadQueuedMax],
+                "outbound_mux_frames": ["queued_messages": pendingOutboundMuxFrames.count, "max_queued_messages_since_start": pendingOutboundMuxFramesMax],
+                "inbound_overlay_payloads": ["queued_messages": pendingInboundOverlayPayloads.count, "max_queued_messages_since_start": pendingInboundOverlayPayloadsMax],
+            ]
             snapshot["next_address_attempt_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()
             snapshot["restart_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()
             return snapshot
@@ -1055,6 +1063,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
 
     private func routeOverlayPayloads(_ payloads: [Data]) {
         pendingInboundOverlayPayloads.append(contentsOf: payloads)
+        pendingInboundOverlayPayloadsMax = max(pendingInboundOverlayPayloadsMax, pendingInboundOverlayPayloads.count)
         scheduleInboundOverlayPayloadDrain()
     }
 
@@ -1404,6 +1413,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
 
     private func sendMuxFrames(_ muxFrames: [Data]) {
         pendingOutboundMuxFrames.append(contentsOf: muxFrames)
+        pendingOutboundMuxFramesMax = max(pendingOutboundMuxFramesMax, pendingOutboundMuxFrames.count)
         scheduleOutboundMuxFrameDrain()
     }
 
@@ -1421,6 +1431,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                         self.overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
                         self.sendOverlayTransportPayload(secureFrame)
                     }
+                    self.secureLinkPayloadQueuedMax = max(self.secureLinkPayloadQueuedMax, snapshot.queuedPayloads)
                     if snapshot.queuedPayloads > 0 { self.scheduleSecureLinkPayloadDrain() }
                 } catch {
                     self.eventSink?("udp_overlay_overlay_layer_send_failed", ["error": error.localizedDescription, "packet_bytes": muxFrame.count])
@@ -1445,6 +1456,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                     self.overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
                     self.sendOverlayTransportPayload(frame)
                 }
+                self.secureLinkPayloadQueuedMax = max(self.secureLinkPayloadQueuedMax, snapshot.queuedPayloads)
                 if snapshot.queuedPayloads > 0 { self.scheduleSecureLinkPayloadDrain() }
             } catch {
                 self.eventSink?("udp_overlay_secure_link_pending_payload_failed", ["error": error.localizedDescription])
