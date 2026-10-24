@@ -34,6 +34,25 @@ struct ObstacleBridgeWebSocketOverlayRuntimeTests {
         #expect(client.protocolState?.sessionID == 91)
     }
 
+    @Test func secureLinkBacklogDrainsOneFIFOMessagePerTurn() throws {
+        let client = ObstacleBridgeSecureLinkPskTransportAdapter(clientPSK: "adapter-psk")
+        let server = ObstacleBridgeSecureLinkPskRuntime(clientMode: false, psk: "adapter-psk")
+
+        let hello = try client.handleTransportConnected(sessionID: 92, clientNonce: Data(repeating: 8, count: 32))
+        let queued = try client.handleOutboundPayload(Data("first".utf8))
+        #expect(queued.emittedFrames.isEmpty)
+        #expect(queued.queuedPayloads == 1)
+        let serverHello = server.handleInboundFrame(hello.emittedFrames[0])
+        let proof = client.handleInboundFrame(serverHello.emittedFrames[0])
+        let acknowledgement = server.handleInboundFrame(proof.emittedFrames[0])
+        _ = client.handleInboundFrame(acknowledgement.emittedFrames[0])
+
+        let firstTurn = try client.drainOnePendingPayload()
+        #expect(firstTurn.emittedFrames.count == 1)
+        #expect(firstTurn.queuedPayloads == 0)
+        #expect(server.handleInboundFrame(firstTurn.emittedFrames[0]).deliveredPayloads == [Data("first".utf8)])
+    }
+
     @Test func nativeServiceSpecRetainsPortableScalarConfiguration() {
         let spec = ObstacleBridgeNativeServiceSpec(
             svcID: 7,

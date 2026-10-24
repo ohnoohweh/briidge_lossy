@@ -2094,13 +2094,20 @@ function renderRuntimeMetrics(status) {
   const summary = document.getElementById('runtimeAnalysisSummary'); const rows = document.getElementById('runtimeAnalysisRows');
   if (!summary || !rows) return;
   const cpu = metrics.cpu_cores_max || {}; const slice = metrics.work_slice_ms_max || {};
+  const fifos = status?.runtime_fifos || {};
+  const fifoRows = Object.entries(fifos).map(([name, level]) => {
+    const queued = fmtInteger(level?.queued_messages ?? 0);
+    const maximum = fmtInteger(level?.max_queued_messages_since_start ?? 0);
+    return [`FIFO — ${name.replaceAll('_', ' ')}`, `${queued} queued · high-water ${maximum}`];
+  });
   const cpuContributor = (item) => item?.category ? ` · ${item.category} ${(Number(item.observed_cores) * 100).toFixed(1)}% occupancy` : '';
   summary.textContent = 'Peak values since start and over the trailing two seconds.';
   rows.innerHTML = [
     ['Longest uninterrupted — since start', slice.overall == null ? '—' : `${Number(slice.overall).toFixed(1)} ms · ${metrics.longest_uninterrupted_category || 'unknown source'}`],
     ['Longest uninterrupted — last 2 s', slice.last_2_seconds == null ? '—' : `${Number(slice.last_2_seconds).toFixed(1)} ms · ${metrics.longest_uninterrupted_last_2_seconds_category || 'unknown source'}`],
     ['Max CPU load — since start', cpu.overall == null ? '—' : `${(Number(cpu.overall) * 100).toFixed(1)}% of one core${cpuContributor(cpu.overall_contributor)}`],
-    ['Max CPU load — last 2 s', cpu.last_2_seconds == null ? '—' : `${(Number(cpu.last_2_seconds) * 100).toFixed(1)}% of one core${cpuContributor(cpu.last_2_seconds_contributor)}`]
+    ['Max CPU load — last 2 s', cpu.last_2_seconds == null ? '—' : `${(Number(cpu.last_2_seconds) * 100).toFixed(1)}% of one core${cpuContributor(cpu.last_2_seconds_contributor)}`],
+    ...fifoRows
   ].map(([label, value]) => `<div class="kv-row"><span>${label}</span><strong>${value}</strong></div>`).join('');
 }
 

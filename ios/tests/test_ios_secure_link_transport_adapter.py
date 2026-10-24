@@ -107,8 +107,9 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
                         throw ProbeError.badState("missing server handshake acknowledgement")
                     }
                     let clientConfirmed = client.handleInboundFrame(serverHandshakeAck)
+                    let clientDrain = try client.drainOnePendingPayload()
                     guard clientConfirmed.authenticated,
-                          let flushedClientDataFrame = clientConfirmed.emittedFrames.first else {
+                          let flushedClientDataFrame = clientDrain.emittedFrames.first else {
                         throw ProbeError.badState("missing flushed client data after confirmation")
                     }
                     let serverData = server.handleInboundFrame(flushedClientDataFrame)
@@ -123,6 +124,7 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
                         "client_auth_frames": clientAuth.emittedFrames.count,
                         "client_authenticated_before_confirmation": clientAuth.authenticated,
                         "client_confirmed_frames": clientConfirmed.emittedFrames.count,
+                        "client_drain_frames": clientDrain.emittedFrames.count,
                         "server_auth_frames": serverAuth.emittedFrames.count,
                         "server_received": serverData.deliveredPayloads.map { String(data: $0, encoding: .utf8) ?? "" },
                         "client_received": clientData.deliveredPayloads.map { String(data: $0, encoding: .utf8) ?? "" },
@@ -177,7 +179,8 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
         "queued_client_frames": 1,
         "client_auth_frames": 1,
         "client_authenticated_before_confirmation": False,
-        "client_confirmed_frames": 1,
+        "client_confirmed_frames": 0,
+        "client_drain_frames": 1,
         "server_auth_frames": 1,
         "server_received": ["hello-secure"],
         "client_received": ["reply-secure"],

@@ -122,6 +122,14 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private var lastIdleProbeNS: UInt64 = 0
     private var lastOverlayConnectedState = false
     private var batchFlushScheduled = false
+    private var secureLinkPayloadDrainScheduled = false
+    private var secureLinkPayloadQueuedMax = 0
+    private var pendingOutboundMuxFrames: [Data] = []
+    private var pendingOutboundMuxFramesMax = 0
+    private var outboundMuxFrameDrainScheduled = false
+    private var pendingInboundOverlayPayloads: [Data] = []
+    private var pendingInboundOverlayPayloadsMax = 0
+    private var inboundOverlayPayloadDrainScheduled = false
     private var coreRetryToken: UInt64?
     private var coreRetryWorkItem: DispatchWorkItem?
     private var coreReceiveEpoch: UInt64?
@@ -203,6 +211,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
         overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in
             self?.queue.async { self?.applyCoreEffects(effects) }
+        }
+        overlayLayerTransportAdapter?.setPendingSecureLinkPayloadWorkSink { [weak self] in
+            self?.scheduleSecureLinkPayloadDrain()
         }
     }
 
@@ -524,6 +535,11 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             snapshot["rtt_est_ms"] = overlayRuntime.rttEstMS
             snapshot["transmit_delay_est_ms"] = overlayRuntime.transmitDelayEstMS
             snapshot["protocol_stats"] = protocolStats
+            snapshot["fifo_levels"] = [
+                "secure_link_pending_payloads": ["queued_messages": overlayLayerTransportAdapter?.pendingSecureLinkPayloadCount() ?? 0, "max_queued_messages_since_start": secureLinkPayloadQueuedMax],
+                "outbound_mux_frames": ["queued_messages": pendingOutboundMuxFrames.count, "max_queued_messages_since_start": pendingOutboundMuxFramesMax],
+                "inbound_overlay_payloads": ["queued_messages": pendingInboundOverlayPayloads.count, "max_queued_messages_since_start": pendingInboundOverlayPayloadsMax],
+            ]
             snapshot["next_address_attempt_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()
             snapshot["restart_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()
             return snapshot
@@ -1046,30 +1062,33 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func routeOverlayPayloads(_ payloads: [Data]) {
-        guard !payloads.isEmpty else {
-            return
-        }
-        for payload in payloads {
-            if let adapter = overlayLayerTransportAdapter {
+        pendingInboundOverlayPayloads.append(contentsOf: payloads)
+        pendingInboundOverlayPayloadsMax = max(pendingInboundOverlayPayloadsMax, pendingInboundOverlayPayloads.count)
+        scheduleInboundOverlayPayloadDrain()
+    }
+
+    private func scheduleInboundOverlayPayloadDrain() {
+        guard !inboundOverlayPayloadDrainScheduled, !pendingInboundOverlayPayloads.isEmpty else { return }
+        inboundOverlayPayloadDrainScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.inboundOverlayPayloadDrainScheduled = false
+            let payload = self.pendingInboundOverlayPayloads.removeFirst()
+            if let adapter = self.overlayLayerTransportAdapter {
                 let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportSecureLinkRoute) {
-                    overlayRuntime.recordSecureLinkBoundaryFrame(direction: "to_securelink")
-                    let snapshot = adapter.handleInboundFrame(
-                        payload,
-                        observedPeerHost: currentPeerAddress?.host,
-                        observedPeerPort: currentPeerAddress?.port
-                    )
+                    self.overlayRuntime.recordSecureLinkBoundaryFrame(direction: "to_securelink")
+                    let snapshot = adapter.handleInboundFrame(payload, observedPeerHost: self.currentPeerAddress?.host, observedPeerPort: self.currentPeerAddress?.port)
                     for emitted in snapshot.emittedFrames {
-                        overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
-                        sendOverlayTransportPayload(emitted)
+                        self.overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+                        self.sendOverlayTransportPayload(emitted)
                     }
                     return snapshot
                 }
-                for delivered in snapshot.deliveredPayloads {
-                    handleOverlayPayload(delivered)
-                }
-                continue
+                snapshot.deliveredPayloads.forEach(self.handleOverlayPayload)
+            } else {
+                self.handleOverlayPayload(payload)
             }
-            handleOverlayPayload(payload)
+            self.scheduleInboundOverlayPayloadDrain()
         }
     }
 
@@ -1393,19 +1412,54 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func sendMuxFrames(_ muxFrames: [Data]) {
-        for muxFrame in muxFrames {
-            if let adapter = overlayLayerTransportAdapter {
+        pendingOutboundMuxFrames.append(contentsOf: muxFrames)
+        pendingOutboundMuxFramesMax = max(pendingOutboundMuxFramesMax, pendingOutboundMuxFrames.count)
+        scheduleOutboundMuxFrameDrain()
+    }
+
+    private func scheduleOutboundMuxFrameDrain() {
+        guard !outboundMuxFrameDrainScheduled, !pendingOutboundMuxFrames.isEmpty else { return }
+        outboundMuxFrameDrainScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.outboundMuxFrameDrainScheduled = false
+            let muxFrame = self.pendingOutboundMuxFrames.removeFirst()
+            if let adapter = self.overlayLayerTransportAdapter {
                 do {
                     let snapshot = try adapter.handleOutboundPayload(muxFrame)
                     for secureFrame in snapshot.emittedFrames {
-                        overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
-                        sendOverlayTransportPayload(secureFrame)
+                        self.overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+                        self.sendOverlayTransportPayload(secureFrame)
                     }
+                    self.secureLinkPayloadQueuedMax = max(self.secureLinkPayloadQueuedMax, snapshot.queuedPayloads)
+                    if snapshot.queuedPayloads > 0 { self.scheduleSecureLinkPayloadDrain() }
                 } catch {
-                    eventSink?("udp_overlay_overlay_layer_send_failed", ["error": error.localizedDescription, "packet_bytes": muxFrame.count])
+                    self.eventSink?("udp_overlay_overlay_layer_send_failed", ["error": error.localizedDescription, "packet_bytes": muxFrame.count])
                 }
             } else {
-                sendOverlayTransportPayload(muxFrame)
+                self.sendOverlayTransportPayload(muxFrame)
+            }
+            self.scheduleOutboundMuxFrameDrain()
+        }
+    }
+
+    private func scheduleSecureLinkPayloadDrain() {
+        guard !secureLinkPayloadDrainScheduled else { return }
+        secureLinkPayloadDrainScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.secureLinkPayloadDrainScheduled = false
+            guard let adapter = self.overlayLayerTransportAdapter else { return }
+            do {
+                let snapshot = try adapter.drainOnePendingSecureLinkPayload()
+                for frame in snapshot.emittedFrames {
+                    self.overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+                    self.sendOverlayTransportPayload(frame)
+                }
+                self.secureLinkPayloadQueuedMax = max(self.secureLinkPayloadQueuedMax, snapshot.queuedPayloads)
+                if snapshot.queuedPayloads > 0 { self.scheduleSecureLinkPayloadDrain() }
+            } catch {
+                self.eventSink?("udp_overlay_secure_link_pending_payload_failed", ["error": error.localizedDescription])
             }
         }
     }

@@ -40,7 +40,6 @@ public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
         case appleTransportTcpConnectionStart = "apple_transport_tcp_connection_start"
         case appleTransportTcpReceiveRegistration = "apple_transport_tcp_receive_registration"
         case appleTransportLifecycle = "apple_transport_lifecycle"
-        case secureLinkWorker = "securelink_worker"
         case controlTick = "control_tick"
         case retransmitTick = "retransmit_tick"
         case retransmitReportedMissing = "retransmit_reported_missing"

@@ -35,6 +35,12 @@ def _unused_udp_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _unused_tcp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 async def _with_websocket_echo() -> tuple[str, list[dict[str, Any]], Any]:
     import websockets
 
@@ -265,6 +271,7 @@ def test_e2e_runner_ws_secure_link_reports_startup_failure_on_missing_peer() -> 
 
 def test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state() -> None:
     async def scenario() -> None:
+        admin_web_port = _unused_tcp_port()
         report = await run_runtime_config(
             config={
                 "overlay_transport": "ws",
@@ -272,7 +279,7 @@ def test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state() -> N
                 "ws_peer_port": 9,
                 "admin_web": True,
                 "admin_web_bind": "127.0.0.1",
-                "admin_web_port": 18080,
+                "admin_web_port": admin_web_port,
                 "status": False,
             },
             hold_sec=0.0,
@@ -281,7 +288,7 @@ def test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state() -> N
         assert report["ok"] is True
         assert report["probe"] == "runtime-config"
         assert report["started"] is True
-        assert report["webadmin_url"] == "http://127.0.0.1:18080/"
+        assert report["webadmin_url"] == f"http://127.0.0.1:{admin_web_port}/"
 
     asyncio.run(scenario())
 
