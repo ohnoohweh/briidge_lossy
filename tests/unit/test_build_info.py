@@ -73,7 +73,9 @@ def test_python_preview_workflow_stamps_and_probes_the_extracted_artifact() -> N
 
     assert 'git archive HEAD | tar -x -C "${artifact_root}"' in content
     assert '--python-target "${artifact_root}/src/obstacle_bridge/_generated/build_info_generated.py"' in content
-    assert '(cd "${artifact_root}" && PYTHONPATH="${artifact_root}" python - <<PY' in content
+    assert 'probe_root="$(mktemp -d)"' in content
+    assert 'unzip -q dist/python/ObstacleBridge-python-preview.zip -d "${probe_root}"' in content
+    assert '(cd "${probe_root}/ObstacleBridge-python-preview" && PYTHONPATH=. python - <<PY' in content
     assert 'info["source"] == "embedded-build-info"' in content
 
 
@@ -81,6 +83,8 @@ def test_synology_preview_workflow_probes_the_extracted_payload() -> None:
     workflow = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "publish-synology-preview.yml"
     content = workflow.read_text(encoding="utf-8")
 
-    assert "nested.extractall('dist/synology/extracted')" in content
+    assert 'python -m pip install --disable-pip-version-check cryptography' in content
+    assert "tempfile.TemporaryDirectory(prefix='obstaclebridge-spk-probe-')" in content
+    assert 'nested.extractall(probe_root)' in content
     assert "from obstacle_bridge.bridge import _detect_build_info" in content
     assert "os.environ['GITHUB_SHA'][:8]" in content

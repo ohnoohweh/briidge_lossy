@@ -29,30 +29,35 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install package probe dependency
+        run: python -m pip install --disable-pip-version-check cryptography
+
       - name: Build and verify the DSM package
         run: |
           set -euo pipefail
           python scripts/build_synology_spk.py --build-number "${{ github.run_number }}"
           python - <<'PY'
+          import os
           import pathlib
           import tarfile
+          import tempfile
 
           package = next(pathlib.Path('dist/synology').glob('*.spk'))
-          with tarfile.open(package) as archive:
-              assert 'INFO' in archive.getnames()
-              assert 'package.tgz' in archive.getnames()
-              payload = archive.extractfile('package.tgz')
-              assert payload is not None
-              with tarfile.open(fileobj=payload, mode='r:gz') as nested:
-                  nested.extractall('dist/synology/extracted')
-          import os
-          import sys
-          sys.path.insert(0, 'dist/synology/extracted/src')
-          from obstacle_bridge.bridge import _detect_build_info
-          info = _detect_build_info()
-          assert info['commit'] == os.environ['GITHUB_SHA'][:8], info
-          assert info['source'] == 'embedded-build-info', info
-          assert info['available'] is True, info
+          with tempfile.TemporaryDirectory(prefix='obstaclebridge-spk-probe-') as probe_root:
+              with tarfile.open(package) as archive:
+                  assert 'INFO' in archive.getnames()
+                  assert 'package.tgz' in archive.getnames()
+                  payload = archive.extractfile('package.tgz')
+                  assert payload is not None
+                  with tarfile.open(fileobj=payload, mode='r:gz') as nested:
+                      nested.extractall(probe_root)
+              import sys
+              sys.path.insert(0, str(pathlib.Path(probe_root) / 'src'))
+              from obstacle_bridge.bridge import _detect_build_info
+              info = _detect_build_info()
+              assert info['commit'] == os.environ['GITHUB_SHA'][:8], info
+              assert info['source'] == 'embedded-build-info', info
+              assert info['available'] is True, info
           print(package)
           PY
           sha256sum dist/synology/*.spk > dist/synology/ObstacleBridge-synology-preview.spk.sha256

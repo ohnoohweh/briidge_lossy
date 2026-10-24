@@ -568,7 +568,9 @@ Implementation note: [ARCHITECTURE.md](ARCHITECTURE.md) now also defines the ove
   checkout identity. A Git-less deployed runtime uses the generated stamp supplied by its
   deployment. The named Python release ZIP and Synology SPK shall create that
   stamp in their temporary artifact payload from the release target and probe
-  an extracted Git-less payload before publication. Python source-checkout,
+  an extracted Git-less payload outside the checkout before publication; that
+  probe shall install the packaged runtime's declared import dependencies.
+  Python source-checkout,
   Linux, macOS, and iOS products use that same display format. A reusable
   embedded host reports `available=false` rather than inventing an identity.
   Implementation note: the portable runtime-health record and bounded ring are

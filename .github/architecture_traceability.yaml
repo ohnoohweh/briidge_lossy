@@ -843,6 +843,8 @@ ARC-CMP-005:
     - tests/unit/test_build_info.py::test_detect_build_info_prefers_live_git_over_generated_stamp
     - tests/unit/test_build_info.py::test_detect_build_info_uses_generated_stamp_without_git
     - tests/unit/test_build_info.py::test_vps_updater_refreshes_build_metadata_before_syncing
+    # Release artifacts are probed from external temporary extraction roots so
+    # a parent checkout cannot supply live Git identity during validation.
     - tests/unit/test_build_info.py::test_python_preview_workflow_stamps_and_probes_the_extracted_artifact
     - tests/unit/test_build_info.py::test_synology_preview_workflow_probes_the_extracted_payload
     - tests/unit/test_managed_logging_worker.py::test_peer_child_logs_follow_collector_replacement
