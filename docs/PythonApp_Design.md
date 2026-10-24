@@ -54,6 +54,7 @@ does not make the entire application root-owned by default.
 | Scenario | Git available at runtime | Identity source | Status |
 | --- | --- | --- | --- |
 | Developer clone | yes | live Git | supported development workflow |
+| In-place source update + WebAdmin restart | yes | live Git in the fresh supervised child | supported source-checkout update workflow |
 | `scripts/update_VPS.sh` from a clone | source side only | freshly generated stamp | supported VPS update workflow |
 | Repository-page **Download ZIP** | no | none in the GitHub-generated archive | runnable source, but not identity-preserving |
 | Release `ObstacleBridge-python*.zip` asset | no | generated stamp packaged with asset | supported portable Python artifact |
@@ -67,6 +68,27 @@ The developer clones the repository and runs from that working tree. Git is
 present, so the WebAdmin reports the checked-out commit and any local changes.
 A stale generated deployment stamp must never override this view. This is the
 only scenario where a dirty state is expected during normal operation.
+
+### In-place source update with WebAdmin restart
+
+The default `python -m obstacle_bridge` launcher remains running while its
+bridge child exits for an Admin-requested restart. An operator may update the
+same source checkout from the old revision to a new revision, then request
+**Restart** from WebAdmin. The launcher starts a fresh child interpreter, so
+the updated Python files become active without manually relaunching the
+supervisor.
+
+The fresh child re-probes the resolved checkout with read-only Git commands
+that explicitly trust that one path. This keeps the live Git identity available
+when the launcher/child runs as `root` but the checkout belongs to the invoking
+developer, a configuration Git otherwise rejects as a dubious owner. The
+runtime does not modify Git configuration. The new child must report the new
+commit (or a clearly tainted state) through `/api/meta` and `/api/status`.
+
+This workflow is only safe when replacement is complete before restart: do not
+restart while a checkout is partially copied. For Git-less deployed trees, use
+the VPS updater or another deployment process that writes a new stamp before
+requesting the restart.
 
 ### VPS update from a clone
 

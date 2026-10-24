@@ -837,6 +837,8 @@ ARC-CMP-005:
   # vocabulary and payload-free host operational events.
   # The private Admin-worker boundary returns that same envelope.
   unit_tests:
+    # Build identity is re-probed by each supervised Python child, including
+    # elevated restarts against a developer-owned source checkout.
     - tests/unit/test_build_info.py::test_detect_build_info_prefers_live_git_over_generated_stamp
     - tests/unit/test_build_info.py::test_detect_build_info_uses_generated_stamp_without_git
     - tests/unit/test_build_info.py::test_vps_updater_refreshes_build_metadata_before_syncing

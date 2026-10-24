@@ -560,8 +560,12 @@ Implementation note: [ARCHITECTURE.md](ARCHITECTURE.md) now also defines the ove
   Implementation note: `/api/status` and `/api/meta` expose availability,
   standard first-eight-character commit id, build timestamp, taint, and
   tracked/untracked-change counts. A Python source checkout obtains those
-  fields from its live Git repository in preference to any generated stamp;
-  a Git-less deployed runtime uses the generated stamp supplied by its
+  fields from its live Git repository in preference to any generated stamp,
+  including when a supervised child runs under a different local user; its
+  read-only Git commands shall trust only the resolved checkout path and shall
+  not modify Git configuration. An Admin-requested restart after a complete
+  in-place source update shall start a fresh child that reports the updated
+  checkout identity. A Git-less deployed runtime uses the generated stamp supplied by its
   deployment. The named Python release ZIP and Synology SPK shall create that
   stamp in their temporary artifact payload from the release target and probe
   an extracted Git-less payload before publication. Python source-checkout,
