@@ -1695,6 +1695,7 @@ REQ-ADM-001:
     - tests/unit/test_runtime_metrics.py::test_runner_runtime_metrics_status_is_bounded_and_redacted
     - tests/unit/test_runtime_metrics.py::test_runner_records_completed_runtime_scope_without_retaining_individual_events
     - tests/unit/test_runtime_metrics.py::test_runner_keeps_webadmin_snapshot_components_separate
+    - tests/unit/test_runtime_metrics.py::test_enabled_collector_status_uses_async_throttled_spool_snapshot
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::retainsOnlyApprovedAggregateTimingAndTrailingWindow
     # Compiles the instrumented Core overlay paths with the metrics dependency.
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_securelink_nonce_parity

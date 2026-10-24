@@ -195,6 +195,7 @@ class Runner:
 
     RUNTIME_METRICS_SAMPLE_INTERVAL_NS = 1_000_000_000
     RUNTIME_METRICS_LAG_INTERVAL_NS = 250_000_000
+    TELEMETRY_COLLECTOR_STATUS_REFRESH_SECONDS = 5.0
 
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -221,6 +222,10 @@ class Runner:
         self._tun_helper_process: Optional[asyncio.subprocess.Process] = None
         self._telemetry_collector_process: Optional[asyncio.subprocess.Process] = None
         self._telemetry_collector_last_error: str = ""
+        self._telemetry_collector_status_snapshot: dict[str, Any] = {}
+        self._telemetry_collector_status_task: Optional[asyncio.Task] = None
+        self._telemetry_collector_status_directory: str = ""
+        self._telemetry_collector_status_refreshed_monotonic: float = 0.0
         self._telemetry_client_task: Optional[asyncio.Task] = None
         self._telemetry_emitter: Optional[TelemetryEmitter] = None
         self._telemetry_spool: Optional[TelemetrySpool] = None
@@ -430,6 +435,52 @@ class Runner:
         print(text, file=sys.stdout, flush=True)
         self.log.warning("[TELEMETRY] %s", text)
 
+    @staticmethod
+    def _read_telemetry_collector_status(spool_directory: str) -> dict:
+        spool = {}
+        collector_status = {}
+        if spool_directory:
+            with contextlib.suppress(Exception):
+                spool = TelemetrySpool(spool_directory).status()
+            with contextlib.suppress(Exception):
+                collector_status = json.loads(
+                    (pathlib.Path(spool_directory) / "collector-status.json").read_text(encoding="utf-8")
+                )
+        return {"spool": spool, "collector_status": collector_status}
+
+    async def _refresh_telemetry_collector_status(self, spool_directory: str) -> None:
+        try:
+            snapshot = await asyncio.to_thread(self._read_telemetry_collector_status, spool_directory)
+            if spool_directory == getattr(self, "_telemetry_collector_status_directory", ""):
+                self._telemetry_collector_status_snapshot = snapshot
+        except Exception:
+            pass
+        finally:
+            if spool_directory == getattr(self, "_telemetry_collector_status_directory", ""):
+                self._telemetry_collector_status_refreshed_monotonic = time.monotonic()
+            self._telemetry_collector_status_task = None
+
+    def _schedule_telemetry_collector_status_refresh(self, spool_directory: str) -> None:
+        task = getattr(self, "_telemetry_collector_status_task", None)
+        if task is not None and not task.done():
+            return
+        now = time.monotonic()
+        if (
+            spool_directory == getattr(self, "_telemetry_collector_status_directory", "")
+            and now - float(getattr(self, "_telemetry_collector_status_refreshed_monotonic", 0.0))
+            < self.TELEMETRY_COLLECTOR_STATUS_REFRESH_SECONDS
+        ):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._telemetry_collector_status_directory = spool_directory
+        self._telemetry_collector_status_task = loop.create_task(
+            self._refresh_telemetry_collector_status(spool_directory),
+            name="telemetry-collector-status-refresh",
+        )
+
     async def _start_telemetry_collector(self) -> None:
         if not bool(getattr(self.args, "telemetry_collector_enabled", False)):
             return
@@ -483,14 +534,10 @@ class Runner:
                 "ingest_last_error": None,
             }
         spool_directory = str(getattr(self.args, "telemetry_collector_spool_directory", "") or "").strip()
-        spool = {}
-        if spool_directory:
-            with contextlib.suppress(Exception):
-                spool = TelemetrySpool(spool_directory).status()
-        collector_status = {}
-        if spool_directory:
-            with contextlib.suppress(Exception):
-                collector_status = json.loads((pathlib.Path(spool_directory) / "collector-status.json").read_text(encoding="utf-8"))
+        self._schedule_telemetry_collector_status_refresh(spool_directory)
+        cached = dict(getattr(self, "_telemetry_collector_status_snapshot", {}) or {})
+        spool = dict(cached.get("spool") or {})
+        collector_status = dict(cached.get("collector_status") or {})
         return {
             "enabled": enabled,
             "runtime_state": "running" if running else "disabled" if not enabled else "not_running",
@@ -505,6 +552,12 @@ class Runner:
         }
 
     async def _stop_telemetry_collector(self) -> None:
+        refresh_task = getattr(self, "_telemetry_collector_status_task", None)
+        self._telemetry_collector_status_task = None
+        if refresh_task is not None and not refresh_task.done():
+            refresh_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await refresh_task
         proc = self._telemetry_collector_process
         self._telemetry_collector_process = None
         if proc is None or proc.returncode is not None:
