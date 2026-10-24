@@ -7461,14 +7461,18 @@ def test_linux_swift_proxy_logs_follow_collector(tmp_path: Path, proxy_implement
         pytest.skip('Linux Swift process E2E coverage requires Linux')
     binary_path = _linux_swift_runner_binary()
     peer = LinuxSwiftSecureLinkPeer('tcp', b'linux-swift-logging-psk', keep_open=True)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
-        reservation.bind(('127.0.0.1', 0))
-        admin_port = int(reservation.getsockname()[1])
+    implementation_index = (0 if proxy_implementation == 'python' else 1) * 2 + (0 if log_implementation == 'python' else 1)
+    # Give each xdist worker and parameter combination an independent loopback
+    # address. Reserving then releasing 127.0.0.1:0 is racy: another worker
+    # can bind the selected port before this native Admin server starts.
+    admin_port = alloc_admin_port(case_index=8_820 + implementation_index)
+    admin_url = _admin_http_url(admin_port, '')
     config_path = tmp_path / 'proxy-logging.json'
     config_path.write_text(json.dumps({
         'runner': {'overlay_transport': 'tcp'},
         'tcp_session': {'tcp_peer': '127.0.0.1', 'tcp_peer_port': peer.port},
         'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': 'linux-swift-logging-psk'},
+        'admin_web': {'admin_web_bind': _admin_host_for_port(admin_port)},
         'debug_logging': {'log_worker': log_implementation, 'log_worker_python_executable': sys.executable},
         'proxy_provider': {
             'enabled': True, 'bind': '127.0.0.1', 'http_port': 0, 'socks5_port': 0,
@@ -7483,7 +7487,7 @@ def test_linux_swift_proxy_logs_follow_collector(tmp_path: Path, proxy_implement
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
                 try:
-                    _, result = fetch_json(f'http://127.0.0.1:{admin_port}{path}', timeout=1)
+                    _, result = fetch_json(f'{admin_url}{path}', timeout=1)
                     if predicate(result):
                         return result
                 except (OSError, ValueError):
