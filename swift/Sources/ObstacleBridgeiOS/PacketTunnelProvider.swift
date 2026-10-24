@@ -1852,6 +1852,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "max_queued_packets_since_start": bridgeSnapshot["outgoing_queue_max_since_start"] ?? 0,
             "max_queued_packets_last_2_seconds": bridgeSnapshot["outgoing_queue_max_last_2_seconds"] ?? 0,
         ]
+        payload["packet_flow_capture"] = bridgeSnapshot["packetflow_pcap"] ?? ["enabled": false]
         if !effectivePacketTunnelSettingsState.isEmpty {
             payload["included_routes"] = Self.ipv4RouteCIDRList(effectivePacketTunnelSettingsState["included_routes"])
             payload["excluded_routes"] = Self.ipv4RouteCIDRList(effectivePacketTunnelSettingsState["excluded_routes"])
@@ -3555,7 +3556,23 @@ private final class SwiftSimpleUDPPeerBridge {
     func start() {
         guard !started, let provider else { return }
         started = true
-        ObstacleBridgePacketFlowBridge.activate(provider: provider, tunnelAddress: tunnelAddress, mtu: settings.mtu)
+        let captureEnabled = ObstacleBridgeRuntimeConfig.boolValue(
+            from: settings.runtimeConfig["packetflow_pcap_enabled"]
+        ) ?? false
+        let captureMaxBytes = ObstacleBridgeRuntimeConfig.intValue(
+            from: settings.runtimeConfig["packetflow_pcap_max_bytes"]
+        ) ?? ObstacleBridgeRuntimeConfig.packetFlowPCAPDefaultMaximumBytes
+        let captureRetentionFiles = ObstacleBridgeRuntimeConfig.intValue(
+            from: settings.runtimeConfig["packetflow_pcap_retention_files"]
+        ) ?? ObstacleBridgeRuntimeConfig.packetFlowPCAPDefaultRetentionFiles
+        ObstacleBridgePacketFlowBridge.activate(
+            provider: provider,
+            tunnelAddress: tunnelAddress,
+            mtu: settings.mtu,
+            pcapEnabled: captureEnabled,
+            pcapMaximumBytes: captureMaxBytes,
+            pcapRetentionFiles: captureRetentionFiles
+        )
         startedAt = Date().timeIntervalSince1970
         currentPeerSelectedAtNS = monotonicNowNS()
         lastInboundDatagramNS = 0

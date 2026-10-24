@@ -17,6 +17,10 @@ enum ObstacleBridgeRuntimeConfig {
     /// its status schema and capacity are shared so WebAdmin payload consumers
     /// do not need a platform-private vocabulary.
     static let packetFlowFIFOQueueCapacity = 2048
+    /// PacketFlow PCAP capture is iOS-only, but its defaults are shared so the
+    /// configuration and status vocabulary does not need platform-private values.
+    static let packetFlowPCAPDefaultMaximumBytes = 16 * 1_024 * 1_024
+    static let packetFlowPCAPDefaultRetentionFiles = 2
     // Packaged-host qualification may provide an isolated runtime config
     // without changing either platform's durable app-scoped configuration.
     // The macOS primary app and host runner consume this shared vocabulary;

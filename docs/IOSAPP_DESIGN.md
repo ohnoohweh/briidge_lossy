@@ -834,6 +834,8 @@ Packet-path review outcome:
   - remote peer over SecureLink and selected transport
   - returning TUN payloads back through the same bridge to `NEPacketTunnelFlow.writePackets`
 
+Packet-flow PCAP capture is diagnostic-only. It is disabled for normal tunnel operation and may be enabled explicitly through `iOS_TUN_connector.packetflow_pcap_enabled` before restarting the tunnel. Enabled capture is intentionally bounded per direction, uses a bounded asynchronous writer backlog and batched filesystem synchronization, and retains only the configured number of prior captures. Packet-flow status exposes capture state and limits so an operator can distinguish diagnostic capture from normal forwarding.
+
 Current route policy:
 
 - Default included route: `0.0.0.0/0`

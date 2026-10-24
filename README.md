@@ -1770,6 +1770,9 @@ compression, timer, detailed myUDP receive/retransmit boundaries, and its
 actionable leaf transport boundaries. On iOS, the TUN / Routing page also
 shows the packet-flow FIFO high-water level for the trailing two seconds and
 since extension-process start, with its fixed 2,048-packet capacity.
+Packet-flow PCAP capture is an opt-in, bounded iOS diagnostic facility rather
+than a standard forwarding feature; its status reports capture limits and
+writer state when enabled.
 Trailing-two-second projection reads only
 the matching rolling slots per category, and Swift derives recent maxima in one
 pass over its bounded aggregate set.

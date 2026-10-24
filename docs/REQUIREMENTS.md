@@ -641,6 +641,8 @@ Runtime Analysis excludes `apple_transport_tun_payload`: its shared-TUN data gua
 
 Implementation note: the iOS `TUN / Routing` WebAdmin status exposes the packet-flow FIFO capacity, current level, high-water level since extension-process start, and trailing-two-second high-water level. The latter uses a fixed 100 ms-bucket rolling window, so it remains bounded under packet load. The browser displays the two high-water values with the 2,048-packet capacity and displays `n/a` where a runtime has no iOS packet-flow FIFO.
 
+PacketFlow PCAP capture is an exceptional iOS diagnostic facility, disabled by default. When explicitly enabled in `iOS_TUN_connector`, each direction has a bounded file size, a bounded 64-packet writer backlog, batched durability synchronization, and bounded per-direction retained-file count. Its runtime snapshot exposes enabled state, file limits, paths, writer backlog, written bytes, dropped capture packets, and limit state; normal forwarding never opens or writes a PCAP file.
+
 The Runner status projection exposes only cached aggregate timing summaries, lifetime/trailing-two-second maxima, and the source category for each uninterrupted peak; WebAdmin renders compact top-bar meters and Runtime Analysis supplies the textual detail.
 The trailing-two-second metrics projection reads only its matching fixed rolling slots per category; Swift derives recent category maxima in one pass over its bounded aggregate set.
 The local lifecycle smoke requires neither a TUN device nor an overlay peer.
