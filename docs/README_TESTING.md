@@ -984,7 +984,7 @@ Unit tests usually do not prove full black-box behavior on their own. Their main
 
 The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.md). The `Architectural component` column below uses the stable component IDs defined there so the traceability stays durable even if section titles are reworded later.
 
-Runtime-metric source guards exclude inclusive queue, transaction, payload-batch, payload-delivery, and TCP-message-dispatch wrappers, so Runtime Analysis can select only an actionable uninterrupted scope.
+Runtime-metric source guards exclude inclusive queue, transaction, payload-batch, payload-delivery, TCP-message-dispatch, and TUN-payload wrappers, so Runtime Analysis can select only an actionable uninterrupted scope.
 
 ### First traceability mapping for the unit suite
 

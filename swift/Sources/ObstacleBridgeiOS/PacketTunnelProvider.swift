@@ -3547,6 +3547,7 @@ private final class SwiftSimpleUDPPeerBridge {
     func start() {
         guard !started, let provider else { return }
         started = true
+        ObstacleBridgePacketFlowBridge.activate(provider: provider, tunnelAddress: tunnelAddress, mtu: settings.mtu)
         startedAt = Date().timeIntervalSince1970
         currentPeerSelectedAtNS = monotonicNowNS()
         lastInboundDatagramNS = 0
@@ -3622,6 +3623,9 @@ private final class SwiftSimpleUDPPeerBridge {
     func stop() {
         guard started else { return }
         started = false
+        // Fence and discard deferred PacketFlow writes before stopping the
+        // transport owners, so a queued packet cannot cross a tunnel restart.
+        ObstacleBridgePacketFlowBridge.deactivate()
         peerFallbackTimer?.cancel()
         peerFallbackTimer = nil
         readSource?.cancel()
@@ -4109,10 +4113,13 @@ private final class SwiftSimpleUDPPeerBridge {
             recordTunICMPStage("from_peer_before_local_write")
             recordTunICMPStage("local_reply_virtual_probe_delivery")
         }
-        guard let provider else {
+        let accepted = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTunSystemEnqueue) {
+            ObstacleBridgePacketFlowBridge.writePacket(packet as NSData)
+        }
+        guard accepted else {
+            sendFailures += 1
             return
         }
-        provider.packetFlow.writePackets([packet], withProtocols: [NSNumber(value: Self.protocolFamily(for: packet))])
         packetsToSystem += 1
         bytesToSystem += packet.count
         writeBatches += 1

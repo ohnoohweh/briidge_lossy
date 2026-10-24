@@ -626,6 +626,8 @@ Runtime Analysis excludes `apple_transport_payload_route` and `apple_transport_d
 
 Runtime Analysis also excludes `apple_transport_tcp_payload`: it wraps TCP OPEN/DATA/CLOSE handling. TCP server-data, client-open, client-data, write-enqueue, and close metrics remain eligible to identify the leading work.
 
+Runtime Analysis excludes `apple_transport_tun_payload`: its shared-TUN data guard, fragment reassembly, peer-relay, bounded system-write enqueue, and dedicated packet-flow write are measured separately. The packet-flow handoff preserves FIFO ordering, caps its queue at 2,048 packets, writes batches of at most 64 packets on a dedicated serial queue, and uses a generation fence on stop/restart to discard stale queued packets.
+
 The Runner status projection exposes only cached aggregate timing summaries, lifetime/trailing-two-second maxima, and the source category for each uninterrupted peak; WebAdmin renders compact top-bar meters and Runtime Analysis supplies the textual detail.
 The trailing-two-second metrics projection reads only its matching fixed rolling slots per category; Swift derives recent category maxima in one pass over its bounded aggregate set.
 The local lifecycle smoke requires neither a TUN device nor an overlay peer.

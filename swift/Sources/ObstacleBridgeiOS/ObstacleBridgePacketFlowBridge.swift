@@ -537,7 +537,9 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 return
             }
             let started = CFAbsoluteTimeGetCurrent()
-            provider.packetFlow.writePackets(batch.0, withProtocols: batch.1)
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTunSystemWrite) {
+                provider.packetFlow.writePackets(batch.0, withProtocols: batch.1)
+            }
             let elapsedMs = (CFAbsoluteTimeGetCurrent() - started) * 1000.0
             recordOutgoingWriteCompletion(
                 provider: provider,

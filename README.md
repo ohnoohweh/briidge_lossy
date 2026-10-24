@@ -1751,7 +1751,7 @@ session summaries, worker state, telemetry state, TUN-helper state, peer-stack
 state, runtime-metrics/health projection,
 connections, peer inventory, build-info, security-advisor, logging, ChannelMux,
 and TUN boundaries are displayed as event-loop occupancy estimates. Inclusive
-queue, transaction, payload-batch, or TCP-message-dispatch wrappers that span separately measurable subtasks are not
+queue, transaction, payload-batch, TCP-message-dispatch, or TUN-payload wrappers that span separately measurable subtasks are not
 shown as uninterrupted-work signals. The
 portable Swift Core supplies the same redacted runtime-metrics
 status shape to Linux, macOS, and iOS hosts for its shared overlay, SecureLink,

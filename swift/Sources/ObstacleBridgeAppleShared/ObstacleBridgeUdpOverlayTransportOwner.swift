@@ -1182,9 +1182,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
         switch frame.proto {
         case .tun:
-            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTunPayload) {
-                handleInboundTunMuxFrame(frame)
-            }
+            handleInboundTunMuxFrame(frame)
         case .tcp:
             tcpTransportOwner.handleInboundMuxFrame(frame)
         case .udp:

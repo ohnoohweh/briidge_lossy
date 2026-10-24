@@ -650,6 +650,13 @@ per-payload SecureLink, ChannelMux-dispatch, TCP message-type, and TUN/UDP leaf
 scopes that identify the leading uninterrupted operation. The fixed,
 aggregate-only vocabulary permits up to 56 categories.
 
+`apple_transport_tun_payload` is likewise absent. TUN analysis records shared
+data admission/filtering, fragment reassembly, peer relay, bounded system-write
+enqueue, and the dedicated packet-flow write separately. The iOS system-write
+handoff is a FIFO capped at 2,048 packets, writes batches of at most 64 packets
+on its own serial queue, and generation-fences/drains queued work on stop so a
+stale packet cannot cross a tunnel lifecycle boundary.
+
 The Runtime Analysis trailing-two-second projection reads only the matching
 fixed rolling slots for each category rather than scanning the full retained
 minute. The equivalent Swift projection derives all recent category maxima in
