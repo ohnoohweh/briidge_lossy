@@ -147,7 +147,8 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
                         throw ProbeError.badState("missing server handshake acknowledgement")
                     }
                     let clientConfirmed = client.handleInboundFrame(serverHandshakeAck)
-                    guard let flushedClientDataFrame = clientConfirmed.emittedFrames.first else {
+                    let clientDrain = try client.drainOnePendingSecureLinkPayload()
+                    guard let flushedClientDataFrame = clientDrain.emittedFrames.first else {
                         throw ProbeError.badState("missing flushed client data")
                     }
                     let serverData = server.handleInboundFrame(flushedClientDataFrame)
@@ -172,6 +173,7 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
                         "queued_client_frames": clientQueued.emittedFrames.count,
                         "client_auth_frames": clientAuth.emittedFrames.count,
                         "client_confirmed_frames": clientConfirmed.emittedFrames.count,
+                        "client_drain_frames": clientDrain.emittedFrames.count,
                         "server_auth_frames": serverProof.emittedFrames.count,
                         "client_compress_applied": clientCompress.statusSnapshot().compressAppliedTotal,
                         "server_decompress_ok": serverCompress.statusSnapshot().decompressOKTotal,
@@ -205,7 +207,8 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
     assert payload == {
         "queued_client_frames": 1,
         "client_auth_frames": 1,
-        "client_confirmed_frames": 1,
+        "client_confirmed_frames": 0,
+        "client_drain_frames": 1,
         "server_auth_frames": 1,
         "client_compress_applied": 1,
         "server_decompress_ok": 1,
