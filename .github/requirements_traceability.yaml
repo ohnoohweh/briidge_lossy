@@ -1625,6 +1625,8 @@ REQ-ADM-001:
   # Build-identity coverage proves that a supervised Python child can perform
   # read-only Git probes against its resolved source checkout under a different
   # local user, so an Admin-requested restart reports the updated checkout.
+  # Release-preview probes extract Python ZIP and SPK payloads outside that
+  # checkout and install the SPK import dependency before verifying the stamp.
   # Python and native macOS/Linux TUN helpers now use generation-fenced OBIP
   # HELLO/READY, request/response/event/data frames; qualification remains IPC-1H work.
   # UDP logging targets remain direct host:port configuration values rather

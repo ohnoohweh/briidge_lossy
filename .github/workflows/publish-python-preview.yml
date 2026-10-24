@@ -34,7 +34,13 @@ jobs:
           git archive HEAD | tar -x -C "${artifact_root}"
           python scripts/write_build_info.py --python-target "${artifact_root}/src/obstacle_bridge/_generated/build_info_generated.py"
           expected_commit="$(git rev-parse --short=8 HEAD)"
-          (cd "${artifact_root}" && PYTHONPATH="${artifact_root}" python - <<PY
+          mkdir -p dist/python
+          (cd dist/python/staging && zip -qr ../ObstacleBridge-python-preview.zip ObstacleBridge-python-preview)
+          unzip -t dist/python/ObstacleBridge-python-preview.zip
+          probe_root="$(mktemp -d)"
+          trap 'rm -rf "${probe_root}"' EXIT
+          unzip -q dist/python/ObstacleBridge-python-preview.zip -d "${probe_root}"
+          (cd "${probe_root}/ObstacleBridge-python-preview" && PYTHONPATH=. python - <<PY
           from obstacle_bridge.bridge import _detect_build_info
 
           info = _detect_build_info()
@@ -43,9 +49,8 @@ jobs:
           assert info["available"] is True, info
           PY
           )
-          mkdir -p dist/python
-          (cd dist/python/staging && zip -qr ../ObstacleBridge-python-preview.zip ObstacleBridge-python-preview)
-          unzip -t dist/python/ObstacleBridge-python-preview.zip
+          rm -rf "${probe_root}"
+          trap - EXIT
           sha256sum dist/python/ObstacleBridge-python-preview.zip > dist/python/ObstacleBridge-python-preview.zip.sha256
 
       - name: Publish the Python source ZIP
