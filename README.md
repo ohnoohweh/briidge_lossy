@@ -1092,6 +1092,10 @@ An open WebAdmin page receives status and peer updates through the shared `/api/
 
 Python, Linux, macOS, and iOS products show their build identity in the WebAdmin headline and Runtime Metadata view. A Python source checkout reports its live Git revision and working-tree state; Git-less deployments report the build stamp generated immediately before deployment. The commit is always the standard first eight characters of the Git revision, with build timestamp and taint state.
 
+The [Python application deployment design](docs/PythonApp_Design.md) defines
+the identity and lifecycle contract for source checkouts, VPS updates, GitHub
+archives/releases, and Synology DSM SPK installation.
+
 The broader security design note in [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md) summarizes secure-link protection, WebAdmin auth, encrypted config-secret persistence, controlled secret reveal, API attack scenarios, malformed-frame handling, file-access threats, and remaining deployment boundaries.
 
 What the admin web shows:
