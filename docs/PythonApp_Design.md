@@ -56,7 +56,7 @@ does not make the entire application root-owned by default.
 | Developer clone | yes | live Git | supported development workflow |
 | `scripts/update_VPS.sh` from a clone | source side only | freshly generated stamp | supported VPS update workflow |
 | Repository-page **Download ZIP** | no | none in the GitHub-generated archive | runnable source, but not identity-preserving |
-| Release `ObstacleBridge-python*.zip` asset | no | generated stamp packaged with asset | intended supported portable Python artifact |
+| Release `ObstacleBridge-python*.zip` asset | no | generated stamp packaged with asset | supported portable Python artifact |
 | Release **Source code** ZIP/TAR.GZ | no | none in GitHub-generated archive | source inspection/bootstrap only, not identity-preserving |
 | Synology DSM SPK | no | stamp inside SPK payload | supported DSM package workflow within documented privilege limits |
 | Local wheel/sdist or container image | normally no | artifact stamp/label | future distribution form; must meet the same contract |
@@ -116,9 +116,9 @@ Installation is:
 5. point the service at external configuration/state; and
 6. start or restart the service.
 
-The current publishing workflow names an `ObstacleBridge-python-preview.zip`
-asset but produces it with `git archive`. Until that workflow stages and stamps
-the archive, it has the same identity limitation as the generic source ZIP.
+The publishing workflow stages tracked source, writes the stamp directly into
+that staged tree, creates the ZIP from the staged tree, and probes the
+extracted artifact with Git unavailable before publishing it.
 
 ### Release Source Code ZIP/TAR.GZ
 
@@ -139,8 +139,9 @@ packages Python source, WebAdmin assets, scripts, and DSM lifecycle files;
 DSM owns installation, upgrade, and restart. Persistent configuration and logs
 belong under DSM package state rather than the replaceable payload.
 
-The SPK builder must generate and package the same build stamp before its
-payload archive is assembled. The package remains Python-first and depends on
+The SPK builder writes the same build stamp into its temporary payload before
+the payload archive is assembled, and the release workflow probes the extracted
+payload with Git unavailable. The package remains Python-first and depends on
 SynoCommunity `python3.14`; its current helper handoff is an experimental
 package-user privilege boundary, not a root-owned TUN appliance. See
 [synology_design.md](synology_design.md) for DSM layout and lifecycle detail.
@@ -181,11 +182,16 @@ silently changing the identity shown to operators.
 
 ## Current limitations and next work
 
-- The VPS updater already refreshes the generated stamp before copying source.
-- Source checkouts already prefer live Git identity over a generated stamp.
-- The generic GitHub download/source-code archives intentionally have no stamp.
-- The named Python preview ZIP and the SPK builder need release-pipeline
-  staging/probe work to guarantee that their artifacts contain a fresh stamp.
+The following are delivered behaviors, not limitations:
+
+- The VPS updater refreshes the generated stamp before copying source.
+- Source checkouts prefer live Git identity over a generated stamp.
+
+The remaining limitation is intentional: generic GitHub download/source-code
+archives have no stamp, so they cannot report an auditable runtime identity
+without an external trusted build step. The named Python preview ZIP and SPK
+use a staged stamp plus an extracted-artifact probe.
+
 - A release artifact should eventually include a machine-readable manifest
   containing artifact name, commit, timestamp, dirty state, and SHA-256, in
   addition to the runtime stamp.

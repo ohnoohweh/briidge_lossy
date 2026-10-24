@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Write source metadata into the package so mobile builds can log their origin."""
+"""Write build metadata into packaged ObstacleBridge artifacts."""
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import subprocess
 from datetime import datetime, timezone
@@ -54,13 +55,14 @@ def _write_ios_generated_build_stamp(
 
 def _write_python_generated_build_info(
     *,
+    target: Path = PY_GENERATED_TARGET,
     commit: str,
     dirty: bool,
     diff_sha: str,
     build_timestamp_utc: str,
 ) -> None:
-    PY_GENERATED_TARGET.parent.mkdir(parents=True, exist_ok=True)
-    PY_GENERATED_TARGET.write_text(
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
         "\n".join(
             [
                 '"""Generated build metadata for packaged ObstacleBridge applications."""',
@@ -106,7 +108,14 @@ def _write_generated_json(
     )
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--python-target",
+        type=Path,
+        help="Write only the Python build stamp to this staged artifact path.",
+    )
+    args = parser.parse_args(argv)
     commit = _git(["rev-parse", "--short=8", "HEAD"]) or "unknown"
     status = _git(["status", "--porcelain"])
     diff = _git(["diff", "--binary", "HEAD"])
@@ -114,25 +123,27 @@ def main() -> int:
     build_timestamp_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     dirty = bool(status)
     _write_python_generated_build_info(
+        target=args.python_target or PY_GENERATED_TARGET,
         commit=commit,
         dirty=dirty,
         diff_sha=diff_sha,
         build_timestamp_utc=build_timestamp_utc,
     )
-    _write_generated_json(
-        commit=commit,
-        dirty=dirty,
-        diff_sha=diff_sha,
-        build_timestamp_utc=build_timestamp_utc,
-    )
-    _write_ios_generated_build_stamp(
-        commit=commit,
-        dirty=dirty,
-        diff_sha=diff_sha,
-        build_timestamp_utc=build_timestamp_utc,
-    )
+    if args.python_target is None:
+        _write_generated_json(
+            commit=commit,
+            dirty=dirty,
+            diff_sha=diff_sha,
+            build_timestamp_utc=build_timestamp_utc,
+        )
+        _write_ios_generated_build_stamp(
+            commit=commit,
+            dirty=dirty,
+            diff_sha=diff_sha,
+            build_timestamp_utc=build_timestamp_utc,
+        )
     print(
-        f"wrote {PY_GENERATED_TARGET} commit={commit} dirty={dirty} diff_sha={diff_sha or '-'} "
+        f"wrote {args.python_target or PY_GENERATED_TARGET} commit={commit} dirty={dirty} diff_sha={diff_sha or '-'} "
         f"build_timestamp_utc={build_timestamp_utc}"
     )
     return 0

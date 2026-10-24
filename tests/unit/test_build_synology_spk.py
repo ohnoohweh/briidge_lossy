@@ -1,5 +1,6 @@
 import io
 import pathlib
+import subprocess
 import tarfile
 from collections import Counter
 
@@ -60,6 +61,14 @@ def test_build_spk_emits_info_and_payload_archive(tmp_path: pathlib.Path):
             payload_names = set(payload_list)
             payload_counts = Counter(payload_list)
             assert "src/obstacle_bridge/bridge.py" in payload_names
+            stamp_member = payload_archive.extractfile("src/obstacle_bridge/_generated/build_info_generated.py")
+            assert stamp_member is not None
+            stamp = stamp_member.read().decode("utf-8")
+            expected_commit = subprocess.check_output(
+                ["git", "-C", str(repo_root()), "rev-parse", "--short=8", "HEAD"], text=True
+            ).strip()
+            assert f'BUILD_COMMIT = "{expected_commit}"' in stamp
+            assert 'BUILD_SOURCE = "embedded-build-info"' in stamp
             assert "admin_web/app.js" in payload_names
             assert "share/defaults/ObstacleBridge.cfg" in payload_names
             assert "bin/prepare_synology_helper_venv.sh" in payload_names

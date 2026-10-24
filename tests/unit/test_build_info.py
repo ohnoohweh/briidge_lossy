@@ -57,3 +57,22 @@ def test_vps_updater_refreshes_build_metadata_before_syncing() -> None:
 
     assert '"${PYTHON_BIN}" "${SOURCE_DIR}/scripts/write_build_info.py"' in content
     assert content.index("write_build_info.py") < content.index('copy_path "src"')
+
+
+def test_python_preview_workflow_stamps_and_probes_the_extracted_artifact() -> None:
+    workflow = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "publish-python-preview.yml"
+    content = workflow.read_text(encoding="utf-8")
+
+    assert 'git archive HEAD | tar -x -C "${artifact_root}"' in content
+    assert '--python-target "${artifact_root}/src/obstacle_bridge/_generated/build_info_generated.py"' in content
+    assert '(cd "${artifact_root}" && PYTHONPATH="${artifact_root}" python - <<PY' in content
+    assert 'info["source"] == "embedded-build-info"' in content
+
+
+def test_synology_preview_workflow_probes_the_extracted_payload() -> None:
+    workflow = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "publish-synology-preview.yml"
+    content = workflow.read_text(encoding="utf-8")
+
+    assert "nested.extractall('dist/synology/extracted')" in content
+    assert "from obstacle_bridge.bridge import _detect_build_info" in content
+    assert "os.environ['GITHUB_SHA'][:8]" in content

@@ -1094,7 +1094,10 @@ Python, Linux, macOS, and iOS products show their build identity in the WebAdmin
 
 The [Python application deployment design](docs/PythonApp_Design.md) defines
 the identity and lifecycle contract for source checkouts, VPS updates, GitHub
-archives/releases, and Synology DSM SPK installation.
+archives/releases, and Synology DSM SPK installation. Named Python release ZIP
+and Synology SPK artifacts stamp and probe their extracted Git-less payloads
+before publication; generic GitHub source archives remain intentionally
+unstamped.
 
 The broader security design note in [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md) summarizes secure-link protection, WebAdmin auth, encrypted config-secret persistence, controlled secret reveal, API attack scenarios, malformed-frame handling, file-access threats, and remaining deployment boundaries.
 

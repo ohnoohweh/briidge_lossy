@@ -28,8 +28,23 @@ jobs:
       - name: Create installable source ZIP
         run: |
           set -euo pipefail
+          artifact_root="dist/python/staging/ObstacleBridge-python-preview"
+          rm -rf "${artifact_root}"
+          mkdir -p "${artifact_root}"
+          git archive HEAD | tar -x -C "${artifact_root}"
+          python scripts/write_build_info.py --python-target "${artifact_root}/src/obstacle_bridge/_generated/build_info_generated.py"
+          expected_commit="$(git rev-parse --short=8 HEAD)"
+          (cd "${artifact_root}" && PYTHONPATH="${artifact_root}" python - <<PY
+          from obstacle_bridge.bridge import _detect_build_info
+
+          info = _detect_build_info()
+          assert info["commit"] == "${expected_commit}", info
+          assert info["source"] == "embedded-build-info", info
+          assert info["available"] is True, info
+          PY
+          )
           mkdir -p dist/python
-          git archive --format=zip --prefix=ObstacleBridge-python-preview/ HEAD > dist/python/ObstacleBridge-python-preview.zip
+          (cd dist/python/staging && zip -qr ../ObstacleBridge-python-preview.zip ObstacleBridge-python-preview)
           unzip -t dist/python/ObstacleBridge-python-preview.zip
           sha256sum dist/python/ObstacleBridge-python-preview.zip > dist/python/ObstacleBridge-python-preview.zip.sha256
 
