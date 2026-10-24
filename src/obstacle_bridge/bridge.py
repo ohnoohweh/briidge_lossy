@@ -214,7 +214,7 @@ def _detect_build_info() -> dict:
     if repo_root is not None:
         try:
             rev = subprocess.run(
-                ["git", "rev-parse", "--short=8", "HEAD"],
+                ["git", "-c", f"safe.directory={repo_root}", "rev-parse", "--short=8", "HEAD"],
                 cwd=str(repo_root),
                 capture_output=True,
                 text=True,
@@ -226,7 +226,7 @@ def _detect_build_info() -> dict:
                 info["repo_root"] = str(repo_root)
                 info["available"] = True
                 status = subprocess.run(
-                    ["git", "status", "--porcelain"],
+                    ["git", "-c", f"safe.directory={repo_root}", "status", "--porcelain"],
                     cwd=str(repo_root),
                     capture_output=True,
                     text=True,

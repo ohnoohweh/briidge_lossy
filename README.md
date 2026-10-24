@@ -1092,6 +1092,10 @@ An open WebAdmin page receives status and peer updates through the shared `/api/
 
 Python, Linux, macOS, and iOS products show their build identity in the WebAdmin headline and Runtime Metadata view. A Python source checkout reports its live Git revision and working-tree state; Git-less deployments report the build stamp generated immediately before deployment. The commit is always the standard first eight characters of the Git revision, with build timestamp and taint state.
 
+After a complete in-place update of a source checkout, the running launcher can
+be restarted from WebAdmin; its fresh child reports the new checkout identity,
+including when that child runs with elevated local privileges.
+
 The [Python application deployment design](docs/PythonApp_Design.md) defines
 the identity and lifecycle contract for source checkouts, VPS updates, GitHub
 archives/releases, and Synology DSM SPK installation. Named Python release ZIP

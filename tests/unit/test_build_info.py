@@ -23,7 +23,13 @@ def test_detect_build_info_prefers_live_git_over_generated_stamp(monkeypatch) ->
             _git_result(returncode=0, stdout=" M Package.resolved\n?? local-note\n"),
         ]
     )
-    monkeypatch.setattr(bridge.subprocess, "run", lambda *args, **kwargs: next(responses))
+    calls = []
+
+    def _run(*args, **kwargs):
+        calls.append(args[0])
+        return next(responses)
+
+    monkeypatch.setattr(bridge.subprocess, "run", _run)
 
     info = bridge._detect_build_info()
 
@@ -32,6 +38,8 @@ def test_detect_build_info_prefers_live_git_over_generated_stamp(monkeypatch) ->
     assert info["tainted"] is True
     assert info["tracked_changes"] == 1
     assert info["untracked_changes"] == 1
+    assert calls[0][:3] == ["git", "-c", f"safe.directory={Path(bridge.__file__).resolve().parents[2]}"]
+    assert calls[1][:3] == ["git", "-c", f"safe.directory={Path(bridge.__file__).resolve().parents[2]}"]
 
 
 def test_detect_build_info_uses_generated_stamp_without_git(monkeypatch) -> None:
