@@ -553,6 +553,9 @@ ARC-CMP-004:
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_installed_signed_app_admin_helper_actions
   unit_tests:
+    - tests/unit/test_config_bootstrap_cli.py::test_parse_args_legacy_null_uses_registered_default
+    - ios/tests/test_ios_runtime_config_policy.py::test_runtime_config_peer_exclusions_are_portable_and_dual_stack
+    - ios/tests/test_m3_native_sources.py::test_runtime_config_source_exists
     - tests/unit/test_runtime_metrics.py::test_histogram_reports_bounded_percentiles_and_no_samples
     - tests/unit/test_runtime_metrics.py::test_rolling_histogram_expires_old_slots_without_retaining_samples
     - tests/unit/test_runtime_metrics.py::test_accumulator_bounds_categories_and_uses_injected_clock
