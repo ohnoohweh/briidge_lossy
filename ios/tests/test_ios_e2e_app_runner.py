@@ -79,7 +79,7 @@ def test_e2e_runner_websocket_probe_reports_success() -> None:
             server.close()
             await server.wait_closed()
 
-        assert report["ok"] is True
+        assert report["ok"] is True, report.get("detail", report)
         assert report["app"] == "obstacle_bridge_ios_e2e"
         assert report["probe"] == "host-websocket"
         assert report["url"] == url
