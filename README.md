@@ -1775,6 +1775,9 @@ than a standard forwarding feature; its status reports capture limits and
 writer state when enabled. Native provider diagnostics likewise use bounded
 asynchronous file writes, retained rotation, and fixed-size Admin tail reads,
 so requesting logs cannot load an unbounded file into the extension.
+Static WebAdmin asset reads similarly wait for operating-system-backed I/O
+outside the serving queue; ObstacleBridge keeps no duplicate in-memory asset
+cache.
 Trailing-two-second projection reads only
 the matching rolling slots per category, and Swift derives recent maxima in one
 pass over its bounded aggregate set.

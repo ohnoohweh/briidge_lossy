@@ -826,6 +826,14 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertTrue((base / "index.html").is_file())
         self.assertEqual(base.name, "admin_web")
 
+    def test_static_file_reads_leave_the_asyncio_loop(self):
+        source = pathlib.Path(__file__).resolve().parents[2] / "src" / "obstacle_bridge" / "bridge_webadmin.py"
+        text = source.read_text(encoding="utf-8")
+
+        self.assertIn("def _read_static_file(self, req_path: str)", text)
+        self.assertIn("await asyncio.to_thread(self._read_static_file, req_path)", text)
+        self.assertIn("data = full.read_bytes()", text)
+
     def test_token_generator_ui_requires_admin_web_name_before_generation(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
         index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")

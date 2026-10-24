@@ -1742,6 +1742,8 @@ REQ-ADM-001:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener
     - ios/tests/test_m3_native_sources.py::test_runtime_config_source_exists
     - ios/tests/test_m3_native_sources.py::test_ios_native_provider_log_reads_are_bounded_and_tail_chunked
+    - ios/tests/test_m3_native_sources.py::test_webadmin_server_source_exists
+    - tests/unit/test_admin_web_payloads.py::test_static_file_reads_leave_the_asyncio_loop
     - tests/integration/test_overlay_e2e.py::test_linux_swift_supervises_logging_worker
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_child_logs_follow_collector_and_proxy_restarts
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_proxy_logs_follow_collector

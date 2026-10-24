@@ -722,6 +722,10 @@ def test_webadmin_server_source_exists() -> None:
     assert "broadcastLiveTopic(" in runtime
     assert "ObstacleBridgeWebAdminLiveTopicPolicy.interval" in runtime
     assert "type\": \"hello\"" in runtime
+    assert 'label: "ObstacleBridgeWebAdminServer.StaticFileRead"' in runtime
+    assert "staticFileReadQueue.async" in runtime
+    assert "respondWithStaticFile(for: request, connection: connection)" in runtime
+    assert "self.queue.async" in runtime
     assert '"tun_routing"' in live_policy
 
 
