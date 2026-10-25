@@ -240,6 +240,20 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(updateReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: updateResponse.load(), encoding: .utf8)?.contains("\"ok\":true") == true)
         #expect(String(data: updateResponse.load(), encoding: .utf8)?.contains("\"debug_enabled\":true") == true)
+        let remoteServicesBody = try JSONSerialization.data(withJSONObject: ["remote_servers": [["service": "echo", "host": "127.0.0.1", "port": 7]]])
+        let remoteServicesReady = DispatchSemaphore(value: 0)
+        let remoteServicesResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { remoteServicesReady.signal() }
+            remoteServicesResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/channelmux/remote-services", body: remoteServicesBody, headers: ["Cookie": cookie]))
+        }
+        let remoteServicesRequest = try readControl(from: control.0)
+        #expect(remoteServicesRequest["method"] as? String == "replace_remote_services_catalog")
+        #expect((remoteServicesRequest["args"] as? [[Any]])?.first?.count == 1)
+        let remoteServicesRequestID = remoteServicesRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": remoteServicesRequestID, "ok": true, "result": [true, ""]]), to: control.0)
+        #expect(remoteServicesReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: remoteServicesResponse.load(), encoding: .utf8)?.contains("\"service\":\"echo\"") == true)
         let logsReady = DispatchSemaphore(value: 0)
         let logsResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {

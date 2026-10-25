@@ -26,7 +26,7 @@ public enum ObstacleBridgeNativeAdminWorker {
         private static let methods: Set<String> = [
             "get_status_snapshot", "get_peer_connections_snapshot", "get_connections_snapshot",
             "get_config_snapshot", "get_config_schema_snapshot", "get_debug_logs", "fetch_logs",
-            "update_config",
+            "update_config", "replace_remote_services_catalog",
         ]
         private let control: FileHandle
         private let generation: Int

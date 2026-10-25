@@ -153,6 +153,28 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             }
             writeResponse(client, response: jsonResponse((try? security.issueConfigChallenge(updates: values)) ?? ["ok": false, "error": "updates must be an object"]))
             return
+        case "/api/channelmux/remote-services" where method == "POST":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            guard let payload = (try? JSONSerialization.jsonObject(with: body ?? Data())) as? [String: Any],
+                  let remoteServers = payload["remote_servers"] as? [Any] else {
+                writeResponse(client, status: "400 Bad Request", body: Data("{\"ok\":false,\"error\":\"remote_servers must be an array\"}".utf8))
+                return
+            }
+            let result = try? parentRPC.call(method: "replace_remote_services_catalog", args: [remoteServers])
+            let values = result as? [Any] ?? []
+            let succeeded = (values.first as? Bool) ?? ((values.first as? NSNumber)?.boolValue ?? false)
+            guard succeeded else {
+                let error = values.dropFirst().first as? String ?? "remote service update failed"
+                let encoded = try? JSONSerialization.data(withJSONObject: ["ok": false, "error": error], options: [.sortedKeys])
+                writeResponse(client, status: "400 Bad Request", body: encoded ?? Data("{}".utf8))
+                return
+            }
+            let encoded = try? JSONSerialization.data(withJSONObject: ["ok": true, "remote_servers": remoteServers], options: [.sortedKeys])
+            writeResponse(client, status: "200 OK", body: encoded ?? Data("{\"ok\":true}".utf8))
+            return
         case "/api/config" where method == "POST":
             guard security.isAuthenticated(headers: headers) else {
                 writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
