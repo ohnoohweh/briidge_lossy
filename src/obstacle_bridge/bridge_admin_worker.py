@@ -272,7 +272,11 @@ class AdminWorker:
                                        "log_root_level": logging.getLogger().level,
                                        "log_levels": {"admin_web": logging.getLogger("admin_web").level}}, next_generation))
             await asyncio.wait_for(self.writer.drain(), 1.0)
-            response = await asyncio.wait_for(_read_frame(reader, next_generation), 6.0)
+            while True:
+                response = await asyncio.wait_for(_read_frame(reader, next_generation), 6.0)
+                if response.get("kind") != "admin.call":
+                    break
+                await self._reply_to_request(response, next_generation)
             if response.get("kind") != "admin.ready" or response.get("implementation") != self.implementation:
                 raise ValueError("invalid Admin worker readiness")
             self.port = int(response.get("port") or 0)
@@ -323,36 +327,38 @@ class AdminWorker:
                     self.restarts += 1
                     break
 
+    async def _reply_to_request(self, request, generation: int):
+        method = request.get("method")
+        request_id = request.get("id")
+        if (request.get("kind") != "admin.call" or not isinstance(method, str) or method not in SYNC_METHODS | ASYNC_METHODS
+                or not isinstance(request_id, str) or not 0 < len(request_id) <= 64
+                or not isinstance(request.get("args"), list) or not isinstance(request.get("kwargs"), dict)):
+            raise ValueError("invalid Admin worker request")
+        reply = {"v": 1, "kind": "admin.reply", "id": request_id, "ok": False}
+        try:
+            deadline = float(request.get("deadline", 0))
+            if not math.isfinite(deadline) or not time.monotonic() < deadline <= time.monotonic() + 4.1:
+                raise TimeoutError("expired Admin request")
+            if method == "fetch_logs":
+                from .bridge_logging_ipc import fetch_remote_log_lines
+                result = await asyncio.to_thread(fetch_remote_log_lines, *request["args"], **request["kwargs"])
+            else:
+                result = getattr(self.runner, method)(*request["args"], **request["kwargs"])
+                if inspect.isawaitable(result):
+                    result = await asyncio.wait_for(result, max(0.001, deadline - time.monotonic()))
+            reply.update(ok=True, result=result)
+            if method == "update_config":
+                reply["args"] = _serializable_args(self.args)
+            encoded = _encode(reply, generation)
+        except Exception:
+            encoded = _encode({"v": 1, "kind": "admin.reply", "id": request_id, "ok": False}, generation)
+        self.writer.write(encoded)
+        await asyncio.wait_for(self.writer.drain(), 1.0)
+
     async def _dispatch(self, reader: asyncio.StreamReader):
         try:
             while True:
-                request = await _read_frame(reader, self.generation)
-                method = request.get("method")
-                request_id = request.get("id")
-                if (request.get("kind") != "admin.call" or not isinstance(method, str) or method not in SYNC_METHODS | ASYNC_METHODS
-                        or not isinstance(request_id, str) or not 0 < len(request_id) <= 64
-                        or not isinstance(request.get("args"), list) or not isinstance(request.get("kwargs"), dict)):
-                    raise ValueError("invalid Admin worker request")
-                reply = {"v": 1, "kind": "admin.reply", "id": request_id, "ok": False}
-                try:
-                    deadline = float(request.get("deadline", 0))
-                    if not math.isfinite(deadline) or not time.monotonic() < deadline <= time.monotonic() + 4.1:
-                        raise TimeoutError("expired Admin request")
-                    if method == "fetch_logs":
-                        from .bridge_logging_ipc import fetch_remote_log_lines
-                        result = await asyncio.to_thread(fetch_remote_log_lines, *request["args"], **request["kwargs"])
-                    else:
-                        result = getattr(self.runner, method)(*request["args"], **request["kwargs"])
-                        if inspect.isawaitable(result):
-                            result = await asyncio.wait_for(result, max(0.001, deadline - time.monotonic()))
-                    reply.update(ok=True, result=result)
-                    if method == "update_config":
-                        reply["args"] = _serializable_args(self.args)
-                    encoded = _encode(reply, self.generation)
-                except Exception:
-                    encoded = _encode({"v": 1, "kind": "admin.reply", "id": request_id, "ok": False}, self.generation)
-                self.writer.write(encoded)
-                await asyncio.wait_for(self.writer.drain(), 1.0)
+                await self._reply_to_request(await _read_frame(reader, self.generation), self.generation)
         except (asyncio.IncompleteReadError, ConnectionError, ValueError, OSError, asyncio.TimeoutError):
             if not self._stopping:
                 self.last_error = "Admin worker unavailable"
