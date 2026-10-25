@@ -442,7 +442,8 @@ ARC-CMP-004:
   # macOS HostRunner completes its Admin listener bind before launching private
   # workers, preventing status reads from racing Python/native worker bootstrap.
   # Python and native macOS/Linux TUN helpers use generation-fenced OBIP
-  # HELLO/READY, request/response/event/data frames; IPC-1H still needs qualification.
+  # HELLO/READY, request/response/event/data frames; the Linux shared gate
+  # runs the local authenticated-owner-loss helper qualification.
   # Native peer-worker evidence includes bounded private-descriptor admission;
   # Linux executable qualification remains a CI-host responsibility.
   # Desktop process evidence covers delivered component-specific worker slices.
