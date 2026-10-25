@@ -254,6 +254,48 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": remoteServicesRequestID, "ok": true, "result": [true, ""]]), to: control.0)
         #expect(remoteServicesReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: remoteServicesResponse.load(), encoding: .utf8)?.contains("\"service\":\"echo\"") == true)
+        let reconnectBody = try JSONSerialization.data(withJSONObject: ["peer_id": "0:1"])
+        let reconnectReady = DispatchSemaphore(value: 0)
+        let reconnectResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { reconnectReady.signal() }
+            reconnectResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/reconnect", body: reconnectBody, headers: ["Cookie": cookie]))
+        }
+        let reconnectRequest = try readControl(from: control.0)
+        #expect(reconnectRequest["method"] as? String == "request_overlay_reconnect")
+        #expect((reconnectRequest["kwargs"] as? [String: Any])?["target_peer_id"] as? String == "0:1")
+        let reconnectRequestID = reconnectRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": reconnectRequestID, "ok": true, "result": ["ok": true, "requested": 1]]), to: control.0)
+        #expect(reconnectReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: reconnectResponse.load(), encoding: .utf8)?.contains("\"requested\":1") == true)
+        let rekeyReady = DispatchSemaphore(value: 0)
+        let rekeyResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { rekeyReady.signal() }
+            rekeyResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/secure-link/rekey", body: reconnectBody, headers: ["Cookie": cookie]))
+        }
+        let rekeyRequest = try readControl(from: control.0)
+        #expect(rekeyRequest["method"] as? String == "request_secure_link_rekey")
+        #expect((rekeyRequest["kwargs"] as? [String: Any])?["target_peer_id"] as? String == "0:1")
+        let rekeyRequestID = rekeyRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": rekeyRequestID, "ok": true, "result": ["ok": true, "requested": 1]]), to: control.0)
+        #expect(rekeyReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: rekeyResponse.load(), encoding: .utf8)?.contains("\"requested\":1") == true)
+        let reloadBody = try JSONSerialization.data(withJSONObject: ["scope": "all", "peer_id": "0:1"])
+        let reloadReady = DispatchSemaphore(value: 0)
+        let reloadResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { reloadReady.signal() }
+            reloadResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/secure-link/reload", body: reloadBody, headers: ["Cookie": cookie]))
+        }
+        let reloadRequest = try readControl(from: control.0)
+        #expect(reloadRequest["method"] as? String == "request_secure_link_reload")
+        #expect((reloadRequest["kwargs"] as? [String: Any])?["scope"] as? String == "all")
+        #expect((reloadRequest["kwargs"] as? [String: Any])?["target_peer_id"] as? String == "0:1")
+        let reloadRequestID = reloadRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": reloadRequestID, "ok": true, "result": ["ok": true, "reloaded": 1]]), to: control.0)
+        #expect(reloadReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: reloadResponse.load(), encoding: .utf8)?.contains("\"reloaded\":1") == true)
         let logsReady = DispatchSemaphore(value: 0)
         let logsResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {

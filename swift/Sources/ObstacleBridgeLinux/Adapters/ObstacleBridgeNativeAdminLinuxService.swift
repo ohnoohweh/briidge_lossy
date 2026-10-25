@@ -175,6 +175,58 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             let encoded = try? JSONSerialization.data(withJSONObject: ["ok": true, "remote_servers": remoteServers], options: [.sortedKeys])
             writeResponse(client, status: "200 OK", body: encoded ?? Data("{\"ok\":true}".utf8))
             return
+        case "/api/reconnect" where method == "POST":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            guard let payload = (try? JSONSerialization.jsonObject(with: body ?? Data("{}".utf8))) as? [String: Any] else {
+                writeResponse(client, status: "400 Bad Request", body: Data("{\"ok\":false,\"error\":\"invalid JSON body\"}".utf8))
+                return
+            }
+            let target = (payload["peer_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let result = try? parentRPC.call(method: "request_overlay_reconnect", kwargs: target.isEmpty ? [:] : ["target_peer_id": target])
+            let response = result as? [String: Any] ?? ["ok": false, "error": "reconnect unavailable"]
+            let status = (response["ok"] as? Bool ?? false) ? "200 OK" : response["reason"] as? String == "unknown_peer_id" ? "404 Not Found" : "409 Conflict"
+            let encoded = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+            writeResponse(client, status: status, body: encoded ?? Data("{\"ok\":false}".utf8))
+            return
+        case "/api/secure-link/rekey" where method == "POST":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            guard let payload = (try? JSONSerialization.jsonObject(with: body ?? Data())) as? [String: Any],
+                  let target = (payload["peer_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !target.isEmpty else {
+                writeResponse(client, status: "400 Bad Request", body: Data("{\"ok\":false,\"error\":\"peer_id is required\"}".utf8))
+                return
+            }
+            let result = try? parentRPC.call(method: "request_secure_link_rekey", kwargs: ["target_peer_id": target])
+            let response = result as? [String: Any] ?? ["ok": false, "error": "rekey unavailable"]
+            let status = (response["ok"] as? Bool ?? false) ? "200 OK" : "409 Conflict"
+            let encoded = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+            writeResponse(client, status: status, body: encoded ?? Data("{\"ok\":false}".utf8))
+            return
+        case "/api/secure-link/reload" where method == "POST":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            guard let payload = (try? JSONSerialization.jsonObject(with: body ?? Data())) as? [String: Any],
+                  let scope = (payload["scope"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                  ["revocation", "local_identity", "all"].contains(scope) else {
+                writeResponse(client, status: "400 Bad Request", body: Data("{\"ok\":false,\"error\":\"scope must be one of revocation, local_identity, all\"}".utf8))
+                return
+            }
+            let target = (payload["peer_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var kwargs: [String: Any] = ["scope": scope]
+            if !target.isEmpty { kwargs["target_peer_id"] = target }
+            let result = try? parentRPC.call(method: "request_secure_link_reload", kwargs: kwargs)
+            let response = result as? [String: Any] ?? ["ok": false, "error": "reload unavailable"]
+            let status = (response["ok"] as? Bool ?? false) ? "200 OK" : "409 Conflict"
+            let encoded = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+            writeResponse(client, status: status, body: encoded ?? Data("{\"ok\":false}".utf8))
+            return
         case "/api/config" where method == "POST":
             guard security.isAuthenticated(headers: headers) else {
                 writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
