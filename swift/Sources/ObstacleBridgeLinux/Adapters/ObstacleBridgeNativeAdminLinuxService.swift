@@ -346,7 +346,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             return
         default: break
         }
-        guard method == "GET", ["/api/health", "/api/status", "/api/meta", "/api/config", "/api/logs", "/api/connections", "/api/peers", "/api/telemetry", "/api/live"].contains(path) else {
+        guard method == "GET", ["/api/health", "/api/status", "/api/meta", "/api/config", "/api/logs", "/api/connections", "/api/peers", "/api/telemetry", "/api/tun-routing/status", "/api/live"].contains(path) else {
             writeResponse(client, status: "404 Not Found", body: Data("{\"error\":\"not found\"}".utf8))
             return
         }
@@ -400,6 +400,30 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
                 return
             }
             let payload: [String: Any] = ["ok": true, "client": telemetryClient]
+            guard let responseBody = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
+            writeResponse(client, status: "200 OK", body: responseBody)
+            return
+        }
+        if path == "/api/tun-routing/status" {
+            let status = try? parentRPC.call(method: "get_status_snapshot")
+            let snapshot = status as? [String: Any] ?? [:]
+            let tun = snapshot["tun"] as? [Any] ?? []
+            let helper = snapshot["tun_helper"] as? [String: Any] ?? [:]
+            let runtime = helper["runtime"] as? [String: Any] ?? [:]
+            let control: [String: Any] = [
+                "enabled": runtime["included_routes_active"] ?? false,
+                "startup_enabled": runtime["included_routes_startup_enabled"] ?? false,
+                "supported": runtime["included_routes_toggle_supported"] ?? false,
+            ]
+            let payload: [String: Any] = [
+                "tun": tun,
+                "shared_tun": snapshot["shared_tun"] ?? [],
+                "tun_helper": helper,
+                "tun_control": control,
+                "summary": ["tun_total": tun.count],
+                "app": "udp-bidirectional-mux",
+                "milestone": "C",
+            ]
             guard let responseBody = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
             writeResponse(client, status: "200 OK", body: responseBody)
             return

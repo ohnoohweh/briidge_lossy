@@ -206,6 +206,22 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": telemetryRequestID, "ok": true, "result": ["enabled": true, "worker_state": "running"]]), to: control.0)
         #expect(telemetryReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: telemetryResponse.load(), encoding: .utf8)?.contains("\"worker_state\":\"running\"") == true)
+        let tunStatusReady = DispatchSemaphore(value: 0)
+        let tunStatusResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { tunStatusReady.signal() }
+            tunStatusResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/tun-routing/status", headers: ["Cookie": cookie]))
+        }
+        let tunStatusRequest = try readControl(from: control.0)
+        #expect(tunStatusRequest["method"] as? String == "get_status_snapshot")
+        let tunStatusRequestID = tunStatusRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: [
+            "v": 1, "kind": "admin.reply", "id": tunStatusRequestID, "ok": true,
+            "result": ["tun": [["id": "tun0"]], "tun_helper": ["runtime": ["included_routes_active": true, "included_routes_toggle_supported": true]]],
+        ]), to: control.0)
+        #expect(tunStatusReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: tunStatusResponse.load(), encoding: .utf8)?.contains("\"id\":\"tun0\"") == true)
+        #expect(String(data: tunStatusResponse.load(), encoding: .utf8)?.contains("\"supported\":true") == true)
         let liveReady = DispatchSemaphore(value: 0)
         let liveResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
