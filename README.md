@@ -1629,6 +1629,9 @@ Cross-runtime service qualification separately observes protected-overlay
 readiness and asynchronous local TCP-listener publication before sending data,
 recreating the pre-send client socket while bounded transient refusal or
 connection-abort results clear.
+Its concurrent Linux Swift/Python catalog cases allocate every overlay,
+service, target, and Admin port from worker-partitioned ranges, preventing
+released ephemeral-port collisions between xdist workers.
 
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:

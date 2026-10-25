@@ -8242,11 +8242,20 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
         pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
     binary_path = _linux_swift_runner_binary()
     psk = 'linux-swift-python-runtime-service-psk'
-    def reserve_port() -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
-            reservation.bind(('127.0.0.1', 0))
-            return int(reservation.getsockname()[1])
-    overlay_port, service_port, remote_service_port, target_port, python_admin, swift_admin = [reserve_port() for _ in range(6)]
+    allocated_ports: set[int] = set()
+
+    def reserve_worker_port(slot: int) -> int:
+        port = alloc_admin_port(
+            allocated_ports,
+            case_index=900 + slot,
+            host_pair=('127.0.0.1', '::1'),
+        )
+        allocated_ports.add(port)
+        return port
+
+    overlay_port, service_port, remote_service_port, target_port, python_admin, swift_admin = [
+        reserve_worker_port(slot) for slot in range(6)
+    ]
     bounce = BounceBackServer('linux_swift_python_runtime_target', service_protocol, '127.0.0.1', target_port, tmp_path / 'linux_swift_python_runtime_target.log')
     server_proc = swift_proc = None
     try:
