@@ -152,7 +152,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let metaRequest = try readControl(from: control.0)
         #expect(metaRequest["method"] as? String == "get_status_snapshot")
         let metaRequestID = metaRequest["id"] as? String ?? ""
-        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": metaRequestID, "ok": true, "result": ["build": ["commit": "abc123"]]), to: control.0)
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": metaRequestID, "ok": true, "result": ["build": ["commit": "abc123"]]]), to: control.0)
         #expect(metaReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"app\":\"ObstacleBridgeLinux\"") == true)
         #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"commit\":\"abc123\"") == true)
