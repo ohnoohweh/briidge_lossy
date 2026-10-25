@@ -1,5 +1,6 @@
 import Dispatch
 import Foundation
+import ObstacleBridgeCore
 import ObstacleBridgeDesktopShared
 #if os(Linux)
 import Glibc
