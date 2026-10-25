@@ -11,6 +11,7 @@ import Glibc
 /// outside this intentionally narrow surface.
 public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     private let parentRPC: ObstacleBridgeNativeAdminWorker.ParentRPC
+    private let security: ObstacleBridgeLinuxAdminSecurity
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.native-admin")
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
@@ -23,6 +24,13 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             throw ObstacleBridgeLinuxAdminServerError.invalidBindHost
         }
         self.parentRPC = parentRPC
+        let authDisabled = (arguments["admin_web_auth_disable"] as? Bool) ?? false
+        let username = (arguments["admin_web_username"] as? String) ?? ""
+        let password = (arguments["admin_web_password"] as? String) ?? ""
+        self.security = ObstacleBridgeLinuxAdminSecurity(
+            credentials: { (!authDisabled && !username.isEmpty && !password.isEmpty, username, password) },
+            scope: { "\(bindHost)|\(requestedPort)" }
+        )
         try start(port: requestedPort)
     }
 
@@ -72,15 +80,47 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
 
     private func serve(_ client: Int32) {
         defer { _ = close(client) }
-        var buffer = [UInt8](repeating: 0, count: 1024)
+        var buffer = [UInt8](repeating: 0, count: 16 * 1024)
         let received = read(client, &buffer, buffer.count)
         guard received > 0,
               let request = String(bytes: buffer.prefix(Int(received)), encoding: .utf8),
               let line = request.split(separator: "\r\n", maxSplits: 1).first
         else { return }
         let components = line.split(separator: " ")
-        guard components.count >= 2, components[0] == "GET", components[1] == "/api/status" else {
+        guard components.count >= 2 else {
             writeResponse(client, status: "404 Not Found", body: Data("{\"error\":\"not found\"}".utf8))
+            return
+        }
+        let method = String(components[0]).uppercased()
+        let path = String(components[1]).split(separator: "?", maxSplits: 1).first.map(String.init) ?? ""
+        let headerText = request.split(separator: "\r\n\r\n", maxSplits: 1).first.map(String.init) ?? ""
+        let headers = headerText.split(separator: "\r\n").dropFirst().reduce(into: [String: String]()) { result, value in
+            let pair = value.split(separator: ":", maxSplits: 1)
+            guard pair.count == 2 else { return }
+            result[pair[0].trimmingCharacters(in: .whitespaces).lowercased()] = pair[1].trimmingCharacters(in: .whitespaces)
+        }
+        let body = request.components(separatedBy: "\r\n\r\n").dropFirst().joined(separator: "\r\n\r\n").data(using: .utf8)
+        switch path {
+        case "/api/auth/state" where method == "GET":
+            writeResponse(client, response: jsonResponse(security.state(headers: headers)))
+            return
+        case "/api/auth/challenge" where method == "GET":
+            writeResponse(client, response: jsonResponse(security.issueLoginChallenge()))
+            return
+        case "/api/auth/login" where method == "POST":
+            writeResponse(client, response: security.login(body: body))
+            return
+        case "/api/auth/logout" where method == "POST":
+            writeResponse(client, response: security.logout(headers: headers))
+            return
+        default: break
+        }
+        guard method == "GET", path == "/api/status" else {
+            writeResponse(client, status: "404 Not Found", body: Data("{\"error\":\"not found\"}".utf8))
+            return
+        }
+        guard security.isAuthenticated(headers: headers) else {
+            writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
             return
         }
         let status = (try? parentRPC.call(method: "get_status_snapshot")) as? [String: Any] ?? ["state": "unavailable"]
@@ -88,9 +128,28 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         writeResponse(client, status: "200 OK", body: body)
     }
 
+    private func jsonResponse(_ payload: [String: Any]) -> ObstacleBridgeAdminLinuxResponse {
+        ObstacleBridgeAdminAPI.linuxJSONResponse(payload) ?? .init(statusCode: 500, body: Data("{}".utf8))
+    }
+
     private func writeResponse(_ client: Int32, status: String, body: Data) {
         var wire = Data("HTTP/1.1 \(status)\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)
         wire.append(body)
+        _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
+    }
+
+    private func writeResponse(_ client: Int32, response: ObstacleBridgeAdminLinuxResponse) {
+        let status: String
+        switch response.statusCode {
+        case 200: status = "200 OK"
+        case 400: status = "400 Bad Request"
+        case 401: status = "401 Unauthorized"
+        case 403: status = "403 Forbidden"
+        default: status = "500 Internal Server Error"
+        }
+        let extra = response.headers.map { "\($0.0): \($0.1)\r\n" }.joined()
+        var wire = Data("HTTP/1.1 \(status)\r\nContent-Type: \(response.contentType)\r\nContent-Length: \(response.body.count)\r\n\(extra)Connection: close\r\n\r\n".utf8)
+        wire.append(response.body)
         _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
     }
 }
