@@ -94,7 +94,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 7,
         ]), to: control.0)
         #expect(try readControl(from: control.0)["kind"] as? String == "worker.hello")
-        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0], "log_root_level": 0]), to: control.0)
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_username": "admin", "admin_web_password": "secret"], "log_root_level": 0]), to: control.0)
         let request = try readControl(from: control.0)
         #expect(request["kind"] as? String == "admin.call")
         #expect(request["id"] as? String == "bootstrap-status")
@@ -107,11 +107,27 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(ready["implementation"] as? String == "native")
         let port = (ready["port"] as? NSNumber)?.intValue ?? 0
         #expect(port > 0)
+        let rejected = try nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/status")
+        #expect(String(data: rejected, encoding: .utf8)?.contains("HTTP/1.1 401 Unauthorized") == true)
+        let challengeResponse = try nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/auth/challenge")
+        let challengeBody = try JSONSerialization.jsonObject(with: try httpBody(challengeResponse)) as? [String: Any]
+        let challengeID = challengeBody?["challenge_id"] as? String ?? ""
+        let seed = challengeBody?["seed"] as? String ?? ""
+        #expect(!challengeID.isEmpty)
+        let proof = ObstacleBridgeCrypto.sha256(Data("\(seed):admin:secret".utf8)).map { String(format: "%02x", $0) }.joined()
+        let loginBody = try JSONSerialization.data(withJSONObject: ["challenge_id": challengeID, "proof": proof])
+        let loginResponse = try nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/auth/login", body: loginBody)
+        #expect(String(data: loginResponse, encoding: .utf8)?.contains("HTTP/1.1 200 OK") == true)
+        let cookie = String(data: loginResponse, encoding: .utf8)?
+            .split(separator: "\r\n").first(where: { $0.lowercased().hasPrefix("set-cookie:") })?
+            .split(separator: ":", maxSplits: 1).dropFirst().first?
+            .split(separator: ";", maxSplits: 1).first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+        #expect(!cookie.isEmpty)
         let responseReady = DispatchSemaphore(value: 0)
         let response = NativeAdminStatusResponse()
         DispatchQueue.global().async {
             defer { responseReady.signal() }
-            let result = try? self.nativeAdminStatusRequest(port: port)
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/status", headers: ["Cookie": cookie])
             response.store(result)
         }
         let statusRequest = try readControl(from: control.0)
@@ -189,7 +205,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         return (descriptors[0], descriptors[1])
     }
 
-    private func nativeAdminStatusRequest(port: Int) throws -> Data {
+    private func nativeAdminHTTPRequest(port: Int, method: String, path: String, body: Data = Data(), headers: [String: String] = [:]) throws -> Data {
         let client = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
         guard client >= 0 else { throw POSIXError(.EMFILE) }
         defer { close(client) }
@@ -201,7 +217,8 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
         guard connected == 0 else { throw POSIXError(.ECONNREFUSED) }
-        try writeAll(Data("GET /api/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".utf8), to: client)
+        let extraHeaders = headers.map { "\($0.key): \($0.value)\r\n" }.joined()
+        try writeAll(Data("\(method) \(path) HTTP/1.1\r\nHost: localhost\r\nContent-Length: \(body.count)\r\n\(extraHeaders)Connection: close\r\n\r\n".utf8) + body, to: client)
         var result = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
         while true {
@@ -210,6 +227,11 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             if count == 0 { return result }
             result.append(buffer, count: Int(count))
         }
+    }
+
+    private func httpBody(_ response: Data) throws -> Data {
+        guard let separator = response.range(of: Data("\r\n\r\n".utf8)) else { throw POSIXError(.EPROTO) }
+        return Data(response[separator.upperBound...])
     }
 
     private func readDatagram(from descriptor: Int32) throws -> Data {
