@@ -1,5 +1,6 @@
 import Dispatch
 import Foundation
+import Crypto
 import ObstacleBridgeCore
 import ObstacleBridgeDesktopShared
 #if os(Linux)
@@ -11,6 +12,13 @@ import Glibc
 /// authenticated API, sessions, configuration, and log-query parity remain
 /// outside this intentionally narrow surface.
 public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
+    private static let liveTopics = ["status", "connections", "peers"]
+    private struct WebSocketFrame {
+        let opcode: UInt8
+        let payload: Data
+        let final: Bool
+        let consumed: Int
+    }
     private let parentRPC: ObstacleBridgeNativeAdminWorker.ParentRPC
     private let security: ObstacleBridgeLinuxAdminSecurity
     private let adminWebDirectory: URL
@@ -104,6 +112,14 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             result[pair[0].trimmingCharacters(in: .whitespaces).lowercased()] = pair[1].trimmingCharacters(in: .whitespaces)
         }
         let body = request.components(separatedBy: "\r\n\r\n").dropFirst().joined(separator: "\r\n\r\n").data(using: .utf8)
+        if path == "/api/live", method == "GET", headers["upgrade"]?.lowercased() == "websocket" {
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            serveLiveWebSocket(client, target: target, key: headers["sec-websocket-key"] ?? "")
+            return
+        }
         if method == "GET", let staticResponse = staticResponse(path: path) {
             writeResponse(client, status: "200 OK", body: staticResponse.body, contentType: staticResponse.contentType)
             return
@@ -284,6 +300,96 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             if parts.count == 2, parts[0] == "topic" { return String(parts[1]).lowercased() }
         }
         return ""
+    }
+
+    private func serveLiveWebSocket(_ client: Int32, target: String, key: String) {
+        guard !key.isEmpty else {
+            writeResponse(client, status: "400 Bad Request", body: Data("{\"error\":\"missing websocket key\"}".utf8))
+            return
+        }
+        let accept = Data(Insecure.SHA1.hash(data: Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8))).base64EncodedString()
+        let handshake = Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n".utf8)
+        guard handshake.withUnsafeBytes({ write(client, $0.baseAddress, handshake.count) == handshake.count }) else { return }
+        var topics = Set(Self.liveTopics)
+        if let requested = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(liveTopic(target: target)) {
+            topics = Self.liveTopics.contains(requested) ? [requested] : []
+        }
+        var nextDue: [String: TimeInterval] = [:]
+        let intervals = Dictionary(uniqueKeysWithValues: Self.liveTopics.map { ($0, ObstacleBridgeAdminLiveTopicPolicyPort.interval($0)) })
+        guard sendLiveJSON(client, value: ["type": "hello", "topics": Array(topics).sorted(), "intervals_sec": intervals]) else { return }
+        var receiveBuffer = Data()
+        while true {
+            let now = ProcessInfo.processInfo.systemUptime
+            for topic in topics.sorted() where now >= (nextDue[topic] ?? 0) {
+                guard let payload = livePayload(topic: topic),
+                      sendLiveJSON(client, value: ["type": topic, "data": payload])
+                else { return }
+                nextDue[topic] = now + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
+            }
+            var descriptor = pollfd(fd: client, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&descriptor, 1, 250)
+            guard ready >= 0 else { return }
+            guard ready > 0 else { continue }
+            var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+            let count = read(client, &buffer, buffer.count)
+            guard count > 0 else { return }
+            receiveBuffer.append(buffer, count: Int(count))
+            while let frame = parseWebSocketFrame(receiveBuffer) {
+                receiveBuffer.removeSubrange(0..<frame.consumed)
+                guard frame.final else { return }
+                switch frame.opcode {
+                case 0x1:
+                    guard let object = try? JSONSerialization.jsonObject(with: frame.payload) as? [String: Any] else { continue }
+                    topics = ObstacleBridgeAdminLiveTopicPolicyPort.topicsForControlMessage(subscribe: object["subscribe"], activeTabs: object["active_tabs"] as? [Any], currentTopics: topics)
+                        .intersection(Self.liveTopics)
+                    for topic in ObstacleBridgeAdminLiveTopicPolicyPort.parseTopics(object["request"]).sorted() {
+                        guard let payload = livePayload(topic: topic),
+                              sendLiveJSON(client, value: ["type": topic, "data": payload])
+                        else { return }
+                        nextDue[topic] = ProcessInfo.processInfo.systemUptime + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
+                    }
+                case 0x8: _ = sendWebSocketFrame(client, opcode: 0x8, payload: Data()); return
+                case 0x9: guard sendWebSocketFrame(client, opcode: 0xA, payload: frame.payload) else { return }
+                default: continue
+                }
+            }
+        }
+    }
+
+    private func livePayload(topic: String) -> [String: Any]? {
+        let method = topic == "status" ? "get_status_snapshot" : topic == "peers" ? "get_peer_connections_snapshot" : topic == "connections" ? "get_connections_snapshot" : ""
+        return method.isEmpty ? nil : (try? parentRPC.call(method: method)) as? [String: Any]
+    }
+
+    private func sendLiveJSON(_ client: Int32, value: [String: Any]) -> Bool {
+        guard let body = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return false }
+        return sendWebSocketFrame(client, opcode: 0x1, payload: body)
+    }
+
+    private func sendWebSocketFrame(_ client: Int32, opcode: UInt8, payload: Data) -> Bool {
+        guard payload.count <= Int(UInt16.max) else { return false }
+        var frame = Data([0x80 | opcode])
+        if payload.count < 126 { frame.append(UInt8(payload.count)) }
+        else { frame.append(126); var length = UInt16(payload.count).bigEndian; frame.append(Data(bytes: &length, count: 2)) }
+        frame.append(payload)
+        return frame.withUnsafeBytes { write(client, $0.baseAddress, frame.count) == frame.count }
+    }
+
+    private func parseWebSocketFrame(_ data: Data) -> WebSocketFrame? {
+        guard data.count >= 2 else { return nil }
+        let first = data[data.startIndex], second = data[data.startIndex + 1]
+        let final = (first & 0x80) != 0, opcode = first & 0x0F
+        var index = 2, length = Int(second & 0x7F)
+        if length == 126 {
+            guard data.count >= index + 2 else { return nil }
+            length = (Int(data[data.startIndex + index]) << 8) | Int(data[data.startIndex + index + 1]); index += 2
+        } else if length == 127 { return nil }
+        guard (second & 0x80) != 0, data.count >= index + 4 else { return nil }
+        let mask = Array(data[(data.startIndex + index)..<(data.startIndex + index + 4)]); index += 4
+        guard length <= 16 * 1024, data.count >= index + length else { return nil }
+        var payload = Array(data[(data.startIndex + index)..<(data.startIndex + index + length)])
+        for offset in payload.indices { payload[offset] ^= mask[offset % 4] }
+        return .init(opcode: opcode, payload: Data(payload), final: final, consumed: index + length)
     }
 
     private func writeResponse(_ client: Int32, status: String, body: Data, contentType: String = "application/json; charset=utf-8") {

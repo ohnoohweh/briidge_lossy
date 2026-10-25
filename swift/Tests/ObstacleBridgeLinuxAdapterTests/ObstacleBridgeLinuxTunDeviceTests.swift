@@ -127,6 +127,28 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             .split(separator: ":", maxSplits: 1).dropFirst().first?
             .split(separator: ";", maxSplits: 1).first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
         #expect(!cookie.isEmpty)
+        let websocketStarted = DispatchSemaphore(value: 0)
+        let websocketContinue = DispatchSemaphore(value: 0)
+        let websocketReady = DispatchSemaphore(value: 0)
+        let websocketResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { websocketReady.signal() }
+            websocketResponse.store(try? self.nativeAdminWebSocketRequest(
+                port: port, cookie: cookie, started: websocketStarted, continueReading: websocketContinue
+            ))
+        }
+        #expect(websocketStarted.wait(timeout: .now() + 1) == .success)
+        let websocketRequest = try readControl(from: control.0)
+        #expect(websocketRequest["method"] as? String == "get_status_snapshot")
+        let websocketRequestID = websocketRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": websocketRequestID, "ok": true, "result": ["state": "live"]]), to: control.0)
+        websocketContinue.signal()
+        #expect(websocketReady.wait(timeout: .now() + 1) == .success)
+        let websocketText = String(data: websocketResponse.load(), encoding: .utf8) ?? ""
+        #expect(websocketText.contains("HTTP/1.1 101 Switching Protocols"))
+        #expect(websocketText.contains("\"type\":\"hello\""))
+        #expect(websocketText.contains("\"type\":\"status\""))
+        #expect(websocketText.contains("\"state\":\"live\""))
         let responseReady = DispatchSemaphore(value: 0)
         let response = NativeAdminStatusResponse()
         DispatchQueue.global().async {
@@ -338,6 +360,33 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             if count == 0 { return result }
             result.append(buffer, count: Int(count))
         }
+    }
+
+    private func nativeAdminWebSocketRequest(port: Int, cookie: String, started: DispatchSemaphore, continueReading: DispatchSemaphore) throws -> Data {
+        let client = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        guard client >= 0 else { throw POSIXError(.EMFILE) }
+        defer { close(client) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(UInt16(port).bigEndian)
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard connected == 0 else { throw POSIXError(.ECONNREFUSED) }
+        try writeAll(Data("GET /api/live?topic=status HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nCookie: \(cookie)\r\n\r\n".utf8), to: client)
+        started.signal()
+        var output = try readSocketChunk(from: client)
+        _ = continueReading.wait(timeout: .now() + 1)
+        output.append(try readSocketChunk(from: client))
+        return output
+    }
+
+    private func readSocketChunk(from descriptor: Int32) throws -> Data {
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        let count = read(descriptor, &buffer, buffer.count)
+        guard count > 0 else { throw POSIXError(.EIO) }
+        return Data(buffer.prefix(Int(count)))
     }
 
     private func httpBody(_ response: Data) throws -> Data {
