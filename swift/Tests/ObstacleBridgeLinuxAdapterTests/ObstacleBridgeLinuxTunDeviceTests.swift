@@ -140,6 +140,18 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let statusResponse = response.load()
         #expect(String(data: statusResponse, encoding: .utf8)?.contains("HTTP/1.1 200 OK") == true)
         #expect(String(data: statusResponse, encoding: .utf8)?.contains("\"state\":\"ready\"") == true)
+        let configReady = DispatchSemaphore(value: 0)
+        let configResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { configReady.signal() }
+            configResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/config", headers: ["Cookie": cookie]))
+        }
+        let configRequest = try readControl(from: control.0)
+        #expect(configRequest["method"] as? String == "get_config_snapshot")
+        let configRequestID = configRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": configRequestID, "ok": true, "result": ["config": ["redacted": true]]]), to: control.0)
+        #expect(configReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: configResponse.load(), encoding: .utf8)?.contains("\"redacted\":true") == true)
         let record = try JSONSerialization.jsonObject(with: readDatagram(from: log.0)) as? [String: Any]
         #expect(record?["name"] as? String == "admin.native")
         #expect(record?["message"] as? String == "native_admin_ready")
