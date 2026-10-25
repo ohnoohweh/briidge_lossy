@@ -176,7 +176,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             return
         default: break
         }
-        guard method == "GET", ["/api/status", "/api/meta", "/api/config", "/api/logs", "/api/connections", "/api/peers"].contains(path) else {
+        guard method == "GET", ["/api/status", "/api/meta", "/api/config", "/api/logs", "/api/connections", "/api/peers", "/api/live"].contains(path) else {
             writeResponse(client, status: "404 Not Found", body: Data("{\"error\":\"not found\"}".utf8))
             return
         }
@@ -205,6 +205,25 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
                 "build": snapshot["build"] ?? [:],
             ]
             guard let responseBody = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
+            writeResponse(client, status: "200 OK", body: responseBody)
+            return
+        }
+        if path == "/api/live" {
+            let topic = liveTopic(target: target)
+            let result: Any?
+            switch topic {
+            case "status": result = try? parentRPC.call(method: "get_status_snapshot")
+            case "peers": result = try? parentRPC.call(method: "get_peer_connections_snapshot")
+            case "connections": result = try? parentRPC.call(method: "get_connections_snapshot")
+            default:
+                writeResponse(client, status: "404 Not Found", body: Data("{\"error\":\"not found\"}".utf8))
+                return
+            }
+            guard let payload = result as? [String: Any],
+                  let responseBody = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
+                writeResponse(client, status: "503 Service Unavailable", body: Data("{\"error\":\"snapshot unavailable\"}".utf8))
+                return
+            }
             writeResponse(client, status: "200 OK", body: responseBody)
             return
         }
@@ -256,6 +275,15 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             }
         }
         return 400
+    }
+
+    private func liveTopic(target: String) -> String {
+        guard let query = target.split(separator: "?", maxSplits: 1).dropFirst().first else { return "" }
+        for pair in query.split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1)
+            if parts.count == 2, parts[0] == "topic" { return String(parts[1]).lowercased() }
+        }
+        return ""
     }
 
     private func writeResponse(_ client: Int32, status: String, body: Data, contentType: String = "application/json; charset=utf-8") {

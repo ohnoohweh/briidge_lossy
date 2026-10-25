@@ -156,6 +156,18 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(metaReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"app\":\"ObstacleBridgeLinux\"") == true)
         #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"commit\":\"abc123\"") == true)
+        let liveReady = DispatchSemaphore(value: 0)
+        let liveResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { liveReady.signal() }
+            liveResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/live?topic=peers", headers: ["Cookie": cookie]))
+        }
+        let liveRequest = try readControl(from: control.0)
+        #expect(liveRequest["method"] as? String == "get_peer_connections_snapshot")
+        let liveRequestID = liveRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": liveRequestID, "ok": true, "result": ["peers": [["id": "0:1"]]]]), to: control.0)
+        #expect(liveReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: liveResponse.load(), encoding: .utf8)?.contains("\"id\":\"0:1\"") == true)
         let configReady = DispatchSemaphore(value: 0)
         let configResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
