@@ -1640,7 +1640,8 @@ REQ-ADM-001:
   # checkout and install the SPK import dependency before verifying the stamp.
   # Python and native macOS/Linux TUN helpers now use generation-fenced OBIP
   # HELLO/READY, request/response/event/data frames; the required Linux Swift
-  # lane includes the host-local authenticated-owner-loss helper qualification.
+  # lane runs ObstacleBridgeLinuxTunHelperAdapterTests, including host-local
+  # authenticated-owner-loss helper qualification.
   # UDP logging targets remain direct host:port configuration values rather
   # than being coerced into the adjacent logger-level selector vocabulary.
   # The remaining desktop logging-worker work is sequenced in macOS-only and
