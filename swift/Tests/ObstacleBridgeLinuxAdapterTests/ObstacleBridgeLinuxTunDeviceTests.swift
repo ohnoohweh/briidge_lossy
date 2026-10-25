@@ -153,13 +153,13 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let schemaRequest = try readControl(from: control.0)
         #expect(schemaRequest["method"] as? String == "get_config_schema_snapshot")
         let schemaRequestID = schemaRequest["id"] as? String ?? ""
-        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": schemaRequestID, "ok": true, "result": ["fields": ["debug_logging"]]), to: control.0)
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": schemaRequestID, "ok": true, "result": ["fields": ["debug_logging"]]]), to: control.0)
         #expect(configReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: configResponse.load(), encoding: .utf8)?.contains("\"redacted\":true") == true)
         #expect(String(data: configResponse.load(), encoding: .utf8)?.contains("\"schema\":{\"fields\":[\"debug_logging\"]}") == true)
         let updates: [String: Any] = ["debug_logging": ["debug_enabled": true]]
         let challengeRequestBody = try JSONSerialization.data(withJSONObject: ["updates": updates], options: [.sortedKeys])
-        let configChallengeResponse = try nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/config/challenge", headers: ["Cookie": cookie], body: challengeRequestBody)
+        let configChallengeResponse = try nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/config/challenge", body: challengeRequestBody, headers: ["Cookie": cookie])
         let configChallenge = try JSONSerialization.jsonObject(with: try httpBody(configChallengeResponse)) as? [String: Any]
         let configChallengeID = configChallenge?["challenge_id"] as? String ?? ""
         let configSeed = configChallenge?["seed"] as? String ?? ""
@@ -171,7 +171,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let updateResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
             defer { updateReady.signal() }
-            updateResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/config", headers: ["Cookie": cookie], body: confirmedUpdateBody))
+            updateResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/config", body: confirmedUpdateBody, headers: ["Cookie": cookie]))
         }
         let updateRequest = try readControl(from: control.0)
         #expect(updateRequest["method"] as? String == "update_config")
