@@ -284,21 +284,27 @@ def test_e2e_runner_ws_secure_link_reports_startup_failure_on_missing_peer() -> 
 
 def test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state() -> None:
     async def scenario() -> None:
-        admin_web_port = _unused_tcp_port()
-        report = await run_runtime_config(
-            config={
-                "overlay_transport": "ws",
-                "ws_peer": "127.0.0.1",
-                "ws_peer_port": 9,
-                "admin_web": True,
-                "admin_web_bind": "127.0.0.1",
-                "admin_web_port": admin_web_port,
-                "status": False,
-            },
-            hold_sec=0.0,
-        )
+        report: dict[str, Any] = {}
+        admin_web_port = 0
+        for _ in range(3):
+            admin_web_port = _unused_tcp_port()
+            report = await run_runtime_config(
+                config={
+                    "overlay_transport": "ws",
+                    "ws_peer": "127.0.0.1",
+                    "ws_peer_port": 9,
+                    "admin_web": True,
+                    "admin_web_bind": "127.0.0.1",
+                    "admin_web_port": admin_web_port,
+                    "status": False,
+                },
+                hold_sec=0.0,
+            )
+            retryable_bind_failure = "address already in use" in str(report.get("detail", "")).lower()
+            if report["ok"] or not retryable_bind_failure:
+                break
 
-        assert report["ok"] is True
+        assert report["ok"] is True, report
         assert report["probe"] == "runtime-config"
         assert report["started"] is True
         assert report["webadmin_url"] == f"http://127.0.0.1:{admin_web_port}/"
