@@ -162,7 +162,10 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             if updates.keys.contains(where: { ["admin_web_auth_disable", "admin_web_username", "admin_web_password", "secure_link_psk"].contains($0) }) {
                 security.reset()
             }
-            writeResponse(client, status: "200 OK", body: Data("{\"ok\":true}".utf8))
+            let config = try? parentRPC.call(method: "get_config_snapshot")
+            let response = ["ok": true, "config": config as? [String: Any] ?? [:]] as [String: Any]
+            let encoded = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+            writeResponse(client, status: "200 OK", body: encoded ?? Data("{\"ok\":true}".utf8))
             return
         default: break
         }

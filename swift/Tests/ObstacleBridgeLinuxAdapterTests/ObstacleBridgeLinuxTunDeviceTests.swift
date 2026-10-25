@@ -178,8 +178,13 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(((updateRequest["args"] as? [[String: Any]])?.first?["debug_logging"] as? [String: Bool])?["debug_enabled"] == true)
         let updateRequestID = updateRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": updateRequestID, "ok": true, "result": [true, ""]]), to: control.0)
+        let refreshedConfigRequest = try readControl(from: control.0)
+        #expect(refreshedConfigRequest["method"] as? String == "get_config_snapshot")
+        let refreshedConfigRequestID = refreshedConfigRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": refreshedConfigRequestID, "ok": true, "result": ["debug_logging": ["debug_enabled": true]]]), to: control.0)
         #expect(updateReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: updateResponse.load(), encoding: .utf8)?.contains("\"ok\":true") == true)
+        #expect(String(data: updateResponse.load(), encoding: .utf8)?.contains("\"debug_enabled\":true") == true)
         let logsReady = DispatchSemaphore(value: 0)
         let logsResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
