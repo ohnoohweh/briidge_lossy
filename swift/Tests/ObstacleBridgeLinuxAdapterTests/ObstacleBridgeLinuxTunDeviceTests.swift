@@ -6,6 +6,21 @@ import ObstacleBridgeDesktopShared
 import Glibc
 #endif
 
+private final class NativeAdminStatusResponse: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = Data()
+
+    func store(_ response: Data?) {
+        lock.lock(); defer { lock.unlock() }
+        value = response ?? Data()
+    }
+
+    func load() -> Data {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+}
+
 struct ObstacleBridgeLinuxTunDeviceTests {
     private func ipv4Packet() -> Data { Data([0x45, 0, 0, 20, 0, 0, 0, 0, 64, 17, 0, 0, 10, 0, 0, 1, 10, 0, 0, 2]) }
 
@@ -93,12 +108,11 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let port = (ready["port"] as? NSNumber)?.intValue ?? 0
         #expect(port > 0)
         let responseReady = DispatchSemaphore(value: 0)
-        let responseLock = NSLock()
-        var response = Data()
+        let response = NativeAdminStatusResponse()
         DispatchQueue.global().async {
             defer { responseReady.signal() }
             let result = try? self.nativeAdminStatusRequest(port: port)
-            responseLock.lock(); response = result ?? Data(); responseLock.unlock()
+            response.store(result)
         }
         let statusRequest = try readControl(from: control.0)
         #expect(statusRequest["kind"] as? String == "admin.call")
@@ -106,7 +120,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let statusRequestID = statusRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": statusRequestID, "ok": true, "result": ["state": "ready", "redacted": true]]), to: control.0)
         #expect(responseReady.wait(timeout: .now() + 1) == .success)
-        responseLock.lock(); let statusResponse = response; responseLock.unlock()
+        let statusResponse = response.load()
         #expect(String(data: statusResponse, encoding: .utf8)?.contains("HTTP/1.1 200 OK") == true)
         #expect(String(data: statusResponse, encoding: .utf8)?.contains("\"state\":\"ready\"") == true)
         let record = try JSONSerialization.jsonObject(with: readDatagram(from: log.0)) as? [String: Any]
