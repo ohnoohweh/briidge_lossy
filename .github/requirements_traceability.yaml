@@ -1639,7 +1639,9 @@ REQ-ADM-001:
   # Release-preview probes extract Python ZIP and SPK payloads outside that
   # checkout and install the SPK import dependency before verifying the stamp.
   # Python and native macOS/Linux TUN helpers now use generation-fenced OBIP
-  # HELLO/READY, request/response/event/data frames; qualification remains IPC-1H work.
+  # HELLO/READY, request/response/event/data frames; the required Linux Swift
+  # lane runs ObstacleBridgeLinuxTunHelperAdapterTests, including host-local
+  # authenticated-owner-loss helper qualification.
   # UDP logging targets remain direct host:port configuration values rather
   # than being coerced into the adjacent logger-level selector vocabulary.
   # The remaining desktop logging-worker work is sequenced in macOS-only and
@@ -1693,6 +1695,7 @@ REQ-ADM-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss
     - swift/Tests/ObstacleBridgeDesktopSharedTests/ObstacleBridgeWorkerIPCTests.swift::controlDecodeRejectsDuplicateObjectMembersAtEveryDepth
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterAuthenticatedOwnerLoss
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterAuthenticatedClientIdleWindow
     - tests/unit/test_proxy_worker.py::test_proxy_control_rejects_oversize_header_without_waiting_for_body
     - tests/unit/test_native_proxy_supervisor.py::test_swift_supervisor_owns_python_or_native_proxy
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input

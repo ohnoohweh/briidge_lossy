@@ -71,7 +71,7 @@ jobs:
 
           changed_files="$(git diff --name-only "$base" "$head")"
 
-          if printf '%s\n' "$changed_files" | grep -Eq '(^src/|^tests/|^scripts/|^swift/Sources/ObstacleBridge(LogCollector|ProxyWorker|DesktopShared|Linux)/|^Package\.swift$|^ObstacleBridge\.py$|^pyproject\.toml$|\.py$)'; then
+          if printf '%s\n' "$changed_files" | grep -Eq '(^src/|^tests/|^scripts/|^swift/Sources/ObstacleBridge(LogCollector|ProxyWorker|DesktopShared|Linux)/|^\.github/workflows/bridge-py-integration-gate\.yml$|^Package\.swift$|^ObstacleBridge\.py$|^pyproject\.toml$|\.py$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -128,6 +128,7 @@ jobs:
         run: |
           OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
           swift test --filter ObstacleBridgeLinuxRuntimeConfigurationTests
+          swift test --filter ObstacleBridgeLinuxTunHelperAdapterTests
 
       - name: Qualify PXY-3C proxy collector matrix (Linux)
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py

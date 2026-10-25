@@ -206,7 +206,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         let previousStatus = runtime.statusSnapshot()
         let inboundFrame = ObstacleBridgeSecureLinkPskCodec.parseFrame(payload)
         let snapshot = runtime.handleInboundFrame(payload)
-        var emittedFrames = snapshot.emittedFrames
+        let emittedFrames = snapshot.emittedFrames
         let deliveredPayloads = snapshot.deliveredPayloads
         if snapshot.authFailCode != nil {
             pendingPayloads.removeAll()

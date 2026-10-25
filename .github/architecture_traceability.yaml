@@ -442,7 +442,8 @@ ARC-CMP-004:
   # macOS HostRunner completes its Admin listener bind before launching private
   # workers, preventing status reads from racing Python/native worker bootstrap.
   # Python and native macOS/Linux TUN helpers use generation-fenced OBIP
-  # HELLO/READY, request/response/event/data frames; IPC-1H still needs qualification.
+  # HELLO/READY, request/response/event/data frames; the Linux shared gate
+  # runs the local authenticated-owner-loss helper qualification.
   # Native peer-worker evidence includes bounded private-descriptor admission;
   # Linux executable qualification remains a CI-host responsibility.
   # Desktop process evidence covers delivered component-specific worker slices.
@@ -461,7 +462,7 @@ ARC-CMP-004:
   # and serves status through serialized allowlisted parent RPC. Its host-local
   # HTTP qualification bypasses system proxies and verifies owner-loss exit.
   # Full authenticated API/session parity and Linux listener support remain open.
-  # A shared native Admin bootstrap accepts only verified inherited Unix-stream control/lifetime and record-only log descriptors, exchanges Admin HELLO/READY, makes one deadline-limited correlated bootstrap-status parent RPC, fails closed when its reply is withheld, and exits on owner loss; packaged macOS and Linux-only socketpair tests cover that boundary, with Linux CI evidence pending. Host qualification remains. Linux helper runtime/owner-loss, Admin HTTP/session parity, host-local selection, and broader lifecycle qualification remain in IPC-1H, IPC-1A1, IPC-1A2, IPC-1A3, and IPC-1Q. Contract-v1
+  # A shared native Admin bootstrap accepts only verified inherited Unix-stream control/lifetime and record-only log descriptors, exchanges Admin HELLO/READY, makes one deadline-limited correlated bootstrap-status parent RPC, fails closed when its reply is withheld, and exits on owner loss; packaged macOS and Linux-only socketpair tests cover that boundary, with Linux CI evidence pending. Host qualification remains. Admin HTTP/session parity, host-local selection, and broader lifecycle qualification remain in IPC-1A1, IPC-1A2, IPC-1A3, and IPC-1Q. Contract-v1
   # requires explicit auth and rejects malformed
   # loopback bind and configuration before spawn while retaining the existing
   # IPv4/IPv6 egress-family declaration. Both supervisors expose the same
@@ -532,6 +533,7 @@ ARC-CMP-004:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss
     - swift/Tests/ObstacleBridgeDesktopSharedTests/ObstacleBridgeWorkerIPCTests.swift::controlDecodeRejectsDuplicateObjectMembersAtEveryDepth
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterAuthenticatedOwnerLoss
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterAuthenticatedClientIdleWindow
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_exits_when_supervisor_is_killed
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
