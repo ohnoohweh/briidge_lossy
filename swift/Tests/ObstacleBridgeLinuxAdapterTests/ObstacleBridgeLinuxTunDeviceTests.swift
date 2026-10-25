@@ -296,6 +296,18 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": reloadRequestID, "ok": true, "result": ["ok": true, "reloaded": 1]]), to: control.0)
         #expect(reloadReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: reloadResponse.load(), encoding: .utf8)?.contains("\"reloaded\":1") == true)
+        let tunRepairReady = DispatchSemaphore(value: 0)
+        let tunRepairResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { tunRepairReady.signal() }
+            tunRepairResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/tun-helper/repair", headers: ["Cookie": cookie]))
+        }
+        let tunRepairRequest = try readControl(from: control.0)
+        #expect(tunRepairRequest["method"] as? String == "request_tun_helper_repair")
+        let tunRepairRequestID = tunRepairRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": tunRepairRequestID, "ok": true, "result": ["ok": true, "repaired": ["tun0"], "failed": []]]), to: control.0)
+        #expect(tunRepairReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: tunRepairResponse.load(), encoding: .utf8)?.contains("\"repaired\":[\"tun0\"]") == true)
         let logsReady = DispatchSemaphore(value: 0)
         let logsResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {

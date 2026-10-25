@@ -227,6 +227,17 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             let encoded = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
             writeResponse(client, status: status, body: encoded ?? Data("{\"ok\":false}".utf8))
             return
+        case "/api/tun-helper/repair" where method == "POST":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            let result = try? parentRPC.call(method: "request_tun_helper_repair", timeout: 2)
+            let response = result as? [String: Any] ?? ["ok": false, "error": "TUN helper repair unavailable", "retryable": true]
+            let status = (response["ok"] as? Bool ?? false) ? "200 OK" : "409 Conflict"
+            let encoded = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+            writeResponse(client, status: status, body: encoded ?? Data("{\"ok\":false}".utf8))
+            return
         case "/api/config" where method == "POST":
             guard security.isAuthenticated(headers: headers) else {
                 writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
