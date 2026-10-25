@@ -344,6 +344,20 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             let encoded = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
             writeResponse(client, status: "200 OK", body: encoded ?? Data("{\"ok\":true}".utf8))
             return
+        case "/api/onboarding/blueprints" where method == "GET":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            let connections = try? parentRPC.call(method: "get_connections_snapshot")
+            let blueprints = onboardingBlueprints(connections as? [String: Any] ?? [:])
+            let payload: [String: Any] = ["ok": true, "count": blueprints.count, "blueprints": blueprints]
+            guard let encoded = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
+                writeResponse(client, status: "503 Service Unavailable", body: Data("{\"ok\":false,\"error\":\"blueprints unavailable\",\"retryable\":true}".utf8))
+                return
+            }
+            writeResponse(client, status: "200 OK", body: encoded)
+            return
         default: break
         }
         guard method == "GET", ["/api/health", "/api/status", "/api/meta", "/api/config", "/api/logs", "/api/connections", "/api/peers", "/api/telemetry", "/api/tun-routing/status", "/api/live"].contains(path) else {
@@ -460,6 +474,49 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         let payload: Any = path == "/api/logs" ? ["logs": result ?? []] : (result as? [String: Any] ?? ["state": "unavailable"])
         guard let body = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
         writeResponse(client, status: "200 OK", body: body)
+    }
+
+    private func onboardingBlueprints(_ snapshot: [String: Any]) -> [[String: Any]] {
+        var grouped = [String: [[String: Any]]]()
+        for transport in ["udp", "tcp"] {
+            guard let rows = snapshot[transport] as? [[String: Any]] else { continue }
+            for row in rows {
+                guard String(describing: row["state"] ?? "").lowercased() != "listening",
+                      let peerID = row["peer_id"].map({ String(describing: $0) }).flatMap({ $0.isEmpty ? nil : $0 }),
+                      let localPort = positivePort(row["local_port"]),
+                      let destination = endpoint(row["remote_destination"])
+                else { continue }
+                let blueprint: [String: Any] = [
+                    "name": "bp-\(peerID)-\(transport)-\(localPort)",
+                    "listen": ["protocol": transport, "bind": "0.0.0.0", "port": localPort],
+                    "target": ["protocol": transport, "host": destination.host, "port": destination.port],
+                ]
+                if !(grouped[peerID] ?? []).contains(where: { ($0["name"] as? String) == blueprint["name"] as? String }) {
+                    grouped[peerID, default: []].append(blueprint)
+                }
+            }
+        }
+        return grouped.keys.sorted().compactMap { peerID in
+            guard let servers = grouped[peerID], !servers.isEmpty else { return nil }
+            return ["peer_id": peerID, "own_servers": servers]
+        }
+    }
+
+    private func positivePort(_ value: Any?) -> Int? {
+        let port: Int
+        if let number = value as? NSNumber { port = number.intValue }
+        else if let text = value as? String, let parsed = Int(text) { port = parsed }
+        else { return nil }
+        return (1...65535).contains(port) ? port : nil
+    }
+
+    private func endpoint(_ value: Any?) -> (host: String, port: Int)? {
+        let text = String(describing: value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separator = text.lastIndex(of: ":"),
+              let port = positivePort(String(text[text.index(after: separator)...]))
+        else { return nil }
+        let host = String(text[..<separator]).trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+        return host.isEmpty ? nil : (host, port)
     }
 
     private func jsonResponse(_ payload: [String: Any]) -> ObstacleBridgeAdminLinuxResponse {

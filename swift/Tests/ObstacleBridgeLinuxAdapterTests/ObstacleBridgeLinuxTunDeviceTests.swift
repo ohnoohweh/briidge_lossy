@@ -409,6 +409,19 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": connectionsRequestID, "ok": true, "result": ["tcp": [["state": "open"]]]]), to: control.0)
         #expect(connectionsReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: connectionsResponse.load(), encoding: .utf8)?.contains("\"state\":\"open\"") == true)
+        let blueprintsReady = DispatchSemaphore(value: 0)
+        let blueprintsResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { blueprintsReady.signal() }
+            blueprintsResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/onboarding/blueprints", headers: ["Cookie": cookie]))
+        }
+        let blueprintsRequest = try readControl(from: control.0)
+        #expect(blueprintsRequest["method"] as? String == "get_connections_snapshot")
+        let blueprintsRequestID = blueprintsRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": blueprintsRequestID, "ok": true, "result": ["tcp": [["state": "open", "peer_id": "peer-a", "local_port": 23001, "remote_destination": "198.51.100.7:443"]]]]), to: control.0)
+        #expect(blueprintsReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: blueprintsResponse.load(), encoding: .utf8)?.contains("\"peer_id\":\"peer-a\"") == true)
+        #expect(String(data: blueprintsResponse.load(), encoding: .utf8)?.contains("\"host\":\"198.51.100.7\"") == true)
         let peersReady = DispatchSemaphore(value: 0)
         let peersResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
