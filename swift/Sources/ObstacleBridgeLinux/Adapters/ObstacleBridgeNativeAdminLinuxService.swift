@@ -21,6 +21,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     }
     private let parentRPC: ObstacleBridgeNativeAdminWorker.ParentRPC
     private let security: ObstacleBridgeLinuxAdminSecurity
+    private let controlToken: String
     private let adminWebDirectory: URL
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.native-admin")
     private var listener: Int32 = -1
@@ -37,6 +38,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         let authDisabled = (arguments["admin_web_auth_disable"] as? Bool) ?? false
         let username = (arguments["admin_web_username"] as? String) ?? ""
         let password = (arguments["admin_web_password"] as? String) ?? ""
+        self.controlToken = (arguments["admin_web_token"] as? String) ?? ""
         self.adminWebDirectory = URL(fileURLWithPath: (arguments["admin_web_dir"] as? String) ?? "./admin_web", isDirectory: true).standardizedFileURL
         self.security = ObstacleBridgeLinuxAdminSecurity(
             credentials: { (!authDisabled && !username.isEmpty && !password.isEmpty, username, password) },
@@ -180,6 +182,10 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
                 writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
                 return
             }
+            guard isControlAuthorized(headers: headers) else {
+                writeResponse(client, status: "403 Forbidden", body: Data("{\"ok\":false,\"error\":\"forbidden\"}".utf8))
+                return
+            }
             guard let payload = (try? JSONSerialization.jsonObject(with: body ?? Data("{}".utf8))) as? [String: Any] else {
                 writeResponse(client, status: "400 Bad Request", body: Data("{\"ok\":false,\"error\":\"invalid JSON body\"}".utf8))
                 return
@@ -232,11 +238,45 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
                 writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
                 return
             }
+            guard isControlAuthorized(headers: headers) else {
+                writeResponse(client, status: "403 Forbidden", body: Data("{\"ok\":false,\"error\":\"forbidden\"}".utf8))
+                return
+            }
             let result = try? parentRPC.call(method: "request_tun_helper_repair", timeout: 2)
             let response = result as? [String: Any] ?? ["ok": false, "error": "TUN helper repair unavailable", "retryable": true]
             let status = (response["ok"] as? Bool ?? false) ? "200 OK" : "409 Conflict"
             let encoded = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
             writeResponse(client, status: status, body: encoded ?? Data("{\"ok\":false}".utf8))
+            return
+        case "/api/restart" where method == "POST":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            guard isControlAuthorized(headers: headers) else {
+                writeResponse(client, status: "403 Forbidden", body: Data("{\"ok\":false,\"error\":\"forbidden\"}".utf8))
+                return
+            }
+            guard (try? parentRPC.call(method: "request_restart", kwargs: ["reason": "admin_web:/api/restart"])) != nil else {
+                writeResponse(client, status: "503 Service Unavailable", body: Data("{\"ok\":false,\"error\":\"restart unavailable\",\"retryable\":true}".utf8))
+                return
+            }
+            writeResponse(client, status: "200 OK", body: Data("{\"ok\":true,\"restarting\":true}".utf8))
+            return
+        case "/api/shutdown" where method == "POST":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            guard isControlAuthorized(headers: headers) else {
+                writeResponse(client, status: "403 Forbidden", body: Data("{\"ok\":false,\"error\":\"forbidden\"}".utf8))
+                return
+            }
+            guard (try? parentRPC.call(method: "request_shutdown", kwargs: ["exit_code": 76, "reason": "admin_web:/api/shutdown"])) != nil else {
+                writeResponse(client, status: "503 Service Unavailable", body: Data("{\"ok\":false,\"error\":\"shutdown unavailable\",\"retryable\":true}".utf8))
+                return
+            }
+            writeResponse(client, status: "200 OK", body: Data("{\"ok\":true,\"shutting_down\":true}".utf8))
             return
         case "/api/config" where method == "POST":
             guard security.isAuthenticated(headers: headers) else {
@@ -389,6 +429,10 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             if parts.count == 2, parts[0] == "topic" { return String(parts[1]).lowercased() }
         }
         return ""
+    }
+
+    private func isControlAuthorized(headers: [String: String]) -> Bool {
+        controlToken.isEmpty || headers["authorization"] == "Bearer \(controlToken)"
     }
 
     private func serveLiveWebSocket(_ client: Int32, target: String, key: String, version: String) {

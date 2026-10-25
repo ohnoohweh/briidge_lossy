@@ -95,7 +95,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 7,
         ]), to: control.0)
         #expect(try readControl(from: control.0)["kind"] as? String == "worker.hello")
-        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_username": "admin", "admin_web_password": "secret"], "log_root_level": 0]), to: control.0)
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_username": "admin", "admin_web_password": "secret", "admin_web_token": "control"], "log_root_level": 0]), to: control.0)
         let request = try readControl(from: control.0)
         #expect(request["kind"] as? String == "admin.call")
         #expect(request["id"] as? String == "bootstrap-status")
@@ -255,11 +255,13 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(remoteServicesReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: remoteServicesResponse.load(), encoding: .utf8)?.contains("\"service\":\"echo\"") == true)
         let reconnectBody = try JSONSerialization.data(withJSONObject: ["peer_id": "0:1"])
+        let blockedReconnect = try nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/reconnect", body: reconnectBody, headers: ["Cookie": cookie])
+        #expect(String(data: blockedReconnect, encoding: .utf8)?.contains("HTTP/1.1 403 Forbidden") == true)
         let reconnectReady = DispatchSemaphore(value: 0)
         let reconnectResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
             defer { reconnectReady.signal() }
-            reconnectResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/reconnect", body: reconnectBody, headers: ["Cookie": cookie]))
+            reconnectResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/reconnect", body: reconnectBody, headers: ["Cookie": cookie, "Authorization": "Bearer control"]))
         }
         let reconnectRequest = try readControl(from: control.0)
         #expect(reconnectRequest["method"] as? String == "request_overlay_reconnect")
@@ -300,7 +302,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let tunRepairResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
             defer { tunRepairReady.signal() }
-            tunRepairResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/tun-helper/repair", headers: ["Cookie": cookie]))
+            tunRepairResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/tun-helper/repair", headers: ["Cookie": cookie, "Authorization": "Bearer control"]))
         }
         let tunRepairRequest = try readControl(from: control.0)
         #expect(tunRepairRequest["method"] as? String == "request_tun_helper_repair")
@@ -308,6 +310,33 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": tunRepairRequestID, "ok": true, "result": ["ok": true, "repaired": ["tun0"], "failed": []]]), to: control.0)
         #expect(tunRepairReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: tunRepairResponse.load(), encoding: .utf8)?.contains("\"repaired\":[\"tun0\"]") == true)
+        let restartReady = DispatchSemaphore(value: 0)
+        let restartResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { restartReady.signal() }
+            restartResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/restart", headers: ["Cookie": cookie, "Authorization": "Bearer control"]))
+        }
+        let restartRequest = try readControl(from: control.0)
+        #expect(restartRequest["method"] as? String == "request_restart")
+        #expect((restartRequest["kwargs"] as? [String: Any])?["reason"] as? String == "admin_web:/api/restart")
+        let restartRequestID = restartRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": restartRequestID, "ok": true, "result": NSNull()]), to: control.0)
+        #expect(restartReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: restartResponse.load(), encoding: .utf8)?.contains("\"restarting\":true") == true)
+        let shutdownReady = DispatchSemaphore(value: 0)
+        let shutdownResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { shutdownReady.signal() }
+            shutdownResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/shutdown", headers: ["Cookie": cookie, "Authorization": "Bearer control"]))
+        }
+        let shutdownRequest = try readControl(from: control.0)
+        #expect(shutdownRequest["method"] as? String == "request_shutdown")
+        #expect(((shutdownRequest["kwargs"] as? [String: Any])?["exit_code"] as? NSNumber)?.intValue == 76)
+        #expect((shutdownRequest["kwargs"] as? [String: Any])?["reason"] as? String == "admin_web:/api/shutdown")
+        let shutdownRequestID = shutdownRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": shutdownRequestID, "ok": true, "result": NSNull()]), to: control.0)
+        #expect(shutdownReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: shutdownResponse.load(), encoding: .utf8)?.contains("\"shutting_down\":true") == true)
         let logsReady = DispatchSemaphore(value: 0)
         let logsResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
