@@ -108,6 +108,9 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(ready["implementation"] as? String == "native")
         let port = (ready["port"] as? NSNumber)?.intValue ?? 0
         #expect(port > 0)
+        let index = try nativeAdminHTTPRequest(port: port, method: "GET", path: "/")
+        #expect(String(data: index, encoding: .utf8)?.contains("HTTP/1.1 200 OK") == true)
+        #expect(String(data: index, encoding: .utf8)?.contains("<!doctype html>") == true)
         let rejected = try nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/status")
         #expect(String(data: rejected, encoding: .utf8)?.contains("HTTP/1.1 401 Unauthorized") == true)
         let challengeResponse = try nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/auth/challenge")

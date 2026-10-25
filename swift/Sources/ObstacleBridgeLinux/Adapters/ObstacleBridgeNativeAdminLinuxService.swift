@@ -13,6 +13,7 @@ import Glibc
 public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     private let parentRPC: ObstacleBridgeNativeAdminWorker.ParentRPC
     private let security: ObstacleBridgeLinuxAdminSecurity
+    private let adminWebDirectory: URL
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.native-admin")
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
@@ -28,6 +29,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         let authDisabled = (arguments["admin_web_auth_disable"] as? Bool) ?? false
         let username = (arguments["admin_web_username"] as? String) ?? ""
         let password = (arguments["admin_web_password"] as? String) ?? ""
+        self.adminWebDirectory = URL(fileURLWithPath: (arguments["admin_web_dir"] as? String) ?? "./admin_web", isDirectory: true).standardizedFileURL
         self.security = ObstacleBridgeLinuxAdminSecurity(
             credentials: { (!authDisabled && !username.isEmpty && !password.isEmpty, username, password) },
             scope: { "\(bindHost)|\(requestedPort)" }
@@ -101,6 +103,10 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             result[pair[0].trimmingCharacters(in: .whitespaces).lowercased()] = pair[1].trimmingCharacters(in: .whitespaces)
         }
         let body = request.components(separatedBy: "\r\n\r\n").dropFirst().joined(separator: "\r\n\r\n").data(using: .utf8)
+        if method == "GET", let staticResponse = staticResponse(path: path) {
+            writeResponse(client, status: "200 OK", body: staticResponse.body, contentType: staticResponse.contentType)
+            return
+        }
         switch path {
         case "/api/auth/state" where method == "GET":
             writeResponse(client, response: jsonResponse(security.state(headers: headers)))
@@ -208,8 +214,28 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         ObstacleBridgeAdminAPI.linuxJSONResponse(payload) ?? .init(statusCode: 500, body: Data("{}".utf8))
     }
 
-    private func writeResponse(_ client: Int32, status: String, body: Data) {
-        var wire = Data("HTTP/1.1 \(status)\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)
+    private func staticResponse(path: String) -> (body: Data, contentType: String)? {
+        let relativePath: String
+        switch path {
+        case "/", "/index.html": relativePath = "index.html"
+        case "/app.js": relativePath = "app.js"
+        case "/style.css": relativePath = "style.css"
+        default: return nil
+        }
+        let file = adminWebDirectory.appendingPathComponent(relativePath).standardizedFileURL
+        guard file.deletingLastPathComponent() == adminWebDirectory,
+              let body = try? Data(contentsOf: file) else { return nil }
+        let contentType: String
+        switch relativePath {
+        case "app.js": contentType = "application/javascript; charset=utf-8"
+        case "style.css": contentType = "text/css; charset=utf-8"
+        default: contentType = "text/html; charset=utf-8"
+        }
+        return (body, contentType)
+    }
+
+    private func writeResponse(_ client: Int32, status: String, body: Data, contentType: String = "application/json; charset=utf-8") {
+        var wire = Data("HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)
         wire.append(body)
         _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
     }
