@@ -1675,7 +1675,7 @@ REQ-ADM-001:
   # The macOS child reports its bound status port and serves status over parent
   # RPC; the direct-loopback HTTP probe rejects system proxy lookup. Full
   # Linux owns a loopback-only status listener through inherited parent RPC and
-  # its socketpair probe completes authenticated status/configuration reads; configuration actions, log queries, browser/live sessions, full API parity and Python-side native selection remain open.
+  # its socketpair probe completes authenticated status/configuration/log reads; configuration actions, browser/live sessions, full API parity and Python-side native selection remain open.
   integration_tests:
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
