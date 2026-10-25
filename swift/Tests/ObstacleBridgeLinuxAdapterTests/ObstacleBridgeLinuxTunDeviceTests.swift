@@ -165,6 +165,30 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": logsRequestID, "ok": true, "result": ["native_admin_ready"]]), to: control.0)
         #expect(logsReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: logsResponse.load(), encoding: .utf8)?.contains("native_admin_ready") == true)
+        let connectionsReady = DispatchSemaphore(value: 0)
+        let connectionsResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { connectionsReady.signal() }
+            connectionsResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/connections", headers: ["Cookie": cookie]))
+        }
+        let connectionsRequest = try readControl(from: control.0)
+        #expect(connectionsRequest["method"] as? String == "get_connections_snapshot")
+        let connectionsRequestID = connectionsRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": connectionsRequestID, "ok": true, "result": ["tcp": [["state": "open"]]]]), to: control.0)
+        #expect(connectionsReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: connectionsResponse.load(), encoding: .utf8)?.contains("\"state\":\"open\"") == true)
+        let peersReady = DispatchSemaphore(value: 0)
+        let peersResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { peersReady.signal() }
+            peersResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/peers", headers: ["Cookie": cookie]))
+        }
+        let peersRequest = try readControl(from: control.0)
+        #expect(peersRequest["method"] as? String == "get_peer_connections_snapshot")
+        let peersRequestID = peersRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": peersRequestID, "ok": true, "result": ["peers": [["id": "0:1"]]]]), to: control.0)
+        #expect(peersReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: peersResponse.load(), encoding: .utf8)?.contains("\"id\":\"0:1\"") == true)
         let record = try JSONSerialization.jsonObject(with: readDatagram(from: log.0)) as? [String: Any]
         #expect(record?["name"] as? String == "admin.native")
         #expect(record?["message"] as? String == "native_admin_ready")

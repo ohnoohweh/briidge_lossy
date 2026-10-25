@@ -116,7 +116,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             return
         default: break
         }
-        guard method == "GET", ["/api/status", "/api/config", "/api/logs"].contains(path) else {
+        guard method == "GET", ["/api/status", "/api/config", "/api/logs", "/api/connections", "/api/peers"].contains(path) else {
             writeResponse(client, status: "404 Not Found", body: Data("{\"error\":\"not found\"}".utf8))
             return
         }
@@ -124,7 +124,14 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
             return
         }
-        let rpcMethod = path == "/api/status" ? "get_status_snapshot" : path == "/api/config" ? "get_config_snapshot" : "fetch_logs"
+        let rpcMethod: String
+        switch path {
+        case "/api/status": rpcMethod = "get_status_snapshot"
+        case "/api/config": rpcMethod = "get_config_snapshot"
+        case "/api/connections": rpcMethod = "get_connections_snapshot"
+        case "/api/peers": rpcMethod = "get_peer_connections_snapshot"
+        default: rpcMethod = "fetch_logs"
+        }
         let rpcArgs: [Any] = path == "/api/logs" ? [400] : []
         let result = try? parentRPC.call(method: rpcMethod, args: rpcArgs)
         let payload: Any = path == "/api/logs" ? ["logs": result ?? []] : (result as? [String: Any] ?? ["state": "unavailable"])
