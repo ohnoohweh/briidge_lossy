@@ -29,6 +29,7 @@ public enum ObstacleBridgeNativeAdminWorker {
             "update_config", "replace_remote_services_catalog", "request_overlay_reconnect",
             "request_secure_link_rekey", "request_secure_link_reload", "request_tun_helper_repair",
             "request_restart", "request_shutdown", "request_tun_enabled",
+            "get_telemetry_client_snapshot",
         ]
         private let control: FileHandle
         private let generation: Int

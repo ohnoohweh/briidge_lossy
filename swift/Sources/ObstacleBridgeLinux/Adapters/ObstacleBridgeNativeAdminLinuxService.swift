@@ -27,6 +27,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     private let adminWebName: String
     private let overlayTransport: String
     private let dashboardEnabled: Bool?
+    private let telemetrySpoolDirectory: String
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.native-admin")
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
@@ -46,6 +47,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         self.adminWebName = (arguments["admin_web_name"] as? String) ?? ""
         self.overlayTransport = (arguments["overlay_transport"] as? String) ?? ""
         self.dashboardEnabled = arguments["dashboard"] as? Bool
+        self.telemetrySpoolDirectory = (arguments["telemetry_spool_directory"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         self.adminWebDirectory = URL(fileURLWithPath: (arguments["admin_web_dir"] as? String) ?? "./admin_web", isDirectory: true).standardizedFileURL
         self.security = ObstacleBridgeLinuxAdminSecurity(
             credentials: { (!authDisabled && !username.isEmpty && !password.isEmpty, username, password) },
@@ -344,7 +346,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             return
         default: break
         }
-        guard method == "GET", ["/api/health", "/api/status", "/api/meta", "/api/config", "/api/logs", "/api/connections", "/api/peers", "/api/live"].contains(path) else {
+        guard method == "GET", ["/api/health", "/api/status", "/api/meta", "/api/config", "/api/logs", "/api/connections", "/api/peers", "/api/telemetry", "/api/live"].contains(path) else {
             writeResponse(client, status: "404 Not Found", body: Data("{\"error\":\"not found\"}".utf8))
             return
         }
@@ -383,6 +385,21 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
                 "build": snapshot["build"] ?? [:],
                 "runtime_dependencies": ["ok": true, "missing": [], "install_hint": ""],
             ]
+            guard let responseBody = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
+            writeResponse(client, status: "200 OK", body: responseBody)
+            return
+        }
+        if path == "/api/telemetry" {
+            guard !telemetrySpoolDirectory.isEmpty else {
+                writeResponse(client, status: "404 Not Found", body: Data("{\"ok\":false,\"error\":\"telemetry status disabled\"}".utf8))
+                return
+            }
+            let clientSnapshot = try? parentRPC.call(method: "get_telemetry_client_snapshot")
+            guard let telemetryClient = clientSnapshot as? [String: Any] else {
+                writeResponse(client, status: "503 Service Unavailable", body: Data("{\"ok\":false,\"error\":\"telemetry status unavailable\",\"retryable\":true}".utf8))
+                return
+            }
+            let payload: [String: Any] = ["ok": true, "client": telemetryClient]
             guard let responseBody = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
             writeResponse(client, status: "200 OK", body: responseBody)
             return
