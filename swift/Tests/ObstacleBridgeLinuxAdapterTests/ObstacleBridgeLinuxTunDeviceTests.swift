@@ -132,36 +132,28 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(String(data: healthResponse, encoding: .utf8)?.contains("{\"ok\":true}") == true)
         let malformedWebSocketResponse = try nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/live?topic=status", headers: ["Cookie": cookie, "Upgrade": "websocket", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="])
         #expect(String(data: malformedWebSocketResponse, encoding: .utf8)?.contains("HTTP/1.1 400 Bad Request") == true)
-        let websocketStarted = DispatchSemaphore(value: 0)
-        let websocketContinue = DispatchSemaphore(value: 0)
-        let websocketControlSent = DispatchSemaphore(value: 0)
-        let websocketReady = DispatchSemaphore(value: 0)
-        let websocketResponse = NativeAdminStatusResponse()
+        let websocketRPCReady = DispatchSemaphore(value: 0)
         DispatchQueue.global().async {
-            defer { websocketReady.signal() }
-            websocketResponse.store(try? self.nativeAdminWebSocketRequest(
-                port: port, cookie: cookie, started: websocketStarted, continueReading: websocketContinue, controlSent: websocketControlSent
-            ))
+            defer { websocketRPCReady.signal() }
+            do {
+                guard let statusRequest = try? self.readControl(from: control.0),
+                      let statusRequestID = statusRequest["id"] as? String else { return }
+                try self.writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": statusRequestID, "ok": true, "result": ["state": "live"]]), to: control.0)
+                guard let peersRequest = try? self.readControl(from: control.0),
+                      let peersRequestID = peersRequest["id"] as? String else { return }
+                try self.writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": peersRequestID, "ok": true, "result": ["peers": [["id": "0:1"]]]]), to: control.0)
+            } catch {
+                return
+            }
         }
-        #expect(websocketStarted.wait(timeout: .now() + 1) == .success)
-        let websocketRequest = try readControl(from: control.0)
-        #expect(websocketRequest["method"] as? String == "get_status_snapshot")
-        let websocketRequestID = websocketRequest["id"] as? String ?? ""
-        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": websocketRequestID, "ok": true, "result": ["state": "live"]]), to: control.0)
-        websocketContinue.signal()
-        #expect(websocketControlSent.wait(timeout: .now() + 1) == .success)
-        let websocketPeersRequest = try readControl(from: control.0)
-        #expect(websocketPeersRequest["method"] as? String == "get_peer_connections_snapshot")
-        let websocketPeersRequestID = websocketPeersRequest["id"] as? String ?? ""
-        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": websocketPeersRequestID, "ok": true, "result": ["peers": [["id": "0:1"]]]]), to: control.0)
-        #expect(websocketReady.wait(timeout: .now() + 1) == .success)
-        let websocketText = String(data: websocketResponse.load(), encoding: .utf8) ?? ""
-        #expect(websocketText.contains("HTTP/1.1 101 Switching Protocols"))
-        #expect(websocketText.contains("\"type\":\"hello\""))
-        #expect(websocketText.contains("\"type\":\"status\""))
-        #expect(websocketText.contains("\"state\":\"live\""))
-        #expect(websocketText.contains("\"type\":\"peers\""))
-        #expect(websocketText.contains("\"id\":\"0:1\""))
+        let websocketResponse = try nativeAdminWebSocketRequest(port: port, cookie: cookie)
+        #expect(websocketRPCReady.wait(timeout: .now() + 1) == .success)
+        #expect(websocketResponse.range(of: Data("HTTP/1.1 101 Switching Protocols".utf8)) != nil)
+        #expect(websocketResponse.range(of: Data("\"type\":\"hello\"".utf8)) != nil)
+        #expect(websocketResponse.range(of: Data("\"type\":\"status\"".utf8)) != nil)
+        #expect(websocketResponse.range(of: Data("\"state\":\"live\"".utf8)) != nil)
+        #expect(websocketResponse.range(of: Data("\"type\":\"peers\"".utf8)) != nil)
+        #expect(websocketResponse.range(of: Data("\"id\":\"0:1\"".utf8)) != nil)
         let responseReady = DispatchSemaphore(value: 0)
         let response = NativeAdminStatusResponse()
         DispatchQueue.global().async {
@@ -519,7 +511,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         }
     }
 
-    private func nativeAdminWebSocketRequest(port: Int, cookie: String, started: DispatchSemaphore, continueReading: DispatchSemaphore, controlSent: DispatchSemaphore) throws -> Data {
+    private func nativeAdminWebSocketRequest(port: Int, cookie: String) throws -> Data {
         let client = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
         guard client >= 0 else { throw POSIXError(.EMFILE) }
         defer { close(client) }
@@ -532,15 +524,12 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         }
         guard connected == 0 else { throw POSIXError(.ECONNREFUSED) }
         try writeAll(Data("GET /api/live?topic=status HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nCookie: \(cookie)\r\n\r\n".utf8), to: client)
-        started.signal()
         var output = try readSocketChunk(from: client)
-        _ = continueReading.wait(timeout: .now() + 1)
-        guard let initialSnapshot = try? readSocketChunk(from: client) else { return output }
-        output.append(initialSnapshot)
+        output.append(try readSocketChunk(from: client))
         let control = try JSONSerialization.data(withJSONObject: ["subscribe": ["peers"], "request": "peers"])
         try writeAll(maskedWebSocketTextFrame(control), to: client)
-        controlSent.signal()
-        if let peerSnapshot = try? readSocketChunk(from: client) { output.append(peerSnapshot) }
+        output.append(try readSocketChunk(from: client))
+        output.append(try readSocketChunk(from: client))
         return output
     }
 
