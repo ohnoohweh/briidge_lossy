@@ -90,7 +90,25 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let ready = try readControl(from: control.0)
         #expect(ready["kind"] as? String == "admin.ready")
         #expect(ready["implementation"] as? String == "native")
-        #expect((ready["port"] as? NSNumber)?.intValue ?? 0 > 0)
+        let port = (ready["port"] as? NSNumber)?.intValue ?? 0
+        #expect(port > 0)
+        let responseReady = DispatchSemaphore(value: 0)
+        let responseLock = NSLock()
+        var response = Data()
+        DispatchQueue.global().async {
+            defer { responseReady.signal() }
+            let result = try? self.nativeAdminStatusRequest(port: port)
+            responseLock.lock(); response = result ?? Data(); responseLock.unlock()
+        }
+        let statusRequest = try readControl(from: control.0)
+        #expect(statusRequest["kind"] as? String == "admin.call")
+        #expect(statusRequest["method"] as? String == "get_status_snapshot")
+        let statusRequestID = statusRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": statusRequestID, "ok": true, "result": ["state": "ready", "redacted": true]]), to: control.0)
+        #expect(responseReady.wait(timeout: .now() + 1) == .success)
+        responseLock.lock(); let statusResponse = response; responseLock.unlock()
+        #expect(String(data: statusResponse, encoding: .utf8)?.contains("HTTP/1.1 200 OK") == true)
+        #expect(String(data: statusResponse, encoding: .utf8)?.contains("\"state\":\"ready\"") == true)
         let record = try JSONSerialization.jsonObject(with: readDatagram(from: log.0)) as? [String: Any]
         #expect(record?["name"] as? String == "admin.native")
         #expect(record?["message"] as? String == "native_admin_ready")
@@ -155,6 +173,29 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         var descriptors = [Int32](repeating: -1, count: 2)
         guard socketpair(AF_UNIX, Int32(SOCK_DGRAM.rawValue), 0, &descriptors) == 0 else { throw POSIXError(.ENFILE) }
         return (descriptors[0], descriptors[1])
+    }
+
+    private func nativeAdminStatusRequest(port: Int) throws -> Data {
+        let client = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        guard client >= 0 else { throw POSIXError(.EMFILE) }
+        defer { close(client) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(UInt16(port).bigEndian)
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard connected == 0 else { throw POSIXError(.ECONNREFUSED) }
+        try writeAll(Data("GET /api/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".utf8), to: client)
+        var result = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = read(client, &buffer, buffer.count)
+            guard count >= 0 else { throw POSIXError(.EIO) }
+            if count == 0 { return result }
+            result.append(buffer, count: Int(count))
+        }
     }
 
     private func readDatagram(from descriptor: Int32) throws -> Data {

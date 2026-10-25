@@ -461,8 +461,9 @@ ARC-CMP-004:
   # The macOS native Admin child owns a status listener, reports its bound port,
   # and serves status through serialized allowlisted parent RPC. Its host-local
   # HTTP qualification bypasses system proxies and verifies owner-loss exit.
-  # Linux owns a loopback-only status listener through inherited parent RPC;
-  # full authenticated API/session parity and Linux listener HTTP qualification remain open.
+  # Linux owns a loopback-only status listener through inherited parent RPC and
+  # its socketpair probe completes that HTTP request; full authenticated
+  # API/session parity remains open.
   # A shared native Admin bootstrap accepts only verified inherited Unix-stream control/lifetime and record-only log descriptors, exchanges Admin HELLO/READY, makes one deadline-limited correlated bootstrap-status parent RPC, fails closed when its reply is withheld, and exits on owner loss; packaged macOS and required Linux Swift socketpair tests cover that boundary. Admin HTTP/session parity, host-local selection, and broader lifecycle qualification remain in IPC-1A2, IPC-1A3, and IPC-1Q. Contract-v1
   # requires explicit auth and rejects malformed
   # loopback bind and configuration before spawn while retaining the existing
