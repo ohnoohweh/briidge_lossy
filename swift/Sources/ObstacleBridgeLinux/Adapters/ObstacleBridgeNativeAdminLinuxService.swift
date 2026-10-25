@@ -117,7 +117,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
                 writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
                 return
             }
-            serveLiveWebSocket(client, target: target, key: headers["sec-websocket-key"] ?? "")
+            serveLiveWebSocket(client, target: target, key: headers["sec-websocket-key"] ?? "", version: headers["sec-websocket-version"] ?? "")
             return
         }
         if method == "GET", let staticResponse = staticResponse(path: path) {
@@ -192,12 +192,16 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             return
         default: break
         }
-        guard method == "GET", ["/api/status", "/api/meta", "/api/config", "/api/logs", "/api/connections", "/api/peers", "/api/live"].contains(path) else {
+        guard method == "GET", ["/api/health", "/api/status", "/api/meta", "/api/config", "/api/logs", "/api/connections", "/api/peers", "/api/live"].contains(path) else {
             writeResponse(client, status: "404 Not Found", body: Data("{\"error\":\"not found\"}".utf8))
             return
         }
         guard security.isAuthenticated(headers: headers) else {
             writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+            return
+        }
+        if path == "/api/health" {
+            writeResponse(client, status: "200 OK", body: Data("{\"ok\":true}".utf8))
             return
         }
         if path == "/api/config" {
@@ -302,9 +306,9 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         return ""
     }
 
-    private func serveLiveWebSocket(_ client: Int32, target: String, key: String) {
-        guard !key.isEmpty else {
-            writeResponse(client, status: "400 Bad Request", body: Data("{\"error\":\"missing websocket key\"}".utf8))
+    private func serveLiveWebSocket(_ client: Int32, target: String, key: String, version: String) {
+        guard !key.isEmpty, version == "13" else {
+            writeResponse(client, status: "400 Bad Request", body: Data("{\"error\":\"invalid websocket handshake\"}".utf8))
             return
         }
         let accept = Data(Insecure.SHA1.hash(data: Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8))).base64EncodedString()

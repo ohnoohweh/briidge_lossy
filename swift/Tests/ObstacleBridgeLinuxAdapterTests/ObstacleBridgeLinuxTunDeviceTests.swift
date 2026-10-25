@@ -127,6 +127,11 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             .split(separator: ":", maxSplits: 1).dropFirst().first?
             .split(separator: ";", maxSplits: 1).first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
         #expect(!cookie.isEmpty)
+        let healthResponse = try nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/health", headers: ["Cookie": cookie])
+        #expect(String(data: healthResponse, encoding: .utf8)?.contains("HTTP/1.1 200 OK") == true)
+        #expect(String(data: healthResponse, encoding: .utf8)?.contains("{\"ok\":true}") == true)
+        let malformedWebSocketResponse = try nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/live?topic=status", headers: ["Cookie": cookie, "Upgrade": "websocket", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="])
+        #expect(String(data: malformedWebSocketResponse, encoding: .utf8)?.contains("HTTP/1.1 400 Bad Request") == true)
         let websocketStarted = DispatchSemaphore(value: 0)
         let websocketContinue = DispatchSemaphore(value: 0)
         let websocketReady = DispatchSemaphore(value: 0)
