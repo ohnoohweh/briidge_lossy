@@ -447,6 +447,9 @@ ARC-CMP-004:
   # Native peer-worker evidence includes bounded private-descriptor admission;
   # Linux executable qualification remains a CI-host responsibility.
   # Desktop process evidence covers delivered component-specific worker slices.
+  # The target supervisor coordinates only lifecycle, capability handoff,
+  # bounded RPC, and status; direct private channels carry packet/TUN traffic
+  # and record-only producer logging between their owning workers.
   # The completed PXY-2 proxy contract qualifies Python/native selections on
   # each host locally; it does not require a macOS-to-Linux process pairing.
   # A shared Python/Swift codec now qualifies bounded control/data framing,

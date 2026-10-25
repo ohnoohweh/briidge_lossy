@@ -202,6 +202,31 @@ isolated stack and explicit peer identity. The shared-TUN worker is distinct
 from the privileged TUN helper: it owns peer/channel routing and packet
 arbitration; the helper retains device and host-policy privilege.
 
+### Control plane and data plane
+
+The desktop supervisor is the **control-plane coordinator**, not a packet or
+log-data switchboard. It starts and stops insulated bundle processes, selects
+their Python/native implementation, grants fresh private capabilities, tracks
+generation and health, applies bounded restart policy, and aggregates redacted
+status. Its worker RPCs are bounded, correlated, deadline-bearing control
+requests and lifecycle events. It may relay a bounded Admin log query or
+subscription request to the selected collector, but it must not relay overlay
+packets, TUN packets, service streams, or producer log records.
+
+The **data plane** uses direct, bounded private channels between the owning
+workers: a peer-stack worker exchanges packet/channel traffic with the
+shared-TUN routing worker; that router exchanges packet/control traffic with
+the privileged TUN helper; and every producer, including the shared-TUN
+routing worker, has a dedicated record-only, nonblocking descriptor to the
+logging collector. The collector never receives browser credentials or opens a
+public listener. Admin Web serves browser HTTP/WebSocket traffic directly; its
+bounded log-page and live-log control requests travel through the supervisor,
+which returns only the collector's bounded, redacted result. Collector
+unavailability or saturation drops the affected producer record and updates
+drop accounting; it never delays packet routing. Collector replacement creates
+a new generation and fresh producer descriptors, so a retired worker cannot
+publish into the replacement collector.
+
 Python and native workers implement the same versioned, language-neutral local
 IPC contracts and can be selected independently on macOS and Linux. The
 protocol must negotiate role, version, capabilities, and generation before

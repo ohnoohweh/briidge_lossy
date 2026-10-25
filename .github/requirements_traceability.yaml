@@ -1665,6 +1665,9 @@ REQ-ADM-001:
   # state remains observable through `/api/status`.
   # Python contract tests pin the same public worker fields and log envelope.
   # The isolated Admin-worker query path is covered by the same contract.
+  # The desktop supervisor remains a control-plane coordinator: it hands out
+  # capabilities and aggregates bounded lifecycle/status RPC, while direct
+  # private worker channels carry packet/TUN data and record-only logging.
   # Common desktop-worker framing independently verifies bounded control/data
   # frames, generation fencing, and capability-intersection parity in Python
   # and Swift. Python plus macOS/Linux-native peer children use the shared frames end

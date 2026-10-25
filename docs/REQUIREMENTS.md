@@ -17,6 +17,11 @@ ObstacleBridge is expected to:
 Desktop process isolation and independently selectable Python/native workers
 are a planned compatibility target; current delivery and remaining evidence
 are tracked in [ARCHITECTURE.md](ARCHITECTURE.md#desktop-process-isolation-and-exchangeability).
+Its target desktop supervisor is a control-plane coordinator for capability
+handoff, lifecycle, bounded RPC, and status aggregation; it is not a data-plane
+relay. Peer/TUN traffic and record-only producer logging use direct bounded
+private channels between their owning workers. Admin log queries remain bounded
+control requests through the supervisor to the selected collector.
 The existing Python and native TUN-helper protocol-v1 implementations reject
 frames with declared or encoded payloads over 1 MiB.
 The standalone native loopback log collector accepts the Python UDP v1 sender
