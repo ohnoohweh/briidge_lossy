@@ -1784,11 +1784,17 @@ class Runner:
         # tunnel providers where WebAdmin is the recovery/config surface.
         if getattr(self.args, "admin_web", False) and self.admin_web is None:
             admin_worker = str(getattr(self.args, "admin_web_worker", "off") or "off")
-            if admin_worker == "python":
+            if admin_worker in {"python", "native"}:
                 if ios_admin_ui:
                     raise ValueError("Admin worker is unsupported in iOS runtimes")
                 from .bridge_admin_worker import AdminWorker
-                self.admin_web = AdminWorker(self, self.args, supervised=True)
+                self.admin_web = AdminWorker(
+                    self,
+                    self.args,
+                    implementation=admin_worker,
+                    native_executable=getattr(self.args, "admin_web_worker_native_executable", None),
+                    supervised=True,
+                )
             elif admin_worker == "off":
                 self.admin_web = AdminWebUI(self.args, self)
             else:

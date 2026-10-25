@@ -8,6 +8,8 @@ import inspect
 import json
 import logging
 import math
+import os
+import shutil
 import socket
 import sys
 import threading
@@ -194,11 +196,13 @@ async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None, ge
 
 
 class AdminWorker:
-    implementation = "python"
-
-    def __init__(self, runner, args, *, supervised=False):
+    def __init__(self, runner, args, *, implementation="python", native_executable=None, supervised=False):
+        if implementation not in {"python", "native"}:
+            raise ValueError("unsupported Admin worker implementation")
         self.runner = runner
         self.args = args
+        self.implementation = implementation
+        self.native_executable = native_executable
         self.process = None
         self.writer = None
         self.lifetime = None
@@ -236,12 +240,15 @@ class AdminWorker:
             from .bridge_logging_worker import open_child_log_relay
             self._log_relay = open_child_log_relay()
             next_generation = self.generation + 1
-            command = [sys.executable, "-m", "obstacle_bridge.bridge_admin_worker",
-                       "--control-fd", str(child_control.fileno()), "--lifetime-fd", str(child_lifetime.fileno()), "--generation", str(next_generation)]
+            if self.implementation == "native":
+                command = self._native_command(child_control.fileno(), child_lifetime.fileno(), next_generation)
+            else:
+                command = [sys.executable, "-m", "obstacle_bridge.bridge_admin_worker",
+                           "--control-fd", str(child_control.fileno()), "--lifetime-fd", str(child_lifetime.fileno()), "--generation", str(next_generation)]
             inherited = [child_control.fileno(), child_lifetime.fileno()]
             if self._log_relay is not None:
                 log_fd = self._log_relay.sender.fileno()
-                command.extend(["--log-fd", str(log_fd)])
+                command.extend([("--log-fd" if self.implementation == "python" else "--log-fd"), str(log_fd)])
                 inherited.append(log_fd)
             self.process = await asyncio.create_subprocess_exec(
                 *command, stdin=asyncio.subprocess.DEVNULL, pass_fds=tuple(inherited),
@@ -266,7 +273,7 @@ class AdminWorker:
                                        "log_levels": {"admin_web": logging.getLogger("admin_web").level}}, next_generation))
             await asyncio.wait_for(self.writer.drain(), 1.0)
             response = await asyncio.wait_for(_read_frame(reader, next_generation), 6.0)
-            if response.get("kind") != "admin.ready" or response.get("implementation") != "python":
+            if response.get("kind") != "admin.ready" or response.get("implementation") != self.implementation:
                 raise ValueError("invalid Admin worker readiness")
             self.port = int(response.get("port") or 0)
             self._task = asyncio.create_task(self._dispatch(reader))
@@ -276,6 +283,18 @@ class AdminWorker:
             control.close(); child_control.close(); child_lifetime.close()
             await self._stop_child()
             raise
+
+    def _native_command(self, control_fd: int, lifetime_fd: int, generation: int) -> list[str]:
+        default_executable = "ObstacleBridgeHostRunner" if sys.platform == "darwin" else "ObstacleBridgeLinux"
+        executable = self.native_executable or os.environ.get("OBSTACLEBRIDGE_NATIVE_ADMIN_WORKER") or shutil.which(default_executable)
+        if not executable or not os.path.isfile(executable) or not os.access(executable, os.X_OK):
+            raise RuntimeError("native Admin worker executable is unavailable")
+        return [
+            executable,
+            "--admin-worker-control-fd", str(control_fd),
+            "--admin-worker-lifetime-fd", str(lifetime_fd),
+            "--generation", str(generation),
+        ]
 
     async def _supervise(self):
         while not self._stopping:

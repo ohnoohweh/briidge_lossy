@@ -75,6 +75,23 @@ def test_python_admin_worker_serves_runner_config_and_authenticates():
     asyncio.run(exercise())
 
 
+def test_native_admin_worker_command_uses_only_inherited_descriptors(tmp_path):
+    runner = _runner()
+    executable = tmp_path / "ObstacleBridgeNativeAdmin"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o700)
+    worker = AdminWorker(runner, runner.args, implementation="native", native_executable=str(executable))
+    assert worker._native_command(31, 32, 7) == [
+        str(executable),
+        "--admin-worker-control-fd", "31",
+        "--admin-worker-lifetime-fd", "32",
+        "--generation", "7",
+    ]
+    worker.native_executable = str(tmp_path / "missing")
+    with pytest.raises(RuntimeError, match="native Admin worker executable"):
+        worker._native_command(31, 32, 7)
+
+
 def test_python_admin_worker_updates_runner_and_serves_concurrent_requests(monkeypatch):
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
