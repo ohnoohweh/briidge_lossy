@@ -248,6 +248,26 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             let encoded = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
             writeResponse(client, status: status, body: encoded ?? Data("{\"ok\":false}".utf8))
             return
+        case "/api/tun-routing/control" where method == "POST":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            guard isControlAuthorized(headers: headers) else {
+                writeResponse(client, status: "403 Forbidden", body: Data("{\"ok\":false,\"error\":\"forbidden\"}".utf8))
+                return
+            }
+            guard let payload = (try? JSONSerialization.jsonObject(with: body ?? Data())) as? [String: Any],
+                  let enabled = payload["enabled"] as? Bool else {
+                writeResponse(client, status: "400 Bad Request", body: Data("{\"ok\":false,\"error\":\"enabled is required\"}".utf8))
+                return
+            }
+            let result = try? parentRPC.call(method: "request_tun_enabled", kwargs: ["enabled": enabled], timeout: 2)
+            let response = result as? [String: Any] ?? ["ok": false, "error": "TUN routing control unavailable", "retryable": true]
+            let status = (response["ok"] as? Bool ?? false) ? "200 OK" : "409 Conflict"
+            let encoded = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+            writeResponse(client, status: status, body: encoded ?? Data("{\"ok\":false}".utf8))
+            return
         case "/api/restart" where method == "POST":
             guard security.isAuthenticated(headers: headers) else {
                 writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))

@@ -310,6 +310,22 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": tunRepairRequestID, "ok": true, "result": ["ok": true, "repaired": ["tun0"], "failed": []]]), to: control.0)
         #expect(tunRepairReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: tunRepairResponse.load(), encoding: .utf8)?.contains("\"repaired\":[\"tun0\"]") == true)
+        let tunControlBody = try JSONSerialization.data(withJSONObject: ["enabled": true])
+        let blockedTunControl = try nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/tun-routing/control", body: tunControlBody, headers: ["Cookie": cookie])
+        #expect(String(data: blockedTunControl, encoding: .utf8)?.contains("HTTP/1.1 403 Forbidden") == true)
+        let tunControlReady = DispatchSemaphore(value: 0)
+        let tunControlResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { tunControlReady.signal() }
+            tunControlResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/tun-routing/control", body: tunControlBody, headers: ["Cookie": cookie, "Authorization": "Bearer control"]))
+        }
+        let tunControlRequest = try readControl(from: control.0)
+        #expect(tunControlRequest["method"] as? String == "request_tun_enabled")
+        #expect((tunControlRequest["kwargs"] as? [String: Any])?["enabled"] as? Bool == true)
+        let tunControlRequestID = tunControlRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": tunControlRequestID, "ok": true, "result": ["ok": true, "enabled": true]]), to: control.0)
+        #expect(tunControlReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: tunControlResponse.load(), encoding: .utf8)?.contains("\"enabled\":true") == true)
         let restartReady = DispatchSemaphore(value: 0)
         let restartResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
