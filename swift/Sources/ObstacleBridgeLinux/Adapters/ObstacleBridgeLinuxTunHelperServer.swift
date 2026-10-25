@@ -44,13 +44,14 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     private let backend: ObstacleBridgeLinuxTunHelperServerBackend
     private let onStop: (() -> Void)?
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.tun-helper-server", attributes: .concurrent)
+    private let watchdogQueue = DispatchQueue(label: "org.obstaclebridge.linux.tun-helper-server.watchdog")
     private let lock = NSLock()
     private let writerLock = NSLock()
     private var listener: Int32 = -1
     private var running = false
     private var authenticatedClients: Set<Int32> = []
     private var clientGenerations: [Int32: UInt64] = [:]
-    private var lastAuthenticatedActivity = Date()
+    private var lastAuthenticatedActivityNanoseconds = DispatchTime.now().uptimeNanoseconds
     private var watchdog: DispatchSourceTimer?
 
     public init(socketPath: String, sessionToken: String, backend: ObstacleBridgeLinuxTunHelperServerBackend, authenticatedClientIdleTimeout: TimeInterval = 5, unauthenticatedClientIdleTimeout: TimeInterval = 5, onStop: (() -> Void)? = nil) throws {
@@ -83,8 +84,8 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         let bound = withUnsafePointer(to: &address) { pointer in pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
         guard bound == 0, listen(fd, 16) == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxTunHelperAdapterError.connectFailed(code) }
         applySocketOwnership()
-        listener = fd; running = true; lastAuthenticatedActivity = Date()
-        let watchdog = DispatchSource.makeTimerSource(queue: queue)
+        listener = fd; running = true; lastAuthenticatedActivityNanoseconds = DispatchTime.now().uptimeNanoseconds
+        let watchdog = DispatchSource.makeTimerSource(queue: watchdogQueue)
         watchdog.schedule(deadline: .now() + authenticatedClientIdleTimeout, repeating: min(authenticatedClientIdleTimeout, 1))
         watchdog.setEventHandler { [weak self] in self?.expireIdleHelperIfNeeded() }
         self.watchdog = watchdog; watchdog.resume()
@@ -154,7 +155,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
                     guard !authenticated else { try? sendError("already_authenticated", "HELLO is accepted only once", generation: generation, to: client); continue }
                     guard message.payload["token"] as? String == sessionToken else { try? sendError("auth_failed", "invalid session token", generation: generation, to: client); continue }
                     authenticated = true
-                    lock.lock(); authenticatedClients.insert(client); lastAuthenticatedActivity = Date(); lock.unlock()
+                    lock.lock(); authenticatedClients.insert(client); lastAuthenticatedActivityNanoseconds = DispatchTime.now().uptimeNanoseconds; lock.unlock()
                     try? sendControl("HELLO_OK", ["authenticated": true], generation: generation, to: client)
                     continue
                 }
@@ -195,10 +196,14 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
             try? sendError("\(operation.lowercased())_failed", error.localizedDescription, generation: generation, to: client)
         }
     }
-    private func markAuthenticatedActivity() { lock.lock(); lastAuthenticatedActivity = Date(); lock.unlock() }
+    private func markAuthenticatedActivity() {
+        lock.lock(); lastAuthenticatedActivityNanoseconds = DispatchTime.now().uptimeNanoseconds; lock.unlock()
+    }
     private func expireIdleHelperIfNeeded() {
         lock.lock()
-        let expired = running && authenticatedClients.isEmpty && Date().timeIntervalSince(lastAuthenticatedActivity) >= authenticatedClientIdleTimeout
+        let timeoutNanoseconds = UInt64(authenticatedClientIdleTimeout * 1_000_000_000)
+        let elapsedNanoseconds = DispatchTime.now().uptimeNanoseconds &- lastAuthenticatedActivityNanoseconds
+        let expired = running && authenticatedClients.isEmpty && elapsedNanoseconds >= timeoutNanoseconds
         lock.unlock()
         if expired { emitEvent("helper authenticated-client idle timeout"); stop() }
     }

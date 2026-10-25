@@ -1694,6 +1694,7 @@ REQ-ADM-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss
     - swift/Tests/ObstacleBridgeDesktopSharedTests/ObstacleBridgeWorkerIPCTests.swift::controlDecodeRejectsDuplicateObjectMembersAtEveryDepth
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterAuthenticatedOwnerLoss
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterAuthenticatedClientIdleWindow
     - tests/unit/test_proxy_worker.py::test_proxy_control_rejects_oversize_header_without_waiting_for_body
     - tests/unit/test_native_proxy_supervisor.py::test_swift_supervisor_owns_python_or_native_proxy
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input

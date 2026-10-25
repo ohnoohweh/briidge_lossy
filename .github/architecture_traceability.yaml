@@ -533,6 +533,7 @@ ARC-CMP-004:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss
     - swift/Tests/ObstacleBridgeDesktopSharedTests/ObstacleBridgeWorkerIPCTests.swift::controlDecodeRejectsDuplicateObjectMembersAtEveryDepth
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterAuthenticatedOwnerLoss
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterAuthenticatedClientIdleWindow
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_exits_when_supervisor_is_killed
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
