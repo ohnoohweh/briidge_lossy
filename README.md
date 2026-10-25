@@ -942,7 +942,7 @@ To opt into a desktop proxy child, add `--proxy-provider-worker python` or `--pr
 
 For native Python-worker deployment, the configured executable is authoritative; otherwise `OBSTACLEBRIDGE_NATIVE_PROXY_WORKER` can identify the packaged worker before the development `PATH` lookup. The selected path must be a regular executable file. Native desktop hosts resolve their bundled `ObstacleBridgeProxyWorker` beside the host executable. An invalid candidate fails before private worker IPC and never selects the in-process provider.
 
-Desktop proxy-worker and native-host status use the shared redacted lifecycle errors `unavailable`, `startup_failed`, and `invalid_configuration`; recovery clears the error and retains generation and failed-start counters.
+Desktop proxy-worker and native-host status use the shared redacted lifecycle errors `unavailable`, `startup_failed`, and `invalid_configuration`; transient initial launch failures and later worker loss use the same bounded recovery path, which clears the error while retaining generation and failed-start counters.
 Proxy `enabled` reports configured intent through the shared Apple status projection; listener and worker fields report the independently changing runtime state.
 Admin status includes the selected logging collector lifecycle and bounded dropped-record count; a native child record waits behind a concurrent collector lifecycle transition rather than being silently discarded.
 PXY-3 lifecycle and collector qualification is complete in separately named Linux proxy-collector and macOS proxy-collector/host gates; each host runs only its local worker selections.

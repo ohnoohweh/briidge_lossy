@@ -353,7 +353,9 @@ resolve the bundled worker beside their host executable. Every selected path
 must be an executable regular file; invalid discovery fails before private
 control IPC starts and never falls back to in-process proxy ownership.
 
-Proxy-worker qualification is platform-local. The named Linux and macOS gates
+Proxy-worker qualification is platform-local. A transient initial selected-worker
+launch failure retains its bounded private configuration and follows the same
+recovery path as later worker loss. The named Linux and macOS gates
 each report `python-worker` and `packaged-native-worker`, and exercise the
 selected worker's authenticated HTTP CONNECT/SOCKS5 traffic, redacted
 status/log projection, forced replacement, and host shutdown. A native host
