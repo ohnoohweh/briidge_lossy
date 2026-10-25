@@ -23,6 +23,10 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     private let security: ObstacleBridgeLinuxAdminSecurity
     private let controlToken: String
     private let adminWebDirectory: URL
+    private let startedAt = ProcessInfo.processInfo.systemUptime
+    private let adminWebName: String
+    private let overlayTransport: String
+    private let dashboardEnabled: Bool?
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.native-admin")
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
@@ -39,6 +43,9 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         let username = (arguments["admin_web_username"] as? String) ?? ""
         let password = (arguments["admin_web_password"] as? String) ?? ""
         self.controlToken = (arguments["admin_web_token"] as? String) ?? ""
+        self.adminWebName = (arguments["admin_web_name"] as? String) ?? ""
+        self.overlayTransport = (arguments["overlay_transport"] as? String) ?? ""
+        self.dashboardEnabled = arguments["dashboard"] as? Bool
         self.adminWebDirectory = URL(fileURLWithPath: (arguments["admin_web_dir"] as? String) ?? "./admin_web", isDirectory: true).standardizedFileURL
         self.security = ObstacleBridgeLinuxAdminSecurity(
             credentials: { (!authDisabled && !username.isEmpty && !password.isEmpty, username, password) },
@@ -367,7 +374,14 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             let payload: [String: Any] = [
                 "app": "ObstacleBridgeLinux",
                 "platform": "linux",
+                "pid": ProcessInfo.processInfo.processIdentifier,
+                "uptime_sec": max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt)),
+                "admin_web_name": adminWebName,
+                "overlay_transport": overlayTransport,
+                "dashboard_enabled": dashboardEnabled ?? NSNull(),
+                "milestone": "C",
                 "build": snapshot["build"] ?? [:],
+                "runtime_dependencies": ["ok": true, "missing": [], "install_hint": ""],
             ]
             guard let responseBody = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
             writeResponse(client, status: "200 OK", body: responseBody)

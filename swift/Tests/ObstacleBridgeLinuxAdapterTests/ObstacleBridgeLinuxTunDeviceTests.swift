@@ -95,7 +95,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 7,
         ]), to: control.0)
         #expect(try readControl(from: control.0)["kind"] as? String == "worker.hello")
-        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_username": "admin", "admin_web_password": "secret", "admin_web_token": "control"], "log_root_level": 0]), to: control.0)
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_username": "admin", "admin_web_password": "secret", "admin_web_token": "control", "admin_web_name": "native-test", "overlay_transport": "tcp", "dashboard": true], "log_root_level": 0]), to: control.0)
         let request = try readControl(from: control.0)
         #expect(request["kind"] as? String == "admin.call")
         #expect(request["id"] as? String == "bootstrap-status")
@@ -183,6 +183,9 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(metaReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"app\":\"ObstacleBridgeLinux\"") == true)
         #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"commit\":\"abc123\"") == true)
+        #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"admin_web_name\":\"native-test\"") == true)
+        #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"overlay_transport\":\"tcp\"") == true)
+        #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"dashboard_enabled\":true") == true)
         let liveReady = DispatchSemaphore(value: 0)
         let liveResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
