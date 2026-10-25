@@ -143,6 +143,7 @@
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxForegroundOptions.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminConfigurationStore.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminServer.swift",
+        "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeNativeAdminLinuxService.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminSecurity.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminWebConfiguration.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxObservability.swift",

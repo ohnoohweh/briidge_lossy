@@ -63,14 +63,23 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let stopped = DispatchSemaphore(value: 0)
         DispatchQueue.global().async {
             defer { stopped.signal() }
-            try? ObstacleBridgeNativeAdminWorker.run(controlFD: childControl, lifetimeFD: childLifetime, logFD: childLog, generation: 7)
+            try? ObstacleBridgeNativeAdminWorker.run(
+                controlFD: childControl,
+                lifetimeFD: childLifetime,
+                logFD: childLog,
+                generation: 7,
+                serviceFactory: { arguments, parentRPC in
+                    let service = try ObstacleBridgeNativeAdminLinuxService(arguments: arguments, parentRPC: parentRPC)
+                    return .init(port: service.port, stop: { service.stop() })
+                }
+            )
         }
 
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .hello, generation: 7, value: [
             "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 7,
         ]), to: control.0)
         #expect(try readControl(from: control.0)["kind"] as? String == "worker.hello")
-        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": [String: Any](), "log_root_level": 0]), to: control.0)
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0], "log_root_level": 0]), to: control.0)
         let request = try readControl(from: control.0)
         #expect(request["kind"] as? String == "admin.call")
         #expect(request["id"] as? String == "bootstrap-status")
@@ -81,6 +90,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let ready = try readControl(from: control.0)
         #expect(ready["kind"] as? String == "admin.ready")
         #expect(ready["implementation"] as? String == "native")
+        #expect((ready["port"] as? NSNumber)?.intValue ?? 0 > 0)
         let record = try JSONSerialization.jsonObject(with: readDatagram(from: log.0)) as? [String: Any]
         #expect(record?["name"] as? String == "admin.native")
         #expect(record?["message"] as? String == "native_admin_ready")
