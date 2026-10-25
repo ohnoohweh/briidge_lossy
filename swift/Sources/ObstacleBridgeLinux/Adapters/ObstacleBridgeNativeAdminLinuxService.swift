@@ -175,7 +175,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             return
         default: break
         }
-        guard method == "GET", ["/api/status", "/api/config", "/api/logs", "/api/connections", "/api/peers"].contains(path) else {
+        guard method == "GET", ["/api/status", "/api/meta", "/api/config", "/api/logs", "/api/connections", "/api/peers"].contains(path) else {
             writeResponse(client, status: "404 Not Found", body: Data("{\"error\":\"not found\"}".utf8))
             return
         }
@@ -190,6 +190,18 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
                 "ok": true,
                 "config": config as? [String: Any] ?? [:],
                 "schema": schema as? [String: Any] ?? [:],
+            ]
+            guard let responseBody = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
+            writeResponse(client, status: "200 OK", body: responseBody)
+            return
+        }
+        if path == "/api/meta" {
+            let status = try? parentRPC.call(method: "get_status_snapshot")
+            let snapshot = status as? [String: Any] ?? [:]
+            let payload: [String: Any] = [
+                "app": "ObstacleBridgeLinux",
+                "platform": "linux",
+                "build": snapshot["build"] ?? [:],
             ]
             guard let responseBody = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
             writeResponse(client, status: "200 OK", body: responseBody)

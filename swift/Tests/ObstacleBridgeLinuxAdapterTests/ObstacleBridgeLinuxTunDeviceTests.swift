@@ -143,6 +143,19 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let statusResponse = response.load()
         #expect(String(data: statusResponse, encoding: .utf8)?.contains("HTTP/1.1 200 OK") == true)
         #expect(String(data: statusResponse, encoding: .utf8)?.contains("\"state\":\"ready\"") == true)
+        let metaReady = DispatchSemaphore(value: 0)
+        let metaResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { metaReady.signal() }
+            metaResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/meta", headers: ["Cookie": cookie]))
+        }
+        let metaRequest = try readControl(from: control.0)
+        #expect(metaRequest["method"] as? String == "get_status_snapshot")
+        let metaRequestID = metaRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": metaRequestID, "ok": true, "result": ["build": ["commit": "abc123"]]), to: control.0)
+        #expect(metaReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"app\":\"ObstacleBridgeLinux\"") == true)
+        #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"commit\":\"abc123\"") == true)
         let configReady = DispatchSemaphore(value: 0)
         let configResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
