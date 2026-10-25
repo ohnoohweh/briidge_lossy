@@ -114,6 +114,56 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         case "/api/auth/logout" where method == "POST":
             writeResponse(client, response: security.logout(headers: headers))
             return
+        case "/api/config/challenge":
+            guard method == "POST" else {
+                writeResponse(client, status: "405 Method Not Allowed", body: Data("{\"error\":\"method not allowed\"}".utf8))
+                return
+            }
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            guard let updates = (try? JSONSerialization.jsonObject(with: body ?? Data())) as? [String: Any],
+                  let values = updates["updates"] as? [String: Any] else {
+                writeResponse(client, status: "400 Bad Request", body: Data("{\"ok\":false,\"error\":\"updates must be an object\"}".utf8))
+                return
+            }
+            writeResponse(client, response: jsonResponse((try? security.issueConfigChallenge(updates: values)) ?? ["ok": false, "error": "updates must be an object"]))
+            return
+        case "/api/config" where method == "POST":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            guard let payload = (try? JSONSerialization.jsonObject(with: body ?? Data())) as? [String: Any],
+                  let updates = payload["updates"] as? [String: Any] else {
+                writeResponse(client, status: "400 Bad Request", body: Data("{\"ok\":false,\"error\":\"invalid JSON body or updates must be an object\"}".utf8))
+                return
+            }
+            let authRequired = security.state(headers: headers)["auth_required"] as? Bool ?? false
+            guard !authRequired || (!(payload["challenge_id"] as? String ?? "").isEmpty && !(payload["proof"] as? String ?? "").isEmpty) else {
+                writeResponse(client, status: "428 Precondition Required", body: Data("{\"ok\":false,\"error\":\"configuration change confirmation required\"}".utf8))
+                return
+            }
+            if authRequired, let error = security.validateConfigChallenge(body: body) {
+                let encoded = try? JSONSerialization.data(withJSONObject: ["ok": false, "error": error], options: [.sortedKeys])
+                writeResponse(client, status: "403 Forbidden", body: encoded ?? Data("{}".utf8))
+                return
+            }
+            let result = try? parentRPC.call(method: "update_config", args: [updates])
+            let values = result as? [Any] ?? []
+            let succeeded = (values.first as? Bool) ?? ((values.first as? NSNumber)?.boolValue ?? false)
+            if !succeeded {
+                let error = values.dropFirst().first as? String ?? "configuration update failed"
+                let encoded = try? JSONSerialization.data(withJSONObject: ["ok": false, "error": error], options: [.sortedKeys])
+                writeResponse(client, status: "400 Bad Request", body: encoded ?? Data("{}".utf8))
+                return
+            }
+            if updates.keys.contains(where: { ["admin_web_auth_disable", "admin_web_username", "admin_web_password", "secure_link_psk"].contains($0) }) {
+                security.reset()
+            }
+            writeResponse(client, status: "200 OK", body: Data("{\"ok\":true}".utf8))
+            return
         default: break
         }
         guard method == "GET", ["/api/status", "/api/config", "/api/logs", "/api/connections", "/api/peers"].contains(path) else {

@@ -152,6 +152,29 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": configRequestID, "ok": true, "result": ["config": ["redacted": true]]]), to: control.0)
         #expect(configReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: configResponse.load(), encoding: .utf8)?.contains("\"redacted\":true") == true)
+        let updates: [String: Any] = ["debug_logging": ["debug_enabled": true]]
+        let challengeRequestBody = try JSONSerialization.data(withJSONObject: ["updates": updates], options: [.sortedKeys])
+        let configChallengeResponse = try nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/config/challenge", headers: ["Cookie": cookie], body: challengeRequestBody)
+        let configChallenge = try JSONSerialization.jsonObject(with: try httpBody(configChallengeResponse)) as? [String: Any]
+        let configChallengeID = configChallenge?["challenge_id"] as? String ?? ""
+        let configSeed = configChallenge?["seed"] as? String ?? ""
+        let canonicalUpdates = try JSONSerialization.data(withJSONObject: updates, options: [.sortedKeys])
+        let updatesDigest = ObstacleBridgeCrypto.sha256(canonicalUpdates).map { String(format: "%02x", $0) }.joined()
+        let configProof = ObstacleBridgeCrypto.sha256(Data("\(configSeed):admin:secret:\(updatesDigest)".utf8)).map { String(format: "%02x", $0) }.joined()
+        let confirmedUpdateBody = try JSONSerialization.data(withJSONObject: ["updates": updates, "challenge_id": configChallengeID, "proof": configProof], options: [.sortedKeys])
+        let updateReady = DispatchSemaphore(value: 0)
+        let updateResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { updateReady.signal() }
+            updateResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/config", headers: ["Cookie": cookie], body: confirmedUpdateBody))
+        }
+        let updateRequest = try readControl(from: control.0)
+        #expect(updateRequest["method"] as? String == "update_config")
+        #expect(((updateRequest["args"] as? [[String: Any]])?.first?["debug_logging"] as? [String: Bool])?["debug_enabled"] == true)
+        let updateRequestID = updateRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": updateRequestID, "ok": true, "result": [true, ""]]), to: control.0)
+        #expect(updateReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: updateResponse.load(), encoding: .utf8)?.contains("\"ok\":true") == true)
         let logsReady = DispatchSemaphore(value: 0)
         let logsResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
