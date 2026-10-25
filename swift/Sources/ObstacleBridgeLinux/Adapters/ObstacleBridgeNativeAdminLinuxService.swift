@@ -358,6 +358,20 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             }
             writeResponse(client, status: "200 OK", body: encoded)
             return
+        case "/api/onboarding/connection-profiles" where method == "GET":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            let peers = try? parentRPC.call(method: "get_peer_connections_snapshot")
+            let profiles = onboardingConnectionProfiles(peers as? [String: Any] ?? [:])
+            let payload: [String: Any] = ["ok": true, "count": profiles.count, "profiles": profiles]
+            guard let encoded = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
+                writeResponse(client, status: "503 Service Unavailable", body: Data("{\"ok\":false,\"error\":\"profiles unavailable\",\"retryable\":true}".utf8))
+                return
+            }
+            writeResponse(client, status: "200 OK", body: encoded)
+            return
         default: break
         }
         guard method == "GET", ["/api/health", "/api/status", "/api/meta", "/api/config", "/api/logs", "/api/connections", "/api/peers", "/api/telemetry", "/api/tun-routing/status", "/api/live"].contains(path) else {
@@ -499,6 +513,34 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         return grouped.keys.sorted().compactMap { peerID in
             guard let servers = grouped[peerID], !servers.isEmpty else { return nil }
             return ["peer_id": peerID, "own_servers": servers]
+        }
+    }
+
+    private func onboardingConnectionProfiles(_ snapshot: [String: Any]) -> [[String: Any]] {
+        guard let rows = snapshot["peers"] as? [[String: Any]] else { return [] }
+        return rows.compactMap { row in
+            let transport = String(describing: row["transport"] ?? "").lowercased()
+            guard ["udp", "tcp", "quic", "ws", "myudp"].contains(transport) else { return nil }
+            let role = String(describing: row["state"] ?? "").lowercased() == "listening" ? "server" : "client"
+            let endpoint = endpoint(row[role == "server" ? "listen" : "peer"])
+            let identifier = String(describing: row["id"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            var profile: [String: Any] = [
+                "id": "live:\(transport):\(identifier)",
+                "source": "live",
+                "transport": transport == "udp" ? "myudp" : transport,
+                "role": role,
+                "endpoint_host": endpoint?.host ?? "",
+                "endpoint_port": endpoint?.port ?? NSNull(),
+                "label": endpoint.map { "\(transport.uppercased()) \(role) \($0.host):\($0.port)" } ?? "\(transport.uppercased()) \(role)",
+            ]
+            if role == "server" {
+                profile["listen_bind"] = endpoint?.host ?? ""
+                profile["listen_port"] = endpoint?.port ?? NSNull()
+            } else {
+                profile["peer_host"] = endpoint?.host ?? ""
+                profile["peer_port"] = endpoint?.port ?? NSNull()
+            }
+            return profile
         }
     }
 

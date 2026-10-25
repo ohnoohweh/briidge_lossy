@@ -422,6 +422,19 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(blueprintsReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: blueprintsResponse.load(), encoding: .utf8)?.contains("\"peer_id\":\"peer-a\"") == true)
         #expect(String(data: blueprintsResponse.load(), encoding: .utf8)?.contains("\"host\":\"198.51.100.7\"") == true)
+        let profilesReady = DispatchSemaphore(value: 0)
+        let profilesResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { profilesReady.signal() }
+            profilesResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/onboarding/connection-profiles", headers: ["Cookie": cookie]))
+        }
+        let profilesRequest = try readControl(from: control.0)
+        #expect(profilesRequest["method"] as? String == "get_peer_connections_snapshot")
+        let profilesRequestID = profilesRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": profilesRequestID, "ok": true, "result": ["peers": [["id": "0:1", "transport": "tcp", "state": "connected", "peer": "198.51.100.9:8443"]]]]), to: control.0)
+        #expect(profilesReady.wait(timeout: .now() + 1) == .success)
+        #expect(String(data: profilesResponse.load(), encoding: .utf8)?.contains("\"id\":\"live:tcp:0:1\"") == true)
+        #expect(String(data: profilesResponse.load(), encoding: .utf8)?.contains("\"peer_host\":\"198.51.100.9\"") == true)
         let peersReady = DispatchSemaphore(value: 0)
         let peersResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
