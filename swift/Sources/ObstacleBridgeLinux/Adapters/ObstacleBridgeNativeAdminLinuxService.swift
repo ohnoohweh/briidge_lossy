@@ -95,7 +95,8 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             return
         }
         let method = String(components[0]).uppercased()
-        let path = String(components[1]).split(separator: "?", maxSplits: 1).first.map(String.init) ?? ""
+        let target = String(components[1])
+        let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? ""
         let headerText = request.split(separator: "\r\n\r\n", maxSplits: 1).first.map(String.init) ?? ""
         let headers = headerText.split(separator: "\r\n").dropFirst().reduce(into: [String: String]()) { result, value in
             let pair = value.split(separator: ":", maxSplits: 1)
@@ -215,7 +216,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         case "/api/peers": rpcMethod = "get_peer_connections_snapshot"
         default: rpcMethod = "fetch_logs"
         }
-        let rpcArgs: [Any] = path == "/api/logs" ? [400] : []
+        let rpcArgs: [Any] = path == "/api/logs" ? [logLimit(target: target)] : []
         let result = try? parentRPC.call(method: rpcMethod, args: rpcArgs)
         let payload: Any = path == "/api/logs" ? ["logs": result ?? []] : (result as? [String: Any] ?? ["state": "unavailable"])
         guard let body = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
@@ -244,6 +245,17 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         default: contentType = "text/html; charset=utf-8"
         }
         return (body, contentType)
+    }
+
+    private func logLimit(target: String) -> Int {
+        guard let query = target.split(separator: "?", maxSplits: 1).dropFirst().first else { return 400 }
+        for pair in query.split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1)
+            if parts.count == 2, parts[0] == "limit", let value = Int(parts[1]) {
+                return max(1, min(value, 10_000))
+            }
+        }
+        return 400
     }
 
     private func writeResponse(_ client: Int32, status: String, body: Data, contentType: String = "application/json; charset=utf-8") {

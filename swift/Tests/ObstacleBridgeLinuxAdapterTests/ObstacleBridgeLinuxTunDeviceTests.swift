@@ -205,11 +205,11 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let logsResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
             defer { logsReady.signal() }
-            logsResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/logs", headers: ["Cookie": cookie]))
+            logsResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/logs?limit=7", headers: ["Cookie": cookie]))
         }
         let logsRequest = try readControl(from: control.0)
         #expect(logsRequest["method"] as? String == "fetch_logs")
-        #expect((logsRequest["args"] as? [NSNumber])?.first?.intValue == 400)
+        #expect((logsRequest["args"] as? [NSNumber])?.first?.intValue == 7)
         let logsRequestID = logsRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": logsRequestID, "ok": true, "result": ["native_admin_ready"]]), to: control.0)
         #expect(logsReady.wait(timeout: .now() + 1) == .success)
