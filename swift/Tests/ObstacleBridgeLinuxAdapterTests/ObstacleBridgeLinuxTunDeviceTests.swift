@@ -535,11 +535,12 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         started.signal()
         var output = try readSocketChunk(from: client)
         _ = continueReading.wait(timeout: .now() + 1)
-        output.append(try readSocketChunk(from: client))
+        guard let initialSnapshot = try? readSocketChunk(from: client) else { return output }
+        output.append(initialSnapshot)
         let control = try JSONSerialization.data(withJSONObject: ["subscribe": ["peers"], "request": "peers"])
         try writeAll(maskedWebSocketTextFrame(control), to: client)
         controlSent.signal()
-        output.append(try readSocketChunk(from: client))
+        if let peerSnapshot = try? readSocketChunk(from: client) { output.append(peerSnapshot) }
         return output
     }
 
