@@ -174,6 +174,18 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
             return
         }
+        if path == "/api/config" {
+            let config = try? parentRPC.call(method: "get_config_snapshot")
+            let schema = try? parentRPC.call(method: "get_config_schema_snapshot")
+            let payload: [String: Any] = [
+                "ok": true,
+                "config": config as? [String: Any] ?? [:],
+                "schema": schema as? [String: Any] ?? [:],
+            ]
+            guard let responseBody = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
+            writeResponse(client, status: "200 OK", body: responseBody)
+            return
+        }
         let rpcMethod: String
         switch path {
         case "/api/status": rpcMethod = "get_status_snapshot"

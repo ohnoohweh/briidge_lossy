@@ -150,8 +150,13 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(configRequest["method"] as? String == "get_config_snapshot")
         let configRequestID = configRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": configRequestID, "ok": true, "result": ["config": ["redacted": true]]]), to: control.0)
+        let schemaRequest = try readControl(from: control.0)
+        #expect(schemaRequest["method"] as? String == "get_config_schema_snapshot")
+        let schemaRequestID = schemaRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": schemaRequestID, "ok": true, "result": ["fields": ["debug_logging"]]), to: control.0)
         #expect(configReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: configResponse.load(), encoding: .utf8)?.contains("\"redacted\":true") == true)
+        #expect(String(data: configResponse.load(), encoding: .utf8)?.contains("\"schema\":{\"fields\":[\"debug_logging\"]}") == true)
         let updates: [String: Any] = ["debug_logging": ["debug_enabled": true]]
         let challengeRequestBody = try JSONSerialization.data(withJSONObject: ["updates": updates], options: [.sortedKeys])
         let configChallengeResponse = try nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/config/challenge", headers: ["Cookie": cookie], body: challengeRequestBody)
