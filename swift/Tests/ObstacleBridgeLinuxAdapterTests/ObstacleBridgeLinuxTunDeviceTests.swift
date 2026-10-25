@@ -134,12 +134,13 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(String(data: malformedWebSocketResponse, encoding: .utf8)?.contains("HTTP/1.1 400 Bad Request") == true)
         let websocketStarted = DispatchSemaphore(value: 0)
         let websocketContinue = DispatchSemaphore(value: 0)
+        let websocketControlSent = DispatchSemaphore(value: 0)
         let websocketReady = DispatchSemaphore(value: 0)
         let websocketResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
             defer { websocketReady.signal() }
             websocketResponse.store(try? self.nativeAdminWebSocketRequest(
-                port: port, cookie: cookie, started: websocketStarted, continueReading: websocketContinue
+                port: port, cookie: cookie, started: websocketStarted, continueReading: websocketContinue, controlSent: websocketControlSent
             ))
         }
         #expect(websocketStarted.wait(timeout: .now() + 1) == .success)
@@ -148,12 +149,19 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let websocketRequestID = websocketRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": websocketRequestID, "ok": true, "result": ["state": "live"]]), to: control.0)
         websocketContinue.signal()
+        #expect(websocketControlSent.wait(timeout: .now() + 1) == .success)
+        let websocketPeersRequest = try readControl(from: control.0)
+        #expect(websocketPeersRequest["method"] as? String == "get_peer_connections_snapshot")
+        let websocketPeersRequestID = websocketPeersRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": websocketPeersRequestID, "ok": true, "result": ["peers": [["id": "0:1"]]]]), to: control.0)
         #expect(websocketReady.wait(timeout: .now() + 1) == .success)
         let websocketText = String(data: websocketResponse.load(), encoding: .utf8) ?? ""
         #expect(websocketText.contains("HTTP/1.1 101 Switching Protocols"))
         #expect(websocketText.contains("\"type\":\"hello\""))
         #expect(websocketText.contains("\"type\":\"status\""))
         #expect(websocketText.contains("\"state\":\"live\""))
+        #expect(websocketText.contains("\"type\":\"peers\""))
+        #expect(websocketText.contains("\"id\":\"0:1\""))
         let responseReady = DispatchSemaphore(value: 0)
         let response = NativeAdminStatusResponse()
         DispatchQueue.global().async {
@@ -483,7 +491,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         }
     }
 
-    private func nativeAdminWebSocketRequest(port: Int, cookie: String, started: DispatchSemaphore, continueReading: DispatchSemaphore) throws -> Data {
+    private func nativeAdminWebSocketRequest(port: Int, cookie: String, started: DispatchSemaphore, continueReading: DispatchSemaphore, controlSent: DispatchSemaphore) throws -> Data {
         let client = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
         guard client >= 0 else { throw POSIXError(.EMFILE) }
         defer { close(client) }
@@ -500,7 +508,19 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         var output = try readSocketChunk(from: client)
         _ = continueReading.wait(timeout: .now() + 1)
         output.append(try readSocketChunk(from: client))
+        let control = try JSONSerialization.data(withJSONObject: ["subscribe": ["peers"], "request": "peers"])
+        try writeAll(maskedWebSocketTextFrame(control), to: client)
+        controlSent.signal()
+        output.append(try readSocketChunk(from: client))
         return output
+    }
+
+    private func maskedWebSocketTextFrame(_ payload: Data) -> Data {
+        let mask: [UInt8] = [0x12, 0x34, 0x56, 0x78]
+        var frame = Data([0x81, 0x80 | UInt8(payload.count)])
+        frame.append(contentsOf: mask)
+        for (offset, byte) in payload.enumerated() { frame.append(byte ^ mask[offset % mask.count]) }
+        return frame
     }
 
     private func readSocketChunk(from descriptor: Int32) throws -> Data {
