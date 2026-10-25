@@ -71,7 +71,7 @@ jobs:
 
           changed_files="$(git diff --name-only "$base" "$head")"
 
-          if printf '%s\n' "$changed_files" | grep -Eq '(^src/|^tests/|^scripts/|^swift/Sources/ObstacleBridge(LogCollector|ProxyWorker|DesktopShared|Linux)/|^Package\.swift$|^ObstacleBridge\.py$|^pyproject\.toml$|\.py$)'; then
+          if printf '%s\n' "$changed_files" | grep -Eq '(^src/|^tests/|^scripts/|^swift/Sources/ObstacleBridge(LogCollector|ProxyWorker|DesktopShared|Linux)/|^\.github/workflows/bridge-py-integration-gate\.yml$|^Package\.swift$|^ObstacleBridge\.py$|^pyproject\.toml$|\.py$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
