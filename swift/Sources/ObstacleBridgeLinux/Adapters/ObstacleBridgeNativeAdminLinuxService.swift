@@ -534,7 +534,29 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         }
         let rpcArgs: [Any] = path == "/api/logs" ? [logLimit(target: target)] : []
         let result = try? parentRPC.call(method: rpcMethod, args: rpcArgs)
-        let payload: Any = path == "/api/logs" ? ["logs": result ?? []] : (result as? [String: Any] ?? ["state": "unavailable"])
+        let payload: Any
+        if path == "/api/logs" {
+            // The browser consumes the stable Admin logs envelope.  The
+            // inherited worker returns the private collector result directly,
+            // so preserve its availability/error metadata instead of nesting
+            // it below an implementation-specific `logs` key.
+            let fetched = result as? [String: Any] ?? [:]
+            let lines = fetched["lines"] as? [String] ?? (result as? [String] ?? [])
+            let available = fetched["available"] as? Bool ?? !lines.isEmpty
+            let source = fetched["source"] as? String ?? "managed"
+            let error = fetched["error"] as? String ?? (available ? "" : "logger unavailable")
+            let worker = fetched["worker_status"] as? [String: Any]
+                ?? fetched["worker"] as? [String: Any]
+            payload = ObstacleBridgeAdminAPI.logsPayload(
+                lines: lines,
+                available: available,
+                source: source,
+                error: error,
+                loggingWorker: worker
+            )
+        } else {
+            payload = result as? [String: Any] ?? ["state": "unavailable"]
+        }
         guard let body = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
         writeResponse(client, status: "200 OK", body: body)
     }

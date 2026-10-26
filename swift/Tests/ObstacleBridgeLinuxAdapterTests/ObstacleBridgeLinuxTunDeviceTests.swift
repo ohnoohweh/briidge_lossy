@@ -415,9 +415,12 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(logsRequest["method"] as? String == "fetch_logs")
         #expect((logsRequest["args"] as? [NSNumber])?.first?.intValue == 7)
         let logsRequestID = logsRequest["id"] as? String ?? ""
-        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": logsRequestID, "ok": true, "result": ["native_admin_ready"]]), to: control.0)
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": logsRequestID, "ok": true, "result": ["available": true, "lines": ["native_admin_ready"], "error": "", "worker_status": ["state": "running", "implementation": "swift", "pid": 42]]]), to: control.0)
         #expect(logsReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: logsResponse.load(), encoding: .utf8)?.contains("native_admin_ready") == true)
+        let logsWire = String(data: logsResponse.load(), encoding: .utf8) ?? ""
+        #expect(logsWire.contains("\"lines\":[\"native_admin_ready\"]"))
+        #expect(logsWire.contains("\"available\":true"))
+        #expect(logsWire.contains("\"source\":\"managed\""))
         let connectionsReady = DispatchSemaphore(value: 0)
         let connectionsResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {

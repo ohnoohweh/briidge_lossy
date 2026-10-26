@@ -1664,6 +1664,9 @@ REQ-ADM-001:
   # Linux native-process coverage reads the collector through `/api/logs` and
   # asserts its canonical `runtime.lifecycle` record, while worker lifecycle
   # state remains observable through `/api/status`.
+  # The native Admin socketpair route normalizes that inherited collector
+  # result into the shared top-level `lines`/availability/source/error/worker
+  # envelope consumed by the shipped browser.
   # Python contract tests pin the same public worker fields and log envelope.
   # The isolated Admin-worker query path is covered by the same contract.
   # The desktop supervisor remains a control-plane coordinator: it hands out
