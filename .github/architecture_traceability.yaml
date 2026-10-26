@@ -475,7 +475,7 @@ ARC-CMP-004:
   # peer, TUN-routing, TUN-helper, restart, and shutdown controls through serialized allowlisted
   # parent RPC; peer browser fields are translated to the supervisor contract. Its
   # host-local HTTP qualification bypasses system proxies and verifies the
-  # browser asset, bounded request sequence, legacy live-topic fallback,
+  # browser asset, standard native metadata, bounded request sequence, legacy live-topic fallback,
   # three-topic query-scoped native live session,
   # and owner-loss exit.
   # Linux owns allowlisted browser base assets, authenticated loopback-only health/status/local-metadata/configuration/schema/canonical-log-envelope/telemetry-client/TUN-routing/connection/peer/live-topic reads, derived onboarding connection profiles and blueprints from parent snapshots, Core-owned invite generation and PSK-masked preview plus password-confirmed encrypted PSK reveal from a dedicated authenticated invite-source RPC and peer snapshots; the Python persistence test proves that source retains only the PSK while public configuration and unrelated Admin secrets remain redacted, and a

@@ -24,6 +24,7 @@ enum ObstacleBridgeNativeAdminMacOSService {
         let bearerToken = (arguments["admin_web_token"] as? String) ?? ""
         let assetDirectory = (arguments["admin_web_dir"] as? String) ?? ""
         let telemetrySpoolDirectory = (arguments["telemetry_spool_directory"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let startedAt = ProcessInfo.processInfo.systemUptime
         let cookieScope = [bindHost, String(requestedPort), (arguments["admin_web_path"] as? String) ?? "/"].joined(separator: "|")
         let auth = ObstacleBridgeAdminAuth(
             queueLabel: "ObstacleBridgeNativeAdminMacOS.Auth",
@@ -178,7 +179,18 @@ enum ObstacleBridgeNativeAdminMacOSService {
                 case ("GET", "/api/status"): return json(snapshot("get_status_snapshot"))
                 case ("GET", "/api/meta"):
                     let status = snapshot("get_status_snapshot")
-                    return json(["app": "ObstacleBridgeMacOS", "platform": "macos", "admin_web_name": arguments["admin_web_name"] as? String ?? "", "build": status["build"] ?? [:], "runtime_dependencies": ["ok": true, "missing": [], "install_hint": ""]])
+                    return json([
+                        "app": "ObstacleBridgeMacOS",
+                        "platform": "macos",
+                        "pid": ProcessInfo.processInfo.processIdentifier,
+                        "uptime_sec": max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt)),
+                        "admin_web_name": arguments["admin_web_name"] as? String ?? "",
+                        "overlay_transport": arguments["overlay_transport"] ?? NSNull(),
+                        "dashboard_enabled": arguments["dashboard"] ?? NSNull(),
+                        "milestone": "C",
+                        "build": status["build"] ?? [:],
+                        "runtime_dependencies": ["ok": true, "missing": [], "install_hint": ""],
+                    ])
                 case ("GET", "/api/config"):
                     return json(["ok": true, "config": snapshot("get_config_snapshot"), "schema": snapshot("get_config_schema_snapshot")])
                 case ("POST", "/api/config/challenge"): return configChallenge(body: body)

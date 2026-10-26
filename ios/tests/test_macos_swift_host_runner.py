@@ -1102,6 +1102,31 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert not request_thread.is_alive() and not failures
         assert result == {"state": "native-child"}
 
+        metadata: dict[str, object] = {}
+
+        def fetch_metadata() -> None:
+            try:
+                metadata.update(local_json("/api/meta"))
+            except BaseException as error:
+                failures.append(error)
+
+        metadata_thread = threading.Thread(target=fetch_metadata)
+        metadata_thread.start()
+        metadata_request = receive_control()
+        assert metadata_request["method"] == "get_status_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": metadata_request["id"], "ok": True,
+            "result": {"build": {"version": "native-test"}},
+        }))
+        metadata_thread.join(timeout=3)
+        assert not metadata_thread.is_alive() and not failures
+        assert metadata["app"] == "ObstacleBridgeMacOS"
+        assert metadata["platform"] == "macos"
+        assert metadata["pid"] == process.pid
+        assert isinstance(metadata["uptime_sec"], int) and metadata["uptime_sec"] >= 0
+        assert metadata["milestone"] == "C"
+        assert metadata["build"] == {"version": "native-test"}
+
         concurrent_results: list[dict[str, object]] = []
 
         def fetch_concurrent_status() -> None:
