@@ -22,7 +22,7 @@ from .worker_ipc import WorkerIPCFrameKind, decode_control, encode_control, fram
 MAX_FRAME = 1024 * 1024
 SYNC_METHODS = frozenset({
     "get_connections_snapshot", "get_status_snapshot", "get_peer_connections_snapshot",
-    "get_config_snapshot", "get_config_schema_snapshot", "replace_remote_services_catalog",
+    "get_config_snapshot", "get_onboarding_config_snapshot", "get_config_schema_snapshot", "replace_remote_services_catalog",
     "update_config", "request_secure_link_rekey", "request_secure_link_reload",
     "request_overlay_reconnect", "request_tun_helper_repair", "request_shutdown", "request_restart",
     "_restart_requires_delay", "get_async_diagnostics_snapshot", "get_debug_logs",

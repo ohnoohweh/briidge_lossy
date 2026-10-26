@@ -2818,6 +2818,16 @@ class Runner:
                 data[k] = str(v)
         return data
 
+    def get_onboarding_config_snapshot(self) -> dict:
+        """Return the portable invite source only to an authenticated Admin child.
+
+        The public configuration snapshot deliberately redacts secrets.  An
+        invite needs the configured PSK so the receiving machine can seal it
+        with its own identity; that value is therefore available only across
+        the inherited, generation-fenced Admin control channel.
+        """
+        return self.get_config_snapshot(include_secrets=True)
+
     def get_config_schema_snapshot(self) -> dict:
         sections = {k: set(v) for k, v in (getattr(self.args, "_config_sections", {}) or {}).items()}
         defaults = getattr(self.args, "_config_defaults", {}) or {}

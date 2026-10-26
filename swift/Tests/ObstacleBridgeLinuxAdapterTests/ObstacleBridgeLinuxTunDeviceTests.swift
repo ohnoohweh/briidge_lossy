@@ -443,7 +443,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             inviteResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/onboarding/invite/generate", body: inviteBody, headers: ["Cookie": cookie]))
         }
         let inviteConfigRequest = try readControl(from: control.0)
-        #expect(inviteConfigRequest["method"] as? String == "get_config_snapshot")
+        #expect(inviteConfigRequest["method"] as? String == "get_onboarding_config_snapshot")
         let inviteConfigRequestID = inviteConfigRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": inviteConfigRequestID, "ok": true, "result": ["overlay_transport": "tcp", "secure_link_mode": "psk", "secure_link_psk": "portable-peer-secret"]]), to: control.0)
         let invitePeersRequest = try readControl(from: control.0)

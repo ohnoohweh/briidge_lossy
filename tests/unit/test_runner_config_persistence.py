@@ -41,6 +41,18 @@ def test_update_config_persists_to_config_file(tmp_path):
     assert "misc" not in written
 
 
+def test_onboarding_config_snapshot_keeps_secrets_off_public_snapshot(tmp_path):
+    runner = _make_runner(tmp_path)
+
+    public = runner.get_config_snapshot()
+    onboarding = runner.get_onboarding_config_snapshot()
+
+    assert public["secure_link_psk"] == ""
+    assert public["admin_web_password"] == ""
+    assert onboarding["secure_link_psk"] == "bridge-secret"
+    assert onboarding["admin_web_password"] == "admin-secret"
+
+
 def test_runtime_config_save_discards_unregistered_sections(tmp_path):
     runner = _make_runner(tmp_path)
     runner.args._raw_config = {

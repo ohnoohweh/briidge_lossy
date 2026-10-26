@@ -377,7 +377,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
                 writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
                 return
             }
-            guard let config = (try? parentRPC.call(method: "get_config_snapshot")) as? [String: Any] else {
+            guard let config = (try? parentRPC.call(method: "get_onboarding_config_snapshot")) as? [String: Any] else {
                 writeResponse(client, status: "503 Service Unavailable", body: Data("{\"ok\":false,\"error\":\"configuration unavailable\",\"retryable\":true}".utf8))
                 return
             }
