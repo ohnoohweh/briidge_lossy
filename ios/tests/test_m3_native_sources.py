@@ -24,6 +24,7 @@ def test_shared_native_admin_child_source_uses_inherited_control_and_lifetime_de
     assert "ObstacleBridgeWebAdminServer" in macos_service
     assert '"/api/status"' in macos_service
     assert "staticAssetResponse" in macos_service
+    assert "normalizedConfigUpdateResult" in macos_service
 SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"

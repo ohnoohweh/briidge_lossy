@@ -86,10 +86,9 @@ enum ObstacleBridgeNativeAdminMacOSService {
                 }
             }
             let result = try? parentRPC.call(method: "update_config", args: [updates])
-            let values = result as? [Any] ?? []
-            let succeeded = (values.first as? Bool) ?? ((values.first as? NSNumber)?.boolValue ?? false)
-            guard succeeded else {
-                return json(["ok": false, "error": values.dropFirst().first as? String ?? "configuration update failed"], statusLine: "HTTP/1.1 400 Bad Request")
+            let updateResult = ObstacleBridgeWebAdminServer.normalizedConfigUpdateResult(result)
+            guard updateResult.succeeded else {
+                return json(["ok": false, "error": updateResult.error], statusLine: "HTTP/1.1 400 Bad Request")
             }
             if updates.keys.contains(where: { ["admin_web_auth_disable", "admin_web_username", "admin_web_password", "secure_link_psk"].contains($0) }) {
                 auth.resetState()
