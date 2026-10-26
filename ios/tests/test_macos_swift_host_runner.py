@@ -4419,26 +4419,40 @@ def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     artifact = build_macos_swift_artifact()
-    status_port, proxy_http_port, proxy_socks5_port, echo_port = _unused_tcp_ports(4)
-    echo = _TCPEchoServer("127.0.0.1", echo_port)
-    echo.start()
     config_path = tmp_path / "runtime.json"
-    config_path.write_text(json.dumps({
-        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
-        "debug_logging": {"log_worker": "python", "log_worker_python_executable": sys.executable},
-        "proxy_provider": {
-            "enabled": True, "bind": "127.0.0.1", "http_port": proxy_http_port,
-            "socks5_port": proxy_socks5_port, "protocols": ["http-connect", "socks5-connect"], "worker": implementation,
-            "worker_python_executable": sys.executable,
-            "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
-            "egress": {"mode": "direct"},
-            "policy": {"allow_private_destinations": True, "blocked_host_patterns": []},
-        },
-    }), encoding="utf-8")
-    process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    try:
+    process: subprocess.Popen[str] | None = None
+    echo: _TCPEchoServer | None = None
+    for attempt in range(3):
+        status_port, proxy_http_port, proxy_socks5_port, echo_port = _unused_tcp_ports(4)
+        echo = _TCPEchoServer("127.0.0.1", echo_port)
+        echo.start()
+        config_path.write_text(json.dumps({
+            "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+            "debug_logging": {"log_worker": "python", "log_worker_python_executable": sys.executable},
+            "proxy_provider": {
+                "enabled": True, "bind": "127.0.0.1", "http_port": proxy_http_port,
+                "socks5_port": proxy_socks5_port, "protocols": ["http-connect", "socks5-connect"], "worker": implementation,
+                "worker_python_executable": sys.executable,
+                "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
+                "egress": {"mode": "direct"},
+                "policy": {"allow_private_destinations": True, "blocked_host_patterns": []},
+            },
+        }), encoding="utf-8")
+        process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         url = f"http://127.0.0.1:{status_port}/api/status"
-        status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running" and item.get("logging_worker", {}).get("state") == "running", timeout_sec=20)
+        try:
+            status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running" and item.get("logging_worker", {}).get("state") == "running", timeout_sec=20)
+            break
+        except AssertionError:
+            if process.poll() is None:
+                process.terminate()
+            process.communicate(timeout=8)
+            echo.stop()
+            if attempt == 2:
+                raise
+    try:
+        assert process is not None and echo is not None
+        url = f"http://127.0.0.1:{status_port}/api/status"
         proxy = status["proxy_provider"]
         assert proxy["worker"]["implementation"] == implementation
         assert proxy["worker"]["pid"] > 1 and proxy["worker"]["pid"] != process.pid
@@ -4464,6 +4478,7 @@ def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.
         with pytest.raises(OSError):
             socket.create_connection(("127.0.0.1", proxy_socks5_port), timeout=1)
     finally:
+        assert process is not None and echo is not None
         process.terminate()
         try:
             process.communicate(timeout=8)
