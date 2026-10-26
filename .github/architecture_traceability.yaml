@@ -461,9 +461,11 @@ ARC-CMP-004:
   # all privileged helpers bound unauthenticated initial admission and reject token-HELLO renegotiation; Python and macOS/Linux-native helpers negotiate HELLO/READY capabilities and carry generation-fenced OBIP request/response/event/data frames; the packaged macOS helper completes a Python-client snapshot exchange and exits after authenticated owner loss. The shared Swift decoder rejects duplicate object members, including escaped-key aliases. Python and shared Swift helper controls normalize nonempty operations to at most 64 characters; Python rejects non-finite/non-object JSON while Swift rejects boolean/fractional versions;
   # the Python Admin child does too, while collector probes and native-proxy supervisor
   # fixtures compile that shared codec;
-  # The macOS native Admin child owns a status listener, reports its bound port,
-  # and serves status through serialized allowlisted parent RPC. Its host-local
-  # HTTP qualification bypasses system proxies and verifies owner-loss exit.
+  # The macOS native Admin child owns authenticated base-asset delivery and
+  # read-only status/meta/config-schema/log/connection/peer/TUN documents plus
+  # live status/peer/connection reads through serialized allowlisted parent
+  # RPC. Its host-local HTTP qualification bypasses system proxies and verifies
+  # the browser asset, bounded request sequence, and owner-loss exit.
   # Linux owns allowlisted browser base assets, authenticated loopback-only health/status/local-metadata/configuration/schema/canonical-log-envelope/telemetry-client/TUN-routing/connection/peer/live-topic reads, derived onboarding connection profiles and blueprints from parent snapshots, Core-owned invite generation and PSK-masked preview plus password-confirmed encrypted PSK reveal from a dedicated authenticated invite-source RPC and peer snapshots; the Python persistence test proves that source retains only the PSK while public configuration and unrelated Admin secrets remain redacted, and a
   # digest-confirmed configuration write with a refreshed redacted snapshot, authenticated remote-service catalog replacement plus reconnect/rekey/reload peer controls, bearer-token-protected TUN routing/TUN-helper repair/restart/shutdown controls, and an authenticated version-13 snapshot-first WebSocket status/peer/connection session with masked subscription/request controls; it applies the shared challenge/session policy before inherited parent RPC, and its socketpair probe completes them;
   # Full browser-session/live-topic and API parity remain open; Linux native selection has hosted launch/recovery qualification pending this branch run, while macOS requires host-local launch/recovery qualification.

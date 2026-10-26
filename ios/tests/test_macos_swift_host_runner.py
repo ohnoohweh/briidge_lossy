@@ -889,8 +889,11 @@ def test_macos_packaged_tun_helper_exits_after_authenticated_owner_loss() -> Non
             socket_path.unlink()
 
 
-def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     artifact = build_macos_swift_artifact()
+    admin_web_dir = tmp_path / "admin_web"
+    admin_web_dir.mkdir()
+    (admin_web_dir / "index.html").write_text("<main>native-admin-browser</main>", encoding="utf-8")
     parent_control, child_control = socket.socketpair()
     parent_lifetime, child_lifetime = socket.socketpair()
     parent_log, child_log = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -931,7 +934,7 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert receive_control() == {
             "v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": 7,
         }
-        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {"admin_web_bind": "127.0.0.1", "admin_web_port": 0}, "log_root_level": 0}))
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {"admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_dir": str(admin_web_dir), "admin_web_auth_disable": True}, "log_root_level": 0}))
         request = receive_control()
         assert request["kind"] == "admin.call"
         assert request["id"] == "bootstrap-status"
@@ -958,14 +961,21 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
             raise AssertionError("local child qualification must not consult system proxies")
 
         monkeypatch.setattr(urllib.request, "getproxies", reject_system_proxy_lookup)
+        local_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+        def local_json(path: str) -> dict[str, object]:
+            with local_opener.open(f"http://127.0.0.1:{ready['port']}{path}", timeout=3) as response:
+                return json.loads(response.read())
+
+        def local_text(path: str) -> str:
+            with local_opener.open(f"http://127.0.0.1:{ready['port']}{path}", timeout=3) as response:
+                return response.read().decode("utf-8")
 
         def fetch_status() -> None:
             try:
                 # This is a direct inherited-child listener probe. macOS system
                 # proxy discovery can block before any TCP connection is made.
-                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                with opener.open(f"http://127.0.0.1:{ready['port']}/api/status", timeout=3) as response:
-                    result.update(json.loads(response.read()))
+                result.update(local_json("/api/status"))
             except BaseException as error:
                 failures.append(error)
 
@@ -980,6 +990,55 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         request_thread.join(timeout=3)
         assert not request_thread.is_alive() and not failures
         assert result == {"state": "native-child"}
+
+        assert "native-admin-browser" in local_text("/")
+
+        config: dict[str, object] = {}
+
+        def fetch_config() -> None:
+            try:
+                config.update(local_json("/api/config"))
+            except BaseException as error:
+                failures.append(error)
+
+        config_thread = threading.Thread(target=fetch_config)
+        config_thread.start()
+        config_request = receive_control()
+        assert config_request["method"] == "get_config_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": config_request["id"], "ok": True, "result": {"admin_web_bind": "127.0.0.1"},
+        }))
+        schema_request = receive_control()
+        assert schema_request["method"] == "get_config_schema_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": schema_request["id"], "ok": True, "result": {"admin_web_bind": {"type": "string"}},
+        }))
+        config_thread.join(timeout=3)
+        assert not config_thread.is_alive() and not failures
+        assert config["ok"] is True
+        assert config["config"] == {"admin_web_bind": "127.0.0.1"}
+        assert config["schema"] == {"admin_web_bind": {"type": "string"}}
+
+        logs: dict[str, object] = {}
+
+        def fetch_logs() -> None:
+            try:
+                logs.update(local_json("/api/logs?limit=7"))
+            except BaseException as error:
+                failures.append(error)
+
+        logs_thread = threading.Thread(target=fetch_logs)
+        logs_thread.start()
+        logs_request = receive_control()
+        assert logs_request["method"] == "fetch_logs" and logs_request["args"] == [7]
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": logs_request["id"], "ok": True,
+            "result": {"available": True, "lines": ["native-admin-ready"], "error": ""},
+        }))
+        logs_thread.join(timeout=3)
+        assert not logs_thread.is_alive() and not failures
+        assert logs["lines"] == ["native-admin-ready"]
+        assert logs["available"] is True and logs["source"] == "managed"
         parent_lifetime.close()
         assert process.wait(timeout=3) == 0
     finally:
