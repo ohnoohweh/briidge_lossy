@@ -1125,6 +1125,33 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
             }],
         }
 
+        blueprints: dict[str, object] = {}
+
+        def fetch_blueprints() -> None:
+            try:
+                blueprints.update(local_json("/api/onboarding/blueprints"))
+            except BaseException as error:
+                failures.append(error)
+
+        blueprints_thread = threading.Thread(target=fetch_blueprints)
+        blueprints_thread.start()
+        blueprints_request = receive_control()
+        assert blueprints_request["method"] == "get_connections_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": blueprints_request["id"], "ok": True,
+            "result": {"tcp": [{"peer_id": "0:1", "state": "open", "local_port": 23001, "remote_destination": "198.51.100.7:443"}]},
+        }))
+        blueprints_thread.join(timeout=3)
+        assert not blueprints_thread.is_alive() and not failures
+        assert blueprints == {
+            "ok": True, "count": 1,
+            "blueprints": [{"peer_id": "0:1", "own_servers": [{
+                "name": "bp-0:1-tcp-23001",
+                "listen": {"protocol": "tcp", "bind": "0.0.0.0", "port": 23001},
+                "target": {"protocol": "tcp", "host": "198.51.100.7", "port": 443},
+            }]}],
+        }
+
         invite: dict[str, object] = {}
 
         def generate_invite() -> None:

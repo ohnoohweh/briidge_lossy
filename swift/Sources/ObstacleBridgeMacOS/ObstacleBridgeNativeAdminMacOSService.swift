@@ -191,6 +191,9 @@ enum ObstacleBridgeNativeAdminMacOSService {
                 case ("GET", "/api/onboarding/connection-profiles"):
                     let profiles = ObstacleBridgeWebAdminServer.onboardingConnectionProfiles(snapshot: snapshot("get_peer_connections_snapshot"))
                     return json(["ok": true, "count": profiles.count, "profiles": profiles])
+                case ("GET", "/api/onboarding/blueprints"):
+                    let blueprints = ObstacleBridgeWebAdminServer.onboardingBlueprints(snapshot: snapshot("get_connections_snapshot"))
+                    return json(["ok": true, "count": blueprints.count, "blueprints": blueprints])
                 case ("POST", "/api/onboarding/invite"), ("POST", "/api/onboarding/invite/generate"):
                     return generateInvite(body: body)
                 case ("POST", "/api/onboarding/preview"), ("POST", "/api/onboarding/invite/preview"):

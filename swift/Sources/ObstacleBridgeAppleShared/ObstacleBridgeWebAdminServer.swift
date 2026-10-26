@@ -268,6 +268,34 @@ final class ObstacleBridgeWebAdminServer {
         }
     }
 
+    /// Project live connection snapshots into portable receiver-owned service
+    /// blueprints without copying runtime credentials into the browser surface.
+    static func onboardingBlueprints(snapshot: [String: Any]) -> [[String: Any]] {
+        var grouped = [String: [[String: Any]]]()
+        for transport in ["udp", "tcp"] {
+            guard let rows = snapshot[transport] as? [[String: Any]] else { continue }
+            for row in rows {
+                guard String(describing: row["state"] ?? "").lowercased() != "listening",
+                      let peerID = row["peer_id"].map({ String(describing: $0) }).flatMap({ $0.isEmpty ? nil : $0 }),
+                      let localPort = onboardingPort(row["local_port"]),
+                      let destination = onboardingEndpoint(row["remote_destination"])
+                else { continue }
+                let blueprint: [String: Any] = [
+                    "name": "bp-\(peerID)-\(transport)-\(localPort)",
+                    "listen": ["protocol": transport, "bind": "0.0.0.0", "port": localPort],
+                    "target": ["protocol": transport, "host": destination.host, "port": destination.port],
+                ]
+                if !(grouped[peerID] ?? []).contains(where: { ($0["name"] as? String) == blueprint["name"] as? String }) {
+                    grouped[peerID, default: []].append(blueprint)
+                }
+            }
+        }
+        return grouped.keys.sorted().compactMap { peerID in
+            guard let servers = grouped[peerID], !servers.isEmpty else { return nil }
+            return ["peer_id": peerID, "own_servers": servers]
+        }
+    }
+
     private static func onboardingEndpoint(_ value: Any?) -> (host: String, port: Int)? {
         let text = String(describing: value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard let separator = text.lastIndex(of: ":"),
@@ -275,6 +303,14 @@ final class ObstacleBridgeWebAdminServer {
               (1...65535).contains(port) else { return nil }
         let host = String(text[..<separator]).trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
         return host.isEmpty ? nil : (host, port)
+    }
+
+    private static func onboardingPort(_ value: Any?) -> Int? {
+        let port: Int
+        if let number = value as? NSNumber { port = number.intValue }
+        else if let text = value as? String, let parsed = Int(text) { port = parsed }
+        else { return nil }
+        return (1...65535).contains(port) ? port : nil
     }
 
     private func handle(_ connection: NWConnection) {
