@@ -111,9 +111,21 @@ public enum ObstacleBridgeAdminOnboardingPort {
     }
 
     public static func generate(body: Data?, runtimeConfig: [String: Any]) -> ObstacleBridgeAdminLinuxResponse {
+        generate(body: body, runtimeConfig: runtimeConfig, profiles: nil)
+    }
+
+    /// Native Admin children derive connection profiles from their bounded
+    /// parent snapshots.  Keep token creation in Core while allowing that
+    /// live profile projection to select the exact peer being invited.
+    public static func generate(
+        body: Data?,
+        runtimeConfig: [String: Any],
+        profiles: [[String: Any]]?
+    ) -> ObstacleBridgeAdminLinuxResponse {
         let flattened = ObstacleBridgeRuntimeConfigPort.flatten(runtimeConfig)
         return linuxResponse(ObstacleBridgeAdminConfigSupport.inviteGenerateResponse(
-            method: "POST", body: body, runtimeConfig: flattened, profiles: connectionProfiles(runtimeConfig: flattened),
+            method: "POST", body: body, runtimeConfig: flattened,
+            profiles: profiles ?? connectionProfiles(runtimeConfig: flattened),
             // Invite tokens intentionally carry the peer PSK in the same
             // portable representation as Python. The recipient's config
             // store seals it with that recipient's machine-derived key when

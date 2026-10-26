@@ -372,6 +372,29 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             }
             writeResponse(client, status: "200 OK", body: encoded)
             return
+        case "/api/onboarding/invite/generate" where method == "POST":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            guard let config = (try? parentRPC.call(method: "get_config_snapshot")) as? [String: Any] else {
+                writeResponse(client, status: "503 Service Unavailable", body: Data("{\"ok\":false,\"error\":\"configuration unavailable\",\"retryable\":true}".utf8))
+                return
+            }
+            let peers = (try? parentRPC.call(method: "get_peer_connections_snapshot")) as? [String: Any] ?? [:]
+            writeResponse(client, response: ObstacleBridgeAdminOnboardingPort.generate(
+                body: body,
+                runtimeConfig: config,
+                profiles: onboardingConnectionProfiles(peers)
+            ))
+            return
+        case "/api/onboarding/invite/preview" where method == "POST":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            writeResponse(client, response: ObstacleBridgeAdminOnboardingPort.preview(body: body))
+            return
         default: break
         }
         guard method == "GET", ["/api/health", "/api/status", "/api/meta", "/api/config", "/api/logs", "/api/connections", "/api/peers", "/api/telemetry", "/api/tun-routing/status", "/api/live"].contains(path) else {
@@ -712,6 +735,9 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         case 400: status = "400 Bad Request"
         case 401: status = "401 Unauthorized"
         case 403: status = "403 Forbidden"
+        case 404: status = "404 Not Found"
+        case 405: status = "405 Method Not Allowed"
+        case 409: status = "409 Conflict"
         default: status = "500 Internal Server Error"
         }
         let extra = response.headers.map { "\($0.0): \($0.1)\r\n" }.joined()

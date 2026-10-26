@@ -1979,6 +1979,7 @@ REQ-ADM-010:
   unit_tests:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::onboardingHTTPUsesCoreTokenPolicyAndCarriesSecretsForRecipientOwnedPersistence
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::secretBearingInviteApplyPersistsForReceivingLinuxMachine
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss
     - tests/unit/test_admin_web_payloads.py::test_onboarding_connection_profiles_expose_configured_transports
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_applies_client_options_for_every_transport

@@ -435,6 +435,30 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(profilesReady.wait(timeout: .now() + 1) == .success)
         #expect(String(data: profilesResponse.load(), encoding: .utf8)?.contains("\"id\":\"live:tcp:0:1\"") == true)
         #expect(String(data: profilesResponse.load(), encoding: .utf8)?.contains("\"peer_host\":\"198.51.100.9\"") == true)
+        let inviteBody = try JSONSerialization.data(withJSONObject: ["connection_id": "live:tcp:0:1"])
+        let inviteReady = DispatchSemaphore(value: 0)
+        let inviteResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { inviteReady.signal() }
+            inviteResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/onboarding/invite/generate", body: inviteBody, headers: ["Cookie": cookie]))
+        }
+        let inviteConfigRequest = try readControl(from: control.0)
+        #expect(inviteConfigRequest["method"] as? String == "get_config_snapshot")
+        let inviteConfigRequestID = inviteConfigRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": inviteConfigRequestID, "ok": true, "result": ["overlay_transport": "tcp", "secure_link_mode": "psk", "secure_link_psk": "portable-peer-secret"]]), to: control.0)
+        let invitePeersRequest = try readControl(from: control.0)
+        #expect(invitePeersRequest["method"] as? String == "get_peer_connections_snapshot")
+        let invitePeersRequestID = invitePeersRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": invitePeersRequestID, "ok": true, "result": ["peers": [["id": "0:1", "transport": "tcp", "state": "connected", "peer": "198.51.100.9:8443"]]]]), to: control.0)
+        #expect(inviteReady.wait(timeout: .now() + 1) == .success)
+        let invitePayload = try #require(try JSONSerialization.jsonObject(with: httpBody(inviteResponse.load())) as? [String: Any])
+        let inviteToken = try #require(invitePayload["invite_token"] as? String)
+        #expect(inviteToken.hasPrefix("ob1."))
+        let previewBody = try JSONSerialization.data(withJSONObject: ["invite_token": inviteToken])
+        let previewResponse = try nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/onboarding/invite/preview", body: previewBody, headers: ["Cookie": cookie])
+        let previewPayload = try #require(try JSONSerialization.jsonObject(with: httpBody(previewResponse)) as? [String: Any])
+        #expect((previewPayload["preview"] as? [String: Any])?["secure_link_psk"] as? String == "***hidden***")
+        #expect((previewPayload["suggested_updates"] as? [String: Any])?["secure_link_psk"] as? String == "portable-peer-secret")
         let peersReady = DispatchSemaphore(value: 0)
         let peersResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
