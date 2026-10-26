@@ -164,6 +164,32 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             }
             writeResponse(client, response: jsonResponse((try? security.issueConfigChallenge(updates: values)) ?? ["ok": false, "error": "updates must be an object"]))
             return
+        case "/api/config/secret/secure-link-psk/challenge" where method == "POST":
+            guard security.state(headers: headers)["auth_required"] as? Bool == true else {
+                writeResponse(client, status: "403 Forbidden", body: Data("{\"ok\":false,\"error\":\"admin password authentication is required to reveal secure_link_psk\"}".utf8))
+                return
+            }
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            writeResponse(client, response: jsonResponse(security.issueSecretRevealChallenge(secretName: "secure_link_psk")))
+            return
+        case "/api/config/secret/secure-link-psk" where method == "POST":
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
+                return
+            }
+            guard let config = (try? parentRPC.call(method: "get_onboarding_config_snapshot")) as? [String: Any] else {
+                writeResponse(client, status: "503 Service Unavailable", body: Data("{\"ok\":false,\"error\":\"secure_link_psk unavailable\",\"retryable\":true}".utf8))
+                return
+            }
+            writeResponse(client, response: security.revealSecret(
+                body: body,
+                secretName: "secure_link_psk",
+                secretValue: config["secure_link_psk"] as? String ?? ""
+            ))
+            return
         case "/api/channelmux/remote-services" where method == "POST":
             guard security.isAuthenticated(headers: headers) else {
                 writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
@@ -738,6 +764,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         case 404: status = "404 Not Found"
         case 405: status = "405 Method Not Allowed"
         case 409: status = "409 Conflict"
+        case 428: status = "428 Precondition Required"
         default: status = "500 Internal Server Error"
         }
         let extra = response.headers.map { "\($0.0): \($0.1)\r\n" }.joined()

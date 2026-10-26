@@ -130,6 +130,27 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let healthResponse = try nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/health", headers: ["Cookie": cookie])
         #expect(String(data: healthResponse, encoding: .utf8)?.contains("HTTP/1.1 200 OK") == true)
         #expect(String(data: healthResponse, encoding: .utf8)?.contains("{\"ok\":true}") == true)
+        let revealChallengeResponse = try nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/config/secret/secure-link-psk/challenge", headers: ["Cookie": cookie])
+        let revealChallenge = try #require(try JSONSerialization.jsonObject(with: httpBody(revealChallengeResponse)) as? [String: Any])
+        let revealChallengeID = try #require(revealChallenge["challenge_id"] as? String)
+        let revealSeed = try #require(revealChallenge["seed"] as? String)
+        let revealProof = ObstacleBridgeCrypto.sha256(Data("\(revealSeed):admin:secret:secure_link_psk".utf8)).map { String(format: "%02x", $0) }.joined()
+        let revealBody = try JSONSerialization.data(withJSONObject: ["challenge_id": revealChallengeID, "proof": revealProof])
+        let revealReady = DispatchSemaphore(value: 0)
+        let revealResponse = NativeAdminStatusResponse()
+        DispatchQueue.global().async {
+            defer { revealReady.signal() }
+            revealResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/config/secret/secure-link-psk", body: revealBody, headers: ["Cookie": cookie]))
+        }
+        let revealConfigRequest = try readControl(from: control.0)
+        #expect(revealConfigRequest["method"] as? String == "get_onboarding_config_snapshot")
+        let revealConfigRequestID = revealConfigRequest["id"] as? String ?? ""
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": revealConfigRequestID, "ok": true, "result": ["secure_link_psk": "portable-peer-secret"]]), to: control.0)
+        #expect(revealReady.wait(timeout: .now() + 1) == .success)
+        let revealPayload = try #require(try JSONSerialization.jsonObject(with: httpBody(revealResponse.load())) as? [String: Any])
+        #expect(revealPayload["secret_name"] as? String == "secure_link_psk")
+        #expect((revealPayload["encrypted"] as? [String: Any])?["algorithm"] as? String == "AES-GCM")
+        #expect(String(data: revealResponse.load(), encoding: .utf8)?.contains("portable-peer-secret") == false)
         let malformedWebSocketResponse = try nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/live?topic=status", headers: ["Cookie": cookie, "Upgrade": "websocket", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="])
         #expect(String(data: malformedWebSocketResponse, encoding: .utf8)?.contains("HTTP/1.1 400 Bad Request") == true)
         let websocketRPCReady = DispatchSemaphore(value: 0)
