@@ -2826,7 +2826,10 @@ class Runner:
         with its own identity; that value is therefore available only across
         the inherited, generation-fenced Admin control channel.
         """
-        return self.get_config_snapshot(include_secrets=True)
+        snapshot = self.get_config_snapshot(include_secrets=True)
+        for key in AdminWebUI._secret_config_keys() - {"secure_link_psk"}:
+            snapshot[key] = ""
+        return snapshot
 
     def get_config_schema_snapshot(self) -> dict:
         sections = {k: set(v) for k, v in (getattr(self.args, "_config_sections", {}) or {}).items()}

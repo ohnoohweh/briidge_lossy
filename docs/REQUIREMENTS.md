@@ -688,8 +688,9 @@ the receiving machine's identity when the update is persisted.
 
   The Linux native Admin child derives its selected invite profile only from the
   allowlisted parent peer snapshot and retrieves a dedicated invite source by a
-  separate bounded parent RPC. That source carries a PSK only on the inherited
-  authenticated control channel; read-only snapshots and logs remain redacted.
+  separate bounded parent RPC. That source carries only the PSK on the
+  inherited authenticated control channel; read-only snapshots, logs, and
+  unrelated Admin secrets remain redacted.
   It delegates token encoding, preview redaction, and recipient-owned PSK
   persistence semantics to the shared Core onboarding port.
 - `REQ-ADM-011`: The WebAdmin configuration editor shall make structured `own_servers` and `remote_servers` service catalogs editable without requiring operators to hand-edit the raw JSON for routine changes. The service editor shall preserve the same JSON config shape on save, show the current JSON value as the row preview, and provide a focused per-service popup flow for adding, removing, and navigating service entries. When an operator removes one service while editing a populated catalog, the editor shall commit that removal without resurrecting the deleted draft from stale modal form state, and when another service remains, the popup shall stay open on the next valid service entry so repeated cleanup does not require reopening the editor after each delete.

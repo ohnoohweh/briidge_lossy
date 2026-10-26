@@ -50,7 +50,7 @@ def test_onboarding_config_snapshot_keeps_secrets_off_public_snapshot(tmp_path):
     assert public["secure_link_psk"] == ""
     assert public["admin_web_password"] == ""
     assert onboarding["secure_link_psk"] == "bridge-secret"
-    assert onboarding["admin_web_password"] == "admin-secret"
+    assert onboarding["admin_web_password"] == ""
 
 
 def test_runtime_config_save_discards_unregistered_sections(tmp_path):
