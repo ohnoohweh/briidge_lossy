@@ -79,7 +79,7 @@ enum ObstacleBridgeNativeAdminMacOSService {
                 default: return nil
                 }
             },
-            staticFileProvider: { staticFile(path: $0, assetDirectory: assetDirectory) },
+            staticFileProvider: { ObstacleBridgeWebAdminServer.staticAssetResponse(path: $0, assetDirectory: assetDirectory) },
             liveTopicProvider: { topic in
                 switch topic {
                 case "status": return snapshot("get_status_snapshot")
@@ -104,25 +104,4 @@ enum ObstacleBridgeNativeAdminMacOSService {
         return fallback
     }
 
-    private static func staticFile(path: String, assetDirectory: String) -> (contentType: String, body: Data)? {
-        guard !assetDirectory.isEmpty else { return nil }
-        let root = URL(fileURLWithPath: assetDirectory, isDirectory: true).standardizedFileURL
-        let relative = path == "/" ? "index.html" : String(path.drop(while: { $0 == "/" }))
-        guard !relative.isEmpty else { return nil }
-        let candidate = root.appendingPathComponent(relative).standardizedFileURL
-        guard candidate.path.hasPrefix(root.path + "/"), let body = try? Data(contentsOf: candidate) else { return nil }
-        let contentType: String
-        switch candidate.pathExtension.lowercased() {
-        case "html": contentType = "text/html; charset=utf-8"
-        case "js": contentType = "application/javascript; charset=utf-8"
-        case "css": contentType = "text/css; charset=utf-8"
-        case "json": contentType = "application/json; charset=utf-8"
-        case "svg": contentType = "image/svg+xml"
-        case "png": contentType = "image/png"
-        case "jpg", "jpeg": contentType = "image/jpeg"
-        case "ico": contentType = "image/x-icon"
-        default: return nil
-        }
-        return (contentType, body)
-    }
 }

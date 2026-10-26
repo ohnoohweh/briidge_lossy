@@ -23,6 +23,7 @@ def test_shared_native_admin_child_source_uses_inherited_control_and_lifetime_de
     assert "lifetime.availableData" in child
     assert "ObstacleBridgeWebAdminServer" in macos_service
     assert '"/api/status"' in macos_service
+    assert "staticAssetResponse" in macos_service
 SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
@@ -739,6 +740,8 @@ def test_webadmin_server_source_exists() -> None:
     assert "ObstacleBridgeWebAdminLiveTopicPolicy.interval" in runtime
     assert "type\": \"hello\"" in runtime
     assert 'label: "ObstacleBridgeWebAdminServer.StaticFileRead"' in runtime
+    assert "static func staticAssetResponse(path: String, assetDirectory: String)" in runtime
+    assert "candidate.path.hasPrefix(root.path + \"/\")" in runtime
     assert "staticFileReadQueue.async" in runtime
     assert "respondWithStaticFile(for: request, connection: connection)" in runtime
     assert "self.queue.async" in runtime
