@@ -469,7 +469,8 @@ ARC-CMP-004:
   # invite source, and update-bound password-confirmed
   # configuration writes, concurrent authenticated status reads with correlated
   # replies, same-port supervised native-child recovery, macOS transient-bind retry,
-  # stale-reply channel poisoning, and shared secret-free onboarding blueprints;
+  # stale-reply channel poisoning, shared secret-free onboarding blueprints,
+  # and configured telemetry status through inherited snapshots;
   # authenticated remote-service plus bearer-protected
   # peer, TUN-routing, TUN-helper, restart, and shutdown controls through serialized allowlisted
   # parent RPC; peer browser fields are translated to the supervisor contract. Its

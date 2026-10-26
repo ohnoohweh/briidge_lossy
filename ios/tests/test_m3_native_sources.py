@@ -28,6 +28,7 @@ def test_shared_native_admin_child_source_uses_inherited_control_and_lifetime_de
     assert "normalizedConfigUpdateResult" in macos_service
     assert '"/api/onboarding/connection-profiles"' in macos_service
     assert '"/api/onboarding/blueprints"' in macos_service
+    assert '"/api/telemetry"' in macos_service
     assert '"/api/onboarding/invite/generate"' in macos_service
     assert '"/api/onboarding/invite/preview"' in macos_service
     assert '"/api/config/secret/secure-link-psk"' in macos_service

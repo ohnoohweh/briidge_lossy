@@ -935,7 +935,7 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert receive_control() == {
             "v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": 7,
         }
-        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {"admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_dir": str(admin_web_dir), "admin_web_auth_disable": False, "admin_web_username": "admin", "admin_web_password": "secret"}, "log_root_level": 0}))
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {"admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_dir": str(admin_web_dir), "telemetry_spool_directory": str(tmp_path / "telemetry"), "admin_web_auth_disable": False, "admin_web_username": "admin", "admin_web_password": "secret"}, "log_root_level": 0}))
         request = receive_control()
         assert request["kind"] == "admin.call"
         assert request["id"] == "bootstrap-status"
@@ -1063,6 +1063,26 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert config["ok"] is True
         assert config["config"] == {"admin_web_bind": "127.0.0.1"}
         assert config["schema"] == {"admin_web_bind": {"type": "string"}}
+
+        telemetry: dict[str, object] = {}
+
+        def fetch_telemetry() -> None:
+            try:
+                telemetry.update(local_json("/api/telemetry"))
+            except BaseException as error:
+                failures.append(error)
+
+        telemetry_thread = threading.Thread(target=fetch_telemetry)
+        telemetry_thread.start()
+        telemetry_request = receive_control()
+        assert telemetry_request["method"] == "get_telemetry_client_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": telemetry_request["id"], "ok": True,
+            "result": {"enabled": True, "worker_state": "running"},
+        }))
+        telemetry_thread.join(timeout=3)
+        assert not telemetry_thread.is_alive() and not failures
+        assert telemetry == {"ok": True, "client": {"enabled": True, "worker_state": "running"}}
 
         updates = {"admin_web_name": "native-admin"}
         config_challenge = local_post_json("/api/config/challenge", {"updates": updates})

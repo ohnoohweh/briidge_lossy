@@ -279,7 +279,7 @@ selected collector and not the host's stdout or stderr. This closes `IPC-2M-1`;
 collector lifecycle/accounting and broad operator qualification remain in
 `IPC-2M-2` and `IPC-2M-3`.
 
-Native Admin onboarding projections are shared across the desktop children: authenticated browser clients receive connection profiles and portable service blueprints derived only from bounded peer/connection parent snapshots. Broader browser-session/API parity remains the `IPC-1A2` residual.
+Native Admin onboarding projections are shared across the desktop children: authenticated browser clients receive connection profiles and portable service blueprints derived only from bounded peer/connection parent snapshots. Both children also expose telemetry status only when configured, sourcing its bounded client snapshot through inherited RPC. Broader browser-session/API parity remains the `IPC-1A2` residual.
 
 | Package | Scope and definition of done | Gap to close |
 | --- | --- | --- |

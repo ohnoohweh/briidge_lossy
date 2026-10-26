@@ -23,6 +23,7 @@ enum ObstacleBridgeNativeAdminMacOSService {
         let authRequired = !authDisabled && !username.isEmpty && !password.isEmpty
         let bearerToken = (arguments["admin_web_token"] as? String) ?? ""
         let assetDirectory = (arguments["admin_web_dir"] as? String) ?? ""
+        let telemetrySpoolDirectory = (arguments["telemetry_spool_directory"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let cookieScope = [bindHost, String(requestedPort), (arguments["admin_web_path"] as? String) ?? "/"].joined(separator: "|")
         let auth = ObstacleBridgeAdminAuth(
             queueLabel: "ObstacleBridgeNativeAdminMacOS.Auth",
@@ -186,6 +187,14 @@ enum ObstacleBridgeNativeAdminMacOSService {
                     return auth.issueSecretRevealChallenge(secretName: "secure_link_psk")
                 case ("POST", "/api/config/secret/secure-link-psk"): return revealSecret(body: body)
                 case ("GET", "/api/logs"): return logs(path: path)
+                case ("GET", "/api/telemetry"):
+                    guard !telemetrySpoolDirectory.isEmpty else {
+                        return json(["ok": false, "error": "telemetry status disabled"], statusLine: "HTTP/1.1 404 Not Found")
+                    }
+                    guard let client = (try? parentRPC.call(method: "get_telemetry_client_snapshot")) as? [String: Any] else {
+                        return json(["ok": false, "error": "telemetry status unavailable", "retryable": true], statusLine: "HTTP/1.1 503 Service Unavailable")
+                    }
+                    return json(["ok": true, "client": client])
                 case ("GET", "/api/connections"): return json(snapshot("get_connections_snapshot"))
                 case ("GET", "/api/peers"): return json(snapshot("get_peer_connections_snapshot"))
                 case ("GET", "/api/onboarding/connection-profiles"):
