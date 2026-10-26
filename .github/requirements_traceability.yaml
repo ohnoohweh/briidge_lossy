@@ -1674,7 +1674,7 @@ REQ-ADM-001:
   # private worker channels carry packet/TUN data and record-only logging.
   # Packaged macOS and Linux native Admin selections retain their status port
   # after supervised child-loss recovery; macOS retries transient bind contention,
-  # while stale-reply recovery remains open.
+  # and stale replies poison the inherited Admin RPC channel.
   # Common desktop-worker framing independently verifies bounded control/data
   # frames, generation fencing, and capability-intersection parity in Python
   # and Swift. Python plus macOS/Linux-native peer children use the shared frames end

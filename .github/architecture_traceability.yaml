@@ -468,7 +468,8 @@ ARC-CMP-004:
   # password-confirmed encrypted PSK reveal through a dedicated inherited
   # invite source, and update-bound password-confirmed
   # configuration writes, concurrent authenticated status reads with correlated
-  # replies, same-port supervised native-child recovery, and macOS transient-bind retry;
+  # replies, same-port supervised native-child recovery, macOS transient-bind retry,
+  # and stale-reply channel poisoning;
   # authenticated remote-service plus bearer-protected
   # peer, TUN-routing, TUN-helper, restart, and shutdown controls through serialized allowlisted
   # parent RPC; peer browser fields are translated to the supervisor contract. Its

@@ -34,8 +34,9 @@ public enum ObstacleBridgeNativeAdminWorker {
         private let control: FileHandle
         private let generation: Int
         private let lock = NSLock()
+        private var failed = false
 
-        fileprivate init(control: FileHandle, generation: Int) {
+        init(control: FileHandle, generation: Int) {
             self.control = control
             self.generation = generation
         }
@@ -45,18 +46,24 @@ public enum ObstacleBridgeNativeAdminWorker {
                   JSONSerialization.isValidJSONObject(args), JSONSerialization.isValidJSONObject(kwargs)
             else { throw Failure.invalidBootstrap }
             lock.lock(); defer { lock.unlock() }
+            guard !failed else { throw Failure.invalidBootstrap }
             let deadline = ProcessInfo.processInfo.systemUptime + timeout
             let identifier = requestID ?? UUID().uuidString.lowercased()
             guard !identifier.isEmpty, identifier.count <= 64 else { throw Failure.invalidBootstrap }
-            try ObstacleBridgeNativeAdminWorker.write(control, kind: .request, generation: generation, value: [
-                "v": 1, "kind": "admin.call", "id": identifier, "method": method,
-                "args": args, "kwargs": kwargs, "deadline": deadline,
-            ])
-            let reply = try ObstacleBridgeNativeAdminWorker.readControl(control, generation: generation, expectedKind: .response, deadline: deadline)
-            guard reply["kind"] as? String == "admin.reply", reply["id"] as? String == identifier,
-                  reply["ok"] as? Bool == true
-            else { throw Failure.invalidBootstrap }
-            return reply["result"] ?? NSNull()
+            do {
+                try ObstacleBridgeNativeAdminWorker.write(control, kind: .request, generation: generation, value: [
+                    "v": 1, "kind": "admin.call", "id": identifier, "method": method,
+                    "args": args, "kwargs": kwargs, "deadline": deadline,
+                ])
+                let reply = try ObstacleBridgeNativeAdminWorker.readControl(control, generation: generation, expectedKind: .response, deadline: deadline)
+                guard reply["kind"] as? String == "admin.reply", reply["id"] as? String == identifier,
+                      reply["ok"] as? Bool == true
+                else { throw Failure.invalidBootstrap }
+                return reply["result"] ?? NSNull()
+            } catch {
+                failed = true
+                throw error
+            }
         }
     }
 
