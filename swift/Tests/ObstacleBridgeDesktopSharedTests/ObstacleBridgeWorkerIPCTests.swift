@@ -30,7 +30,11 @@ struct ObstacleBridgeWorkerIPCTests {
 
     @Test func nativeAdminParentRPCPoisonsChannelAfterStaleReply() throws {
         var descriptors = [Int32](repeating: -1, count: 2)
+        #if os(Linux)
+        let socketType = Int32(SOCK_STREAM.rawValue)
+        #else
         let socketType = SOCK_STREAM
+        #endif
         guard socketpair(AF_UNIX, socketType, 0, &descriptors) == 0 else { throw POSIXError(.ENFILE) }
         defer { close(descriptors[1]) }
         let child = FileHandle(fileDescriptor: descriptors[0], closeOnDealloc: true)
