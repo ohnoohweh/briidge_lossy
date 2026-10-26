@@ -111,6 +111,12 @@ enum ObstacleBridgeNativeAdminMacOSService {
         func previewInvite(body: Data?) -> ObstacleBridgeAdminAPIResponse {
             ObstacleBridgeWebAdminServer.apiResponse(ObstacleBridgeAdminOnboardingPort.preview(body: body))
         }
+        func revealSecret(body: Data?) -> ObstacleBridgeAdminAPIResponse {
+            guard let config = (try? parentRPC.call(method: "get_onboarding_config_snapshot")) as? [String: Any] else {
+                return ObstacleBridgeWebAdminServer.unavailableSecretResponse("secure_link_psk")
+            }
+            return auth.revealSecret(body: body, secretName: "secure_link_psk", secretValue: config["secure_link_psk"] as? String ?? "")
+        }
         let server = try ObstacleBridgeWebAdminServer(
             bindHost: bindHost,
             port: requestedPort,
@@ -132,6 +138,9 @@ enum ObstacleBridgeNativeAdminMacOSService {
                     return json(["ok": true, "config": snapshot("get_config_snapshot"), "schema": snapshot("get_config_schema_snapshot")])
                 case ("POST", "/api/config/challenge"): return configChallenge(body: body)
                 case ("POST", "/api/config"): return updateConfig(body: body)
+                case ("POST", "/api/config/secret/secure-link-psk/challenge"):
+                    return auth.issueSecretRevealChallenge(secretName: "secure_link_psk")
+                case ("POST", "/api/config/secret/secure-link-psk"): return revealSecret(body: body)
                 case ("GET", "/api/logs"): return logs(path: path)
                 case ("GET", "/api/connections"): return json(snapshot("get_connections_snapshot"))
                 case ("GET", "/api/peers"): return json(snapshot("get_peer_connections_snapshot"))

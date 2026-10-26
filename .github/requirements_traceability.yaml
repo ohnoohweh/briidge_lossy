@@ -1683,8 +1683,9 @@ REQ-ADM-001:
   # browser assets plus bounded status/meta/config-schema/log/connection/peer
   # reads plus an update-bound password-confirmed configuration write and
   # refreshed redacted snapshot plus secret-free live onboarding connection
-  # profiles and Core-owned invitation generation/PSK-masked preview from its
-  # dedicated inherited invite source over parent RPC; its Linux socketpair probe also covers bounded connection and peer
+  # profiles and Core-owned invitation generation/PSK-masked preview plus
+  # password-confirmed encrypted PSK reveal from its dedicated inherited invite
+  # source over parent RPC; its Linux socketpair probe also covers bounded connection and peer
   # health/status snapshot reads, local metadata, the configuration schema, caller-bounded log reads, telemetry-client and read-only TUN-routing status, derived onboarding connection profiles and blueprints from parent snapshots, a legacy HTTP live-topic snapshot, a digest-confirmed configuration write with a refreshed redacted snapshot, authenticated remote-service catalog replacement, reconnect/rekey/reload peer controls and bearer-token-protected TUN routing/TUN-helper repair/restart/shutdown controls, an authenticated version-13 snapshot-first WebSocket status/peer/connection session with masked subscription/request controls, and only allowlisted browser base assets. Required Linux CI launches the selected host-native Admin through inherited descriptors, serves status, and proves same-port recovery after process loss. The direct-loopback HTTP probe rejects system proxy lookup. Full
   # Linux owns a loopback-only status listener through inherited parent RPC and
   # its socketpair probe completes authenticated status/configuration/log reads and a WebSocket status snapshot; full browser-session/API parity and Python-side native selection remain open.
@@ -2008,6 +2009,7 @@ REQ-ADM-011:
 
 REQ-ADM-012:
   unit_tests:
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::adminAuthenticationUsesSharedCoreChallengesAndGuardsNativeRoutes
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_requires_password_proof_and_returns_encrypted_envelope

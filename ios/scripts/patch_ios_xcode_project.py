@@ -95,6 +95,7 @@ MALFORMED_PYTHON_APP_STORE_CLEANUP_SCRIPT = (
 IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C500000000000000000001", "71C500000000000000000101", "ObstacleBridgeAdminAPI.swift"),
     ("71C500000000000000000017", "71C500000000000000000117", "ObstacleBridgeAdminAuth.swift"),
+    ("71C500000000000000000055", "71C500000000000000000155", "ObstacleBridgeAdminSecretRevealPolicy.swift"),
     ("71C500000000000000000047", "71C500000000000000000147", "ObstacleBridgeAdminAuthPolicy.swift"),
     ("71C50000000000000000001A", "71C50000000000000000011A", "ObstacleBridgeAdminConfigChallenge.swift"),
     ("71C500000000000000000046", "71C500000000000000000146", "ObstacleBridgeAdminConfigChallengePolicy.swift"),
@@ -175,6 +176,7 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
 APP_SHARED_SWIFT_SOURCES = [
     ("71C610000000000000000024", "71C610000000000000000124", "ObstacleBridgeAdminAPI.swift"),
     ("71C610000000000000000014", "71C610000000000000000114", "ObstacleBridgeAdminAuth.swift"),
+    ("71C610000000000000000055", "71C610000000000000000155", "ObstacleBridgeAdminSecretRevealPolicy.swift"),
     ("71C610000000000000000047", "71C610000000000000000147", "ObstacleBridgeAdminAuthPolicy.swift"),
     ("71C610000000000000000017", "71C610000000000000000117", "ObstacleBridgeAdminConfigChallenge.swift"),
     ("71C610000000000000000046", "71C610000000000000000146", "ObstacleBridgeAdminConfigChallengePolicy.swift"),
@@ -279,6 +281,8 @@ def shared_swift_source_path(name: str) -> str:
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeAdminAuthPolicy.swift"
     if name == "ObstacleBridgeAdminAuth.swift":
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeAdminAuth.swift"
+    if name == "ObstacleBridgeAdminSecretRevealPolicy.swift":
+        return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeAdminSecretRevealPolicy.swift"
     if name == "ObstacleBridgeAdminConfigChallenge.swift":
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeAdminConfigChallenge.swift"
     if name == "ObstacleBridgeTunPing.swift":

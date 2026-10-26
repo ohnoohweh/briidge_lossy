@@ -230,6 +230,13 @@ final class ObstacleBridgeWebAdminServer {
         )
     }
 
+    static func unavailableSecretResponse(_ secretName: String) -> ObstacleBridgeAdminAPIResponse {
+        ObstacleBridgeAdminAPI.jsonResponse(
+            ["ok": false, "error": "\(secretName) unavailable", "retryable": true],
+            statusLine: "HTTP/1.1 503 Service Unavailable"
+        )
+    }
+
     /// Project live peer state into secret-free onboarding connection choices.
     /// Platform owners retain transport/session retrieval through their own
     /// bounded parent RPC; Apple Admin adapters share the projection policy.

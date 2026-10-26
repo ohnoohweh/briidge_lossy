@@ -610,7 +610,7 @@ Implementation note: [ARCHITECTURE.md](ARCHITECTURE.md) now also defines the ove
   error, and redacted worker status), so the shipped browser does not depend
   on a native-only nested response shape.
 
-The macOS native child derives secret-free live connection profiles for the authenticated onboarding selector and retrieves the PSK-bearing invite source only through authenticated inherited RPC for Core-owned invitation generation and masked preview; privileged controls remain pending.
+The macOS native child derives secret-free live connection profiles for the authenticated onboarding selector and retrieves the PSK-bearing invite source only through authenticated inherited RPC for Core-owned invitation generation, masked preview, and password-confirmed encrypted PSK reveal; privileged controls remain pending.
 
 Implementation note: configured Python, macOS, Linux, and iOS local file logs default to 1 MiB rotation with bounded retained backups; an operator may set the size limit to zero to opt out. Python and macOS Admin fallback readers use fixed-size tail reads, Linux native lifecycle logging writes through a bounded utility queue, and iOS JSONL diagnostics retain bounded rotations and tail reads. Native ChannelMux frame diagnostics require both the existing Linux `debug_logging.debug_enabled` switch and `channel_mux.log_channel_mux: DEBUG`; iOS transport owners install no diagnostic event sink unless that ChannelMux level is `DEBUG`, avoiding disabled per-frame field construction and JSON formatting. These diagnostics remain best effort and must not delay packet forwarding or load a complete log file for an Admin request.
 

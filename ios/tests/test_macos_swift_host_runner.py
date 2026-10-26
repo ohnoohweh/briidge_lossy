@@ -975,14 +975,14 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
             with local_opener.open(f"http://127.0.0.1:{ready['port']}{path}", timeout=3) as response:
                 return response.read().decode("utf-8")
 
-        def local_post_json(path: str, payload: dict[str, object]) -> dict[str, object]:
+        def local_post_json(path: str, payload: dict[str, object], timeout: int = 3) -> dict[str, object]:
             request = urllib.request.Request(
                 f"http://127.0.0.1:{ready['port']}{path}",
                 data=json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with local_opener.open(request, timeout=3) as response:
+            with local_opener.open(request, timeout=timeout) as response:
                 return json.loads(response.read())
 
         auth_state = local_json("/api/auth/state")
@@ -1130,6 +1130,34 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert preview["ok"] is True
         assert preview["preview"]["secure_link_psk"] == "***hidden***"
         assert preview["suggested_updates"]["secure_link_psk"] == "portable-peer-secret"
+
+        reveal_challenge = local_post_json("/api/config/secret/secure-link-psk/challenge", {})
+        reveal_proof = hashlib.sha256(
+            f"{reveal_challenge['seed']}:admin:secret:secure_link_psk".encode("utf-8")
+        ).hexdigest()
+        reveal: dict[str, object] = {}
+
+        def request_secret_reveal() -> None:
+            try:
+                reveal.update(local_post_json("/api/config/secret/secure-link-psk", {
+                    "challenge_id": reveal_challenge["challenge_id"], "proof": reveal_proof,
+                }, timeout=12))
+            except BaseException as error:
+                failures.append(error)
+
+        reveal_thread = threading.Thread(target=request_secret_reveal)
+        reveal_thread.start()
+        reveal_request = receive_control()
+        assert reveal_request["method"] == "get_onboarding_config_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": reveal_request["id"], "ok": True,
+            "result": {"secure_link_psk": "portable-peer-secret"},
+        }))
+        reveal_thread.join(timeout=12)
+        assert not reveal_thread.is_alive() and not failures
+        assert reveal["ok"] is True and reveal["secret_name"] == "secure_link_psk"
+        assert "portable-peer-secret" not in json.dumps(reveal)
+        assert reveal["encrypted"]["algorithm"] == "AES-GCM"
 
         logs: dict[str, object] = {}
 

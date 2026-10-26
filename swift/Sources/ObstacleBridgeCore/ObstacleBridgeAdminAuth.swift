@@ -13,6 +13,7 @@ final class ObstacleBridgeAdminAuth {
     private let cookieScopeProvider: () -> String
 
     private var state = ObstacleBridgeAdminAuthPolicy.State()
+    private var revealChallenges: [String: ObstacleBridgeAdminSecretRevealPolicy.Challenge] = [:]
 
     init(
         queueLabel: String,
@@ -33,7 +34,54 @@ final class ObstacleBridgeAdminAuth {
     func resetState() {
         queue.sync {
             state.reset()
+            revealChallenges.removeAll()
         }
+    }
+
+    func issueSecretRevealChallenge(secretName: String) -> ObstacleBridgeAdminAPIResponse {
+        guard authRequiredProvider() else {
+            return ObstacleBridgeAdminAPI.jsonResponse(["ok": false, "error": "admin password authentication is required to reveal \(secretName)"], statusLine: "HTTP/1.1 403 Forbidden")
+        }
+        return queue.sync {
+            let identifier = UUID().uuidString.lowercased()
+            let seed = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + identifier
+            let now = Date().timeIntervalSince1970
+            revealChallenges = revealChallenges.filter { $0.value.expiresAt > now }
+            revealChallenges[identifier] = ObstacleBridgeAdminSecretRevealPolicy.issue(identifier: identifier, seed: seed, secretName: secretName, now: now, ttl: 60)
+            return ObstacleBridgeAdminAPI.jsonResponse(["ok": true, "auth_required": true, "challenge_id": identifier, "seed": seed, "secret_name": secretName])
+        }
+    }
+
+    func revealSecret(body: Data?, secretName: String, secretValue: String) -> ObstacleBridgeAdminAPIResponse {
+        guard authRequiredProvider() else {
+            return ObstacleBridgeAdminAPI.jsonResponse(["ok": false, "error": "admin password authentication is required to reveal \(secretName)"], statusLine: "HTTP/1.1 403 Forbidden")
+        }
+        guard let body, let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+            return ObstacleBridgeAdminAPI.jsonResponse(["ok": false, "error": "invalid JSON body"], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        let identifier = (payload["challenge_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let proof = (payload["proof"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !identifier.isEmpty, !proof.isEmpty else {
+            return ObstacleBridgeAdminAPI.jsonResponse(["ok": false, "error": "\(secretName) reveal confirmation required"], statusLine: "HTTP/1.1 428 Precondition Required")
+        }
+        let validation = queue.sync { () -> ObstacleBridgeAdminSecretRevealPolicy.ValidationResult? in
+            guard let challenge = revealChallenges.removeValue(forKey: identifier) else { return nil }
+            return ObstacleBridgeAdminSecretRevealPolicy.validate(challenge, proof: proof, secretName: secretName, username: usernameProvider(), password: passwordProvider(), now: Date().timeIntervalSince1970, digest: Self.sha256Hex)
+        }
+        guard let validation else {
+            return ObstacleBridgeAdminAPI.jsonResponse(["ok": false, "error": "invalid or expired \(secretName) reveal challenge"], statusLine: "HTTP/1.1 403 Forbidden")
+        }
+        guard validation == .valid else {
+            let error = validation == .proofMismatch ? "\(secretName) reveal confirmation failed" : "invalid or expired \(secretName) reveal challenge"
+            return ObstacleBridgeAdminAPI.jsonResponse(["ok": false, "error": error], statusLine: "HTTP/1.1 403 Forbidden")
+        }
+        var generator = SystemRandomNumberGenerator()
+        let salt = Data((0..<16).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+        let nonce = Data((0..<12).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+        guard let encrypted = try? ObstacleBridgeAdminSecretRevealPolicy.encryptedEnvelope(secretName: secretName, secretValue: secretValue, password: passwordProvider(), salt: salt, nonce: nonce) else {
+            return ObstacleBridgeAdminAPI.jsonResponse(["ok": false, "error": "secret reveal encryption failed"], statusLine: "HTTP/1.1 500 Internal Server Error")
+        }
+        return ObstacleBridgeAdminAPI.jsonResponse(["ok": true, "secret_name": secretName, "encrypted": encrypted])
     }
 
     func isAuthenticated(headers: [String: String]) -> Bool {

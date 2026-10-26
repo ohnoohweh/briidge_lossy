@@ -29,6 +29,8 @@ def test_shared_native_admin_child_source_uses_inherited_control_and_lifetime_de
     assert '"/api/onboarding/connection-profiles"' in macos_service
     assert '"/api/onboarding/invite/generate"' in macos_service
     assert '"/api/onboarding/invite/preview"' in macos_service
+    assert '"/api/config/secret/secure-link-psk"' in macos_service
+    assert "issueSecretRevealChallenge" in child or "issueSecretRevealChallenge" in (CORE_SWIFT_DIR / "ObstacleBridgeAdminAuth.swift").read_text(encoding="utf-8")
 SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
@@ -749,6 +751,7 @@ def test_webadmin_server_source_exists() -> None:
     assert "candidate.path.hasPrefix(root.path + \"/\")" in runtime
     assert "static func normalizedConfigUpdateResult(_ result: Any?)" in runtime
     assert "static func apiResponse(_ response: ObstacleBridgeAdminLinuxResponse)" in runtime
+    assert "static func unavailableSecretResponse(_ secretName: String)" in runtime
     assert "static func onboardingConnectionProfiles(snapshot: [String: Any])" in runtime
     assert "staticFileReadQueue.async" in runtime
     assert "respondWithStaticFile(for: request, connection: connection)" in runtime

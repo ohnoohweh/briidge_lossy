@@ -263,6 +263,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "Crypto in IPServer Frameworks" not in patched
     assert "ObstacleBridgeUdpOverlaySessionCodec.swift" not in patched
     assert "ObstacleBridgeAdminAPI.swift in Sources" in patched
+    assert "ObstacleBridgeAdminSecretRevealPolicy.swift in Sources" in patched
     assert "ObstacleBridgeChannelMuxCodec.swift in Sources" in patched
     assert "ObstacleBridgeChannelMuxCompatibilityCodec.swift in Sources" in patched
     assert "ObstacleBridgeRuntimeConfig.swift in Sources" in patched
