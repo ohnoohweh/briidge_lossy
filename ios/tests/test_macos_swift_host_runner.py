@@ -991,6 +991,7 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         challenge = local_json("/api/auth/challenge")
         proof = hashlib.sha256(f"{challenge['seed']}:admin:secret".encode("utf-8")).hexdigest()
         assert local_post_json("/api/auth/login", {"challenge_id": challenge["challenge_id"], "proof": proof})["authenticated"] is True
+        assert local_json("/api/health") == {"ok": True}
 
         legacy_live: dict[str, object] = {}
 
@@ -1127,6 +1128,52 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert isinstance(metadata["uptime_sec"], int) and metadata["uptime_sec"] >= 0
         assert metadata["milestone"] == "C"
         assert metadata["build"] == {"version": "native-test"}
+
+        def fetch_snapshot(path: str, destination: dict[str, object]) -> None:
+            try:
+                destination.update(local_json(path))
+            except BaseException as error:
+                failures.append(error)
+
+        connections: dict[str, object] = {}
+        connections_thread = threading.Thread(target=fetch_snapshot, args=("/api/connections", connections))
+        connections_thread.start()
+        connections_request = receive_control()
+        assert connections_request["method"] == "get_connections_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": connections_request["id"], "ok": True,
+            "result": {"tcp": [{"id": "native-connection"}], "udp": []},
+        }))
+        connections_thread.join(timeout=3)
+        assert not connections_thread.is_alive() and not failures
+        assert connections == {"tcp": [{"id": "native-connection"}], "udp": []}
+
+        peers: dict[str, object] = {}
+        peers_thread = threading.Thread(target=fetch_snapshot, args=("/api/peers", peers))
+        peers_thread.start()
+        peers_request = receive_control()
+        assert peers_request["method"] == "get_peer_connections_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": peers_request["id"], "ok": True,
+            "result": {"peers": [{"id": "native-peer"}]},
+        }))
+        peers_thread.join(timeout=3)
+        assert not peers_thread.is_alive() and not failures
+        assert peers == {"peers": [{"id": "native-peer"}]}
+
+        tun_routing: dict[str, object] = {}
+        tun_routing_thread = threading.Thread(target=fetch_snapshot, args=("/api/tun-routing/status", tun_routing))
+        tun_routing_thread.start()
+        tun_routing_request = receive_control()
+        assert tun_routing_request["method"] == "get_status_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": tun_routing_request["id"], "ok": True,
+            "result": {"tun": [{"id": "native-tun"}], "tun_helper": {"state": "ready"}},
+        }))
+        tun_routing_thread.join(timeout=3)
+        assert not tun_routing_thread.is_alive() and not failures
+        assert tun_routing["tun"] == [{"id": "native-tun"}]
+        assert tun_routing["tun_helper"] == {"state": "ready"}
 
         concurrent_results: list[dict[str, object]] = []
 
@@ -1368,6 +1415,62 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert not logs_thread.is_alive() and not failures
         assert logs["lines"] == ["native-admin-ready"]
         assert logs["available"] is True and logs["source"] == "managed"
+
+        def invoke_control(path: str, payload: dict[str, object], method: str, *, kwargs: dict[str, object] | None = None, result: object = None) -> dict[str, object]:
+            response: dict[str, object] = {}
+
+            def post() -> None:
+                try:
+                    response.update(local_post_json(path, payload))
+                except BaseException as error:
+                    failures.append(error)
+
+            thread = threading.Thread(target=post)
+            thread.start()
+            control_request = receive_control()
+            assert control_request["method"] == method
+            assert control_request["kwargs"] == (kwargs if kwargs is not None else payload)
+            parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+                "v": 1, "kind": "admin.reply", "id": control_request["id"], "ok": True,
+                "result": {"ok": True} if result is None else result,
+            }))
+            thread.join(timeout=3)
+            assert not thread.is_alive() and not failures
+            return response
+
+        remote_services = invoke_control(
+            "/api/channelmux/remote-services",
+            {"remote_servers": []},
+            "replace_remote_services_catalog",
+            kwargs={},
+            result=[True],
+        )
+        assert remote_services == {"ok": True, "remote_servers": []}
+        assert invoke_control(
+            "/api/reconnect", {"peer_id": "native-peer"}, "request_overlay_reconnect",
+            kwargs={"target_peer_id": "native-peer"},
+        )["ok"] is True
+        assert invoke_control(
+            "/api/secure-link/rekey", {"peer_id": "native-peer"}, "request_secure_link_rekey",
+            kwargs={"target_peer_id": "native-peer"},
+        )["ok"] is True
+        assert invoke_control(
+            "/api/secure-link/reload", {"peer_id": "native-peer", "scope": "all"}, "request_secure_link_reload",
+            kwargs={"target_peer_id": "native-peer", "scope": "all"},
+        )["ok"] is True
+        assert invoke_control(
+            "/api/tun-routing/control", {"enabled": True}, "request_tun_enabled",
+        )["ok"] is True
+        assert invoke_control(
+            "/api/tun-helper/repair", {}, "request_tun_helper_repair",
+        )["ok"] is True
+        assert invoke_control(
+            "/api/restart", {}, "request_restart", kwargs={"reason": "admin_web:/api/restart"},
+        )["ok"] is True
+        assert invoke_control(
+            "/api/shutdown", {}, "request_shutdown", kwargs={"exit_code": 76, "reason": "admin_web:/api/shutdown"},
+        )["ok"] is True
+        assert local_post_json("/api/auth/logout", {}) == {"ok": True, "authenticated": False}
         parent_lifetime.close()
         assert process.wait(timeout=3) == 0
     finally:
