@@ -1073,6 +1073,33 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert not update_thread.is_alive() and not failures
         assert update_result == {"ok": True, "config": updates}
 
+        profiles: dict[str, object] = {}
+
+        def fetch_connection_profiles() -> None:
+            try:
+                profiles.update(local_json("/api/onboarding/connection-profiles"))
+            except BaseException as error:
+                failures.append(error)
+
+        profiles_thread = threading.Thread(target=fetch_connection_profiles)
+        profiles_thread.start()
+        profiles_request = receive_control()
+        assert profiles_request["method"] == "get_peer_connections_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": profiles_request["id"], "ok": True,
+            "result": {"peers": [{"id": "0:1", "transport": "tcp", "state": "connected", "peer": "198.51.100.7:443"}]},
+        }))
+        profiles_thread.join(timeout=3)
+        assert not profiles_thread.is_alive() and not failures
+        assert profiles == {
+            "ok": True, "count": 1,
+            "profiles": [{
+                "id": "live:tcp:0:1", "source": "live", "transport": "tcp", "role": "client",
+                "endpoint_host": "198.51.100.7", "endpoint_port": 443,
+                "label": "TCP client 198.51.100.7:443", "peer_host": "198.51.100.7", "peer_port": 443,
+            }],
+        }
+
         logs: dict[str, object] = {}
 
         def fetch_logs() -> None:

@@ -120,6 +120,9 @@ enum ObstacleBridgeNativeAdminMacOSService {
                 case ("GET", "/api/logs"): return logs(path: path)
                 case ("GET", "/api/connections"): return json(snapshot("get_connections_snapshot"))
                 case ("GET", "/api/peers"): return json(snapshot("get_peer_connections_snapshot"))
+                case ("GET", "/api/onboarding/connection-profiles"):
+                    let profiles = ObstacleBridgeWebAdminServer.onboardingConnectionProfiles(snapshot: snapshot("get_peer_connections_snapshot"))
+                    return json(["ok": true, "count": profiles.count, "profiles": profiles])
                 case ("GET", "/api/tun-routing/status"):
                     let status = snapshot("get_status_snapshot")
                     let tun = status["tun"] as? [Any] ?? []

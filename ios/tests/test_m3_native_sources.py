@@ -25,6 +25,7 @@ def test_shared_native_admin_child_source_uses_inherited_control_and_lifetime_de
     assert '"/api/status"' in macos_service
     assert "staticAssetResponse" in macos_service
     assert "normalizedConfigUpdateResult" in macos_service
+    assert '"/api/onboarding/connection-profiles"' in macos_service
 SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
@@ -744,6 +745,7 @@ def test_webadmin_server_source_exists() -> None:
     assert "static func staticAssetResponse(path: String, assetDirectory: String)" in runtime
     assert "candidate.path.hasPrefix(root.path + \"/\")" in runtime
     assert "static func normalizedConfigUpdateResult(_ result: Any?)" in runtime
+    assert "static func onboardingConnectionProfiles(snapshot: [String: Any])" in runtime
     assert "staticFileReadQueue.async" in runtime
     assert "respondWithStaticFile(for: request, connection: connection)" in runtime
     assert "self.queue.async" in runtime

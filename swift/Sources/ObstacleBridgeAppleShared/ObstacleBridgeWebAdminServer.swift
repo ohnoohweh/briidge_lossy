@@ -206,6 +206,46 @@ final class ObstacleBridgeWebAdminServer {
         return (succeeded, values.dropFirst().first as? String ?? "configuration update failed")
     }
 
+    /// Project live peer state into secret-free onboarding connection choices.
+    /// Platform owners retain transport/session retrieval through their own
+    /// bounded parent RPC; Apple Admin adapters share the projection policy.
+    static func onboardingConnectionProfiles(snapshot: [String: Any]) -> [[String: Any]] {
+        guard let rows = snapshot["peers"] as? [[String: Any]] else { return [] }
+        return rows.compactMap { row in
+            let transport = String(describing: row["transport"] ?? "").lowercased()
+            guard ["udp", "tcp", "quic", "ws", "myudp"].contains(transport) else { return nil }
+            let role = String(describing: row["state"] ?? "").lowercased() == "listening" ? "server" : "client"
+            let endpoint = onboardingEndpoint(row[role == "server" ? "listen" : "peer"])
+            let identifier = String(describing: row["id"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            var profile: [String: Any] = [
+                "id": "live:\(transport):\(identifier)",
+                "source": "live",
+                "transport": transport == "udp" ? "myudp" : transport,
+                "role": role,
+                "endpoint_host": endpoint?.host ?? "",
+                "endpoint_port": endpoint?.port ?? NSNull(),
+                "label": endpoint.map { "\(transport.uppercased()) \(role) \($0.host):\($0.port)" } ?? "\(transport.uppercased()) \(role)",
+            ]
+            if role == "server" {
+                profile["listen_bind"] = endpoint?.host ?? ""
+                profile["listen_port"] = endpoint?.port ?? NSNull()
+            } else {
+                profile["peer_host"] = endpoint?.host ?? ""
+                profile["peer_port"] = endpoint?.port ?? NSNull()
+            }
+            return profile
+        }
+    }
+
+    private static func onboardingEndpoint(_ value: Any?) -> (host: String, port: Int)? {
+        let text = String(describing: value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separator = text.lastIndex(of: ":"),
+              let port = Int(text[text.index(after: separator)...]),
+              (1...65535).contains(port) else { return nil }
+        let host = String(text[..<separator]).trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+        return host.isEmpty ? nil : (host, port)
+    }
+
     private func handle(_ connection: NWConnection) {
         connection.start(queue: queue)
         receiveHTTPRequest(connection, buffer: Data())
