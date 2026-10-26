@@ -32,6 +32,11 @@ enum ObstacleBridgeNativeAdminMacOSService {
             bearerTokenProvider: { bearerToken },
             cookieScopeProvider: { cookieScope }
         )
+        let configChallenges = ObstacleBridgeAdminConfigChallenge(
+            queueLabel: "ObstacleBridgeNativeAdminMacOS.ConfigChallenge",
+            usernameProvider: { username },
+            passwordProvider: { password }
+        )
         func snapshot(_ method: String) -> [String: Any] {
             (try? parentRPC.call(method: method)) as? [String: Any] ?? ["state": "unavailable"]
         }
@@ -48,6 +53,49 @@ enum ObstacleBridgeNativeAdminMacOSService {
                 error: fetched["error"] as? String ?? "logger unavailable",
                 loggingWorker: fetched["worker_status"] as? [String: Any] ?? fetched["worker"] as? [String: Any]
             ))
+        }
+        func configChallenge(body: Data?) -> ObstacleBridgeAdminAPIResponse {
+            guard let body,
+                  let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+                  let updates = payload["updates"] as? [String: Any] else {
+                return json(["ok": false, "error": "invalid JSON body or updates must be an object"], statusLine: "HTTP/1.1 400 Bad Request")
+            }
+            guard authRequired else { return json(["ok": true, "auth_required": false]) }
+            guard let challenge = try? configChallenges.issueChallenge(updates: updates) else {
+                return json(["ok": false, "error": "unable to issue configuration challenge"], statusLine: "HTTP/1.1 400 Bad Request")
+            }
+            var response = challenge
+            response["ok"] = true
+            response["auth_required"] = true
+            return json(response)
+        }
+        func updateConfig(body: Data?) -> ObstacleBridgeAdminAPIResponse {
+            guard let body,
+                  let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+                  let updates = payload["updates"] as? [String: Any] else {
+                return json(["ok": false, "error": "invalid JSON body or updates must be an object"], statusLine: "HTTP/1.1 400 Bad Request")
+            }
+            if authRequired {
+                let challengeID = (payload["challenge_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let proof = (payload["proof"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard !challengeID.isEmpty, !proof.isEmpty else {
+                    return json(["ok": false, "error": "configuration change confirmation required"], statusLine: "HTTP/1.1 428 Precondition Required")
+                }
+                if let error = configChallenges.validate(challengeID: challengeID, proof: proof, updates: updates) {
+                    return json(["ok": false, "error": error], statusLine: "HTTP/1.1 403 Forbidden")
+                }
+            }
+            let result = try? parentRPC.call(method: "update_config", args: [updates])
+            let values = result as? [Any] ?? []
+            let succeeded = (values.first as? Bool) ?? ((values.first as? NSNumber)?.boolValue ?? false)
+            guard succeeded else {
+                return json(["ok": false, "error": values.dropFirst().first as? String ?? "configuration update failed"], statusLine: "HTTP/1.1 400 Bad Request")
+            }
+            if updates.keys.contains(where: { ["admin_web_auth_disable", "admin_web_username", "admin_web_password", "secure_link_psk"].contains($0) }) {
+                auth.resetState()
+                configChallenges.reset()
+            }
+            return json(["ok": true, "config": snapshot("get_config_snapshot")])
         }
         let server = try ObstacleBridgeWebAdminServer(
             bindHost: bindHost,
@@ -68,6 +116,8 @@ enum ObstacleBridgeNativeAdminMacOSService {
                     return json(["app": "ObstacleBridgeMacOS", "platform": "macos", "admin_web_name": arguments["admin_web_name"] as? String ?? "", "build": status["build"] ?? [:], "runtime_dependencies": ["ok": true, "missing": [], "install_hint": ""]])
                 case ("GET", "/api/config"):
                     return json(["ok": true, "config": snapshot("get_config_snapshot"), "schema": snapshot("get_config_schema_snapshot")])
+                case ("POST", "/api/config/challenge"): return configChallenge(body: body)
+                case ("POST", "/api/config"): return updateConfig(body: body)
                 case ("GET", "/api/logs"): return logs(path: path)
                 case ("GET", "/api/connections"): return json(snapshot("get_connections_snapshot"))
                 case ("GET", "/api/peers"): return json(snapshot("get_peer_connections_snapshot"))

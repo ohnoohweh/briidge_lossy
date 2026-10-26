@@ -198,6 +198,14 @@ final class ObstacleBridgeWebAdminServer {
         return (contentType, body)
     }
 
+    /// Normalize the inherited Admin-owner configuration result consistently
+    /// for every Apple WebAdmin adapter.
+    static func normalizedConfigUpdateResult(_ result: Any?) -> (succeeded: Bool, error: String) {
+        let values = result as? [Any] ?? []
+        let succeeded = (values.first as? Bool) ?? ((values.first as? NSNumber)?.boolValue ?? false)
+        return (succeeded, values.dropFirst().first as? String ?? "configuration update failed")
+    }
+
     private func handle(_ connection: NWConnection) {
         connection.start(queue: queue)
         receiveHTTPRequest(connection, buffer: Data())

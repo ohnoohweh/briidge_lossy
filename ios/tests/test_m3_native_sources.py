@@ -742,6 +742,7 @@ def test_webadmin_server_source_exists() -> None:
     assert 'label: "ObstacleBridgeWebAdminServer.StaticFileRead"' in runtime
     assert "static func staticAssetResponse(path: String, assetDirectory: String)" in runtime
     assert "candidate.path.hasPrefix(root.path + \"/\")" in runtime
+    assert "static func normalizedConfigUpdateResult(_ result: Any?)" in runtime
     assert "staticFileReadQueue.async" in runtime
     assert "respondWithStaticFile(for: request, connection: connection)" in runtime
     assert "self.queue.async" in runtime

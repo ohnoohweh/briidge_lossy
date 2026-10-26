@@ -1039,6 +1039,40 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert config["config"] == {"admin_web_bind": "127.0.0.1"}
         assert config["schema"] == {"admin_web_bind": {"type": "string"}}
 
+        updates = {"admin_web_name": "native-admin"}
+        config_challenge = local_post_json("/api/config/challenge", {"updates": updates})
+        updates_digest = hashlib.sha256(json.dumps(updates, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        config_proof = hashlib.sha256(
+            f"{config_challenge['seed']}:admin:secret:{updates_digest}".encode("utf-8")
+        ).hexdigest()
+        update_result: dict[str, object] = {}
+
+        def post_config_update() -> None:
+            try:
+                update_result.update(local_post_json("/api/config", {
+                    "updates": updates,
+                    "challenge_id": config_challenge["challenge_id"],
+                    "proof": config_proof,
+                }))
+            except BaseException as error:
+                failures.append(error)
+
+        update_thread = threading.Thread(target=post_config_update)
+        update_thread.start()
+        update_request = receive_control()
+        assert update_request["method"] == "update_config" and update_request["args"] == [updates]
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": update_request["id"], "ok": True, "result": [True, ""],
+        }))
+        updated_snapshot_request = receive_control()
+        assert updated_snapshot_request["method"] == "get_config_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": updated_snapshot_request["id"], "ok": True, "result": updates,
+        }))
+        update_thread.join(timeout=3)
+        assert not update_thread.is_alive() and not failures
+        assert update_result == {"ok": True, "config": updates}
+
         logs: dict[str, object] = {}
 
         def fetch_logs() -> None:
