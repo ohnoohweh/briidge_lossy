@@ -210,6 +210,13 @@ class _SecureLinkPeerState:
     pending_server_nonce: bytes = b""
     pending_c2s_key: Optional[bytes] = None
     pending_s2c_key: Optional[bytes] = None
+    pending_rekey_control_frame: bytes = b""
+    pending_rekey_control_type: int = 0
+    pending_rekey_retry_attempts: int = 0
+    pending_rekey_retry_unix_ts: Optional[float] = None
+    pending_rekey_reply_frame: bytes = b""
+    completed_rekey_session_id: int = 0
+    completed_rekey_done_frame: bytes = b""
     auth_fail_code: int = 0
     auth_fail_reason: str = ""
     auth_fail_detail: str = ""
@@ -284,6 +291,9 @@ class SecureLinkPskSession(ISession):
     _SL_MAX_DATA_COUNTER = (1 << 64) - 1
     _HANDSHAKE_TIMEOUT_S = 60.0
     _HANDSHAKE_WATCHDOG_INTERVAL_S = 0.25
+    _REKEY_CONTROL_RETRY_INITIAL_S = 0.5
+    _REKEY_CONTROL_RETRY_MAX_S = 8.0
+    _REKEY_CONTROL_RETRY_MAX_ATTEMPTS = 5
 
     def __getattr__(self, name: str):
         """Keep transport diagnostics available through this transparent wrapper."""
@@ -1353,6 +1363,7 @@ class SecureLinkPskSession(ISession):
         for key, state in list(self._peer_states.items()):
             if int(state.auth_fail_code or 0) > 0:
                 continue
+            self._retry_pending_rekey_control(state, now=now)
             # Typed lifecycle normally clears this state immediately. This is
             # the fail-closed fallback when that callback was missed.
             authenticated_at = float(state.last_authenticated_unix_ts or 0.0)
@@ -1584,6 +1595,54 @@ class SecureLinkPskSession(ISession):
         state.pending_s2c_key = None
         state.pending_local_ephemeral_private = None
         state.pending_started_unix_ts = None
+        state.pending_rekey_control_frame = b""
+        state.pending_rekey_control_type = 0
+        state.pending_rekey_retry_attempts = 0
+        state.pending_rekey_retry_unix_ts = None
+        state.pending_rekey_reply_frame = b""
+
+    def _track_pending_rekey_control(
+        self,
+        state: _SecureLinkPeerState,
+        *,
+        frame: bytes,
+        frame_type: int,
+    ) -> None:
+        state.pending_rekey_control_frame = bytes(frame)
+        state.pending_rekey_control_type = int(frame_type)
+        state.pending_rekey_retry_attempts = 0
+        state.pending_rekey_retry_unix_ts = time.time() + self._REKEY_CONTROL_RETRY_INITIAL_S
+
+    def _retry_pending_rekey_control(self, state: _SecureLinkPeerState, *, now: float) -> None:
+        if not self._client_mode:
+            return
+        frame = bytes(state.pending_rekey_control_frame or b"")
+        if not frame or int(state.pending_rekey_control_type or 0) not in {
+            self._SL_TYPE_REKEY_HELLO,
+            self._SL_TYPE_REKEY_COMMIT,
+        }:
+            return
+        due = float(state.pending_rekey_retry_unix_ts or 0.0)
+        if due <= 0.0 or now < due:
+            return
+        attempts = int(state.pending_rekey_retry_attempts or 0)
+        if attempts >= self._REKEY_CONTROL_RETRY_MAX_ATTEMPTS:
+            return
+        state.pending_rekey_retry_attempts = attempts + 1
+        delay = min(
+            self._REKEY_CONTROL_RETRY_MAX_S,
+            self._REKEY_CONTROL_RETRY_INITIAL_S * (2 ** attempts),
+        )
+        state.pending_rekey_retry_unix_ts = now + delay
+        self._log_rekey_phase(
+            "retry",
+            "tx",
+            state,
+            peer_id=None,
+            frame_session_id=int(state.pending_session_id or 0),
+            body_len=max(0, len(frame) - self._SL_HDR.size),
+        )
+        self._send_inner_frame(frame)
 
     def _promote_pending_rekey(self, state: _SecureLinkPeerState) -> bool:
         if int(state.pending_session_id or 0) <= 0:
@@ -1650,7 +1709,9 @@ class SecureLinkPskSession(ISession):
             frame_session_id=pending_session_id,
             body_len=len(payload),
         )
-        self._send_inner_frame(self._build_frame(self._SL_TYPE_REKEY_HELLO, pending_session_id, 0, payload))
+        frame = self._build_frame(self._SL_TYPE_REKEY_HELLO, pending_session_id, 0, payload)
+        self._track_pending_rekey_control(state, frame=frame, frame_type=self._SL_TYPE_REKEY_HELLO)
+        self._send_inner_frame(frame)
 
     def _maybe_trigger_rekey(self, state: Optional[_SecureLinkPeerState]) -> None:
         if not self._client_mode or self._rekey_after_frames <= 0 or state is None or not state.authenticated:
@@ -3019,6 +3080,21 @@ class SecureLinkPskSession(ISession):
         if int(state.pending_session_id or 0) > 0 and int(state.pending_session_id or 0) != int(session_id):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
             return
+        if int(state.pending_session_id or 0) == int(session_id):
+            reply = bytes(state.pending_rekey_reply_frame or b"")
+            if reply:
+                self._log_rekey_phase(
+                    "retry",
+                    "tx",
+                    state,
+                    peer_id=peer_id,
+                    frame_session_id=session_id,
+                    body_len=max(0, len(reply) - self._SL_HDR.size),
+                )
+                self._send_inner_frame(reply, peer_id=peer_id)
+                return
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+            return
         # The listener is a rekey participant too. Start its watchdog when
         # the first hello is accepted, and never refresh it for retransmitted
         # copies of that hello. Otherwise a one-way myUDP path can leave this
@@ -3082,7 +3158,9 @@ class SecureLinkPskSession(ISession):
                 frame_session_id=session_id,
                 body_len=len(payload),
             )
-            self._send_inner_frame(self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload), peer_id=peer_id)
+            reply = self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload)
+            state.pending_rekey_reply_frame = reply
+            self._send_inner_frame(reply, peer_id=peer_id)
             return
         if len(body) < 34:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
@@ -3110,7 +3188,9 @@ class SecureLinkPskSession(ISession):
             frame_session_id=session_id,
             body_len=len(payload),
         )
-        self._send_inner_frame(self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload), peer_id=peer_id)
+        reply = self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload)
+        state.pending_rekey_reply_frame = reply
+        self._send_inner_frame(reply, peer_id=peer_id)
 
     def _handle_rekey_reply(self, session_id: int, body: bytes) -> None:
         if not self._client_mode or int(session_id or 0) <= 0:
@@ -3178,7 +3258,9 @@ class SecureLinkPskSession(ISession):
                 frame_session_id=session_id,
                 body_len=len(commit),
             )
-            self._send_inner_frame(self._build_frame(self._SL_TYPE_REKEY_COMMIT, session_id, 0, commit))
+            frame = self._build_frame(self._SL_TYPE_REKEY_COMMIT, session_id, 0, commit)
+            self._track_pending_rekey_control(state, frame=frame, frame_type=self._SL_TYPE_REKEY_COMMIT)
+            self._send_inner_frame(frame)
             return
         if len(body) < 65:
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
@@ -3206,7 +3288,9 @@ class SecureLinkPskSession(ISession):
             frame_session_id=session_id,
             body_len=len(commit),
         )
-        self._send_inner_frame(self._build_frame(self._SL_TYPE_REKEY_COMMIT, session_id, 0, commit))
+        frame = self._build_frame(self._SL_TYPE_REKEY_COMMIT, session_id, 0, commit)
+        self._track_pending_rekey_control(state, frame=frame, frame_type=self._SL_TYPE_REKEY_COMMIT)
+        self._send_inner_frame(frame)
         self._client_rekey_hold_after_commit = True
 
     def _handle_rekey_commit(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
@@ -3215,7 +3299,16 @@ class SecureLinkPskSession(ISession):
             return
         key = self._peer_key(peer_id)
         state = self._peer_states.get(key)
-        if state is None or int(state.pending_session_id or 0) != int(session_id):
+        if state is None:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        if int(state.pending_session_id or 0) != int(session_id):
+            if int(state.completed_rekey_session_id or 0) == int(session_id):
+                done = bytes(state.completed_rekey_done_frame or b"")
+                if done:
+                    self._log_rekey_phase("retry", "tx", state, peer_id=peer_id, frame_session_id=session_id)
+                    self._send_inner_frame(done, peer_id=peer_id)
+                    return
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         self._log_rekey_phase(
@@ -3244,8 +3337,11 @@ class SecureLinkPskSession(ISession):
                 event="rekey_completed",
                 rekey_completed=True,
             )
+            done = self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b"")
+            state.completed_rekey_session_id = int(session_id)
+            state.completed_rekey_done_frame = done
             self._log_rekey_phase("done", "tx", state, peer_id=peer_id, frame_session_id=session_id)
-            self._send_inner_frame(self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b""), peer_id=peer_id)
+            self._send_inner_frame(done, peer_id=peer_id)
             self._refresh_connected_state()
             return
         expected = self._client_rekey_commit_proof(session_id, state.pending_client_nonce, state.pending_server_nonce)
@@ -3260,8 +3356,11 @@ class SecureLinkPskSession(ISession):
             event="rekey_completed",
             rekey_completed=True,
         )
+        done = self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b"")
+        state.completed_rekey_session_id = int(session_id)
+        state.completed_rekey_done_frame = done
         self._log_rekey_phase("done", "tx", state, peer_id=peer_id, frame_session_id=session_id)
-        self._send_inner_frame(self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b""), peer_id=peer_id)
+        self._send_inner_frame(done, peer_id=peer_id)
         self._refresh_connected_state()
 
     def _handle_rekey_done(self, session_id: int) -> None:
@@ -3269,7 +3368,12 @@ class SecureLinkPskSession(ISession):
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         state = self._peer_states.get(0)
-        if state is None or int(state.pending_session_id or 0) != int(session_id):
+        if state is None:
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        if int(state.pending_session_id or 0) != int(session_id):
+            if int(state.session_id or 0) == int(session_id):
+                return
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         self._log_rekey_phase("done", "rx", state, peer_id=None, frame_session_id=session_id)

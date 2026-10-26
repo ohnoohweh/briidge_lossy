@@ -353,6 +353,7 @@ REQ-AUT-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_rekey_is_rejected
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_psk_rekey_rotates_session_id_and_keeps_data_flowing
+    - tests/unit/test_secure_link_psk.py::test_rekey_retries_dropped_hello_reply_and_commit_idempotently
     - tests/unit/test_secure_link_psk.py::test_data_counter_zero_is_rejected_as_lifecycle_violation
     - tests/unit/test_secure_link_psk.py::test_counter_exhaustion_fails_closed_before_nonce_wrap
     - tests/unit/test_secure_link_psk.py::test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state

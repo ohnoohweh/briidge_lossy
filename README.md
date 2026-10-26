@@ -1438,6 +1438,7 @@ Operator notes:
 - use a long random PSK for anything beyond local testing
 - leave `secure_link_rekey_after_frames=0` unless you intentionally want to exercise or validate rekey behavior
 - use `secure_link_rekey_after_seconds` when you want automatic rotation on long-lived authenticated client-side sessions without waiting for a frame-count threshold
+- on lossy transports, a pending rekey retransmits its unchanged hello or commit with bounded exponential backoff; duplicate controls resend the retained reply or done, while the original fail-closed rekey deadline still applies
 - operator-forced rekey currently applies to authenticated client-side secure-link sessions for the targeted peer row; if no protected client data has been sent yet, the WebAdmin action and admin API both reject the request rather than guessing its way past the handshake boundary
 - if you are intentionally testing wrong-PSK or rollout mistakes, `secure_link_retry_backoff_initial_ms` and `secure_link_retry_backoff_max_ms` let you tune how aggressively the client retries after secure-link auth failures
 - post-authentication SecureLink failures report `Disconnected`; ChannelMux requests the lower-layer rotation after its continuous-disconnection policy expires
