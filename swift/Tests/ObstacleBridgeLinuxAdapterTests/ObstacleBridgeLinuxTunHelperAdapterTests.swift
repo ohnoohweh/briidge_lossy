@@ -79,7 +79,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         let path = "/tmp/obstaclebridge-swift-helper-\(UUID().uuidString).sock"
         let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend)
         try server.start(); defer { server.stop() }
-        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token")
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token", timeoutMilliseconds: 5_000)
         let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: ["TUN_routing": ["enabled_on_startup": true]]))
         #expect(try adapter.apply(packetTunnelPlan: plan, interfaceName: "obtest0")["applied"] as? Bool == true)
         #expect(try adapter.rollback(packetTunnelPlan: plan, interfaceName: "obtest0")["removed"] as? Bool == true)
@@ -95,7 +95,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         let path = "/tmp/obstaclebridge-swift-helper-event-\(UUID().uuidString).sock"
         let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend)
         try server.start(); defer { server.stop() }
-        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token")
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token", timeoutMilliseconds: 5_000)
         #expect(try adapter.send(command: .applyNetwork, payload: [:])["applied"] as? Bool == true)
     }
 
