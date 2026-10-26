@@ -38,7 +38,7 @@ final class ObstacleBridgeWebAdminServer {
         let consumed: Int
     }
 
-    private static let liveTopics = ObstacleBridgeWebAdminLiveTopicPolicy.allTopics
+    private static let allLiveTopics = ObstacleBridgeWebAdminLiveTopicPolicy.allTopics
     private static let liveWebSocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
     private let listener: NWListener
@@ -54,6 +54,10 @@ final class ObstacleBridgeWebAdminServer {
     private let apiProvider: APIProvider
     private let staticFileProvider: StaticFileProvider
     private let liveTopicProvider: LiveTopicProvider
+    /// Each owner declares only the live documents its provider can actually
+    /// obtain.  In particular, the native Admin child must not advertise the
+    /// broader HostRunner-only topics to browser clients.
+    private let supportedLiveTopics: [String]
     private let authRequiredProvider: () -> Bool
     private let authenticatedProvider: ([String: String]) -> Bool
     private let fallbackIndexTitle: String
@@ -73,6 +77,7 @@ final class ObstacleBridgeWebAdminServer {
         apiProvider: @escaping APIProvider,
         staticFileProvider: @escaping StaticFileProvider,
         liveTopicProvider: @escaping LiveTopicProvider,
+        supportedLiveTopics: [String] = ObstacleBridgeWebAdminLiveTopicPolicy.allTopics,
         authRequiredProvider: @escaping () -> Bool = { false },
         authenticatedProvider: @escaping ([String: String]) -> Bool = { _ in true }
     ) throws {
@@ -89,6 +94,10 @@ final class ObstacleBridgeWebAdminServer {
         self.apiProvider = apiProvider
         self.staticFileProvider = staticFileProvider
         self.liveTopicProvider = liveTopicProvider
+        self.supportedLiveTopics = supportedLiveTopics.reduce(into: []) { topics, topic in
+            guard Self.allLiveTopics.contains(topic), !topics.contains(topic) else { return }
+            topics.append(topic)
+        }
         self.authRequiredProvider = authRequiredProvider
         self.authenticatedProvider = authenticatedProvider
         self.fallbackIndexTitle = fallbackIndexTitle
@@ -154,7 +163,7 @@ final class ObstacleBridgeWebAdminServer {
     }
 
     func broadcastLiveTopic(_ topic: String, payload: Any) {
-        guard Self.liveTopics.contains(topic) else {
+        guard supportedLiveTopics.contains(topic) else {
             return
         }
         for session in liveSessions.values {
@@ -360,6 +369,7 @@ final class ObstacleBridgeWebAdminServer {
                 connection: connection,
                 queue: queue,
                 topicProvider: liveTopicProvider,
+                supportedTopics: supportedLiveTopics,
                 intervalProvider: ObstacleBridgeWebAdminLiveTopicPolicy.interval,
                 onClose: { [weak self] session in
                     self?.liveSessions.removeValue(forKey: ObjectIdentifier(session))
@@ -573,9 +583,11 @@ final class ObstacleBridgeWebAdminServer {
         private let connection: NWConnection
         private let queue: DispatchQueue
         private let topicProvider: LiveTopicProvider
+        private let supportedTopics: [String]
+        private let supportedTopicSet: Set<String>
         private let intervalProvider: (String) -> TimeInterval
         private let onClose: (LiveSession) -> Void
-        private var topics = Set(ObstacleBridgeWebAdminServer.liveTopics)
+        private var topics: Set<String>
         private var nextDue: [String: TimeInterval] = [:]
         private var receiveBuffer = Data()
         private var timer: DispatchSourceTimer?
@@ -585,12 +597,16 @@ final class ObstacleBridgeWebAdminServer {
             connection: NWConnection,
             queue: DispatchQueue,
             topicProvider: @escaping LiveTopicProvider,
+            supportedTopics: [String],
             intervalProvider: @escaping (String) -> TimeInterval,
             onClose: @escaping (LiveSession) -> Void
         ) {
             self.connection = connection
             self.queue = queue
             self.topicProvider = topicProvider
+            self.supportedTopics = supportedTopics
+            self.supportedTopicSet = Set(supportedTopics)
+            self.topics = Set(supportedTopics)
             self.intervalProvider = intervalProvider
             self.onClose = onClose
         }
@@ -621,14 +637,14 @@ final class ObstacleBridgeWebAdminServer {
             let response = Data(responseText.utf8)
             connection.send(content: response, completion: .contentProcessed { [weak self] _ in
                 guard let self else { return }
-                let intervals = Dictionary(uniqueKeysWithValues: ObstacleBridgeWebAdminServer.liveTopics.map { ($0, self.intervalProvider($0)) })
+                let intervals = Dictionary(uniqueKeysWithValues: self.supportedTopics.map { ($0, self.intervalProvider($0)) })
                 self.sendJSON([
                     "type": "hello",
                     "topics": Array(self.topics).sorted(),
                     "intervals_sec": intervals,
                 ])
                 let now = ProcessInfo.processInfo.systemUptime
-                for topic in ObstacleBridgeWebAdminServer.liveTopics {
+                for topic in self.supportedTopics {
                     self.sendTopic(topic, now: now)
                 }
                 self.startTimer()
@@ -722,7 +738,7 @@ final class ObstacleBridgeWebAdminServer {
                 subscribe: object["subscribe"],
                 activeTabs: object["active_tabs"] as? [Any],
                 currentTopics: topics
-            )
+            ).intersection(supportedTopicSet)
             let requestTopics = ObstacleBridgeWebAdminServer.parseLiveTopics(object["request"])
             let now = ProcessInfo.processInfo.systemUptime
             for topic in requestTopics.sorted() {

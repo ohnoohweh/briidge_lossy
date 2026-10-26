@@ -232,6 +232,7 @@ enum ObstacleBridgeNativeAdminMacOSService {
                 default: return nil
                 }
             },
+            supportedLiveTopics: ["status", "connections", "peers"],
             authRequiredProvider: { authRequired },
             authenticatedProvider: { auth.isAuthenticated(headers: $0) }
         )

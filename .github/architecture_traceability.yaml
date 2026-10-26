@@ -475,7 +475,8 @@ ARC-CMP-004:
   # peer, TUN-routing, TUN-helper, restart, and shutdown controls through serialized allowlisted
   # parent RPC; peer browser fields are translated to the supervisor contract. Its
   # host-local HTTP qualification bypasses system proxies and verifies the
-  # browser asset, bounded request sequence, and owner-loss exit.
+  # browser asset, bounded request sequence, three-topic native live session,
+  # and owner-loss exit.
   # Linux owns allowlisted browser base assets, authenticated loopback-only health/status/local-metadata/configuration/schema/canonical-log-envelope/telemetry-client/TUN-routing/connection/peer/live-topic reads, derived onboarding connection profiles and blueprints from parent snapshots, Core-owned invite generation and PSK-masked preview plus password-confirmed encrypted PSK reveal from a dedicated authenticated invite-source RPC and peer snapshots; the Python persistence test proves that source retains only the PSK while public configuration and unrelated Admin secrets remain redacted, and a
   # digest-confirmed configuration write with a refreshed redacted snapshot, authenticated remote-service catalog replacement plus reconnect/rekey/reload peer controls, bearer-token-protected TUN routing/TUN-helper repair/restart/shutdown controls, and an authenticated version-13 snapshot-first WebSocket status/peer/connection session with masked subscription/request controls; it applies the shared challenge/session policy before inherited parent RPC, and its socketpair probe completes them;
   # Full browser-session/live-topic and API parity remain open; Linux native selection has hosted launch/recovery qualification pending this branch run, while macOS requires host-local launch/recovery qualification.

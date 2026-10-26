@@ -962,9 +962,10 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
             raise AssertionError("local child qualification must not consult system proxies")
 
         monkeypatch.setattr(urllib.request, "getproxies", reject_system_proxy_lookup)
+        local_cookies = http.cookiejar.CookieJar()
         local_opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
-            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+            urllib.request.HTTPCookieProcessor(local_cookies),
         )
 
         def local_json(path: str) -> dict[str, object]:
@@ -990,6 +991,42 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         challenge = local_json("/api/auth/challenge")
         proof = hashlib.sha256(f"{challenge['seed']}:admin:secret".encode("utf-8")).hexdigest()
         assert local_post_json("/api/auth/login", {"challenge_id": challenge["challenge_id"], "proof": proof})["authenticated"] is True
+
+        # Native Admin must advertise only the three snapshots it can obtain
+        # through its bounded parent RPC, matching the Linux native child.
+        session_cookie = next(f"{cookie.name}={cookie.value}" for cookie in local_cookies)
+        live_messages: list[dict[str, object]] = []
+
+        def fetch_native_live_session() -> None:
+            try:
+                with contextlib.closing(_websocket_connect(
+                    "127.0.0.1", int(ready["port"]), headers={"Cookie": session_cookie}
+                )) as live_socket:
+                    live_messages.append(_recv_ws_json(live_socket))
+                    for _ in range(3):
+                        live_messages.append(_recv_ws_json(live_socket))
+            except BaseException as error:
+                failures.append(error)
+
+        live_thread = threading.Thread(target=fetch_native_live_session)
+        live_thread.start()
+        live_payloads = {
+            "get_status_snapshot": {"state": "native-live"},
+            "get_connections_snapshot": {"tcp": [], "udp": []},
+            "get_peer_connections_snapshot": {"peers": []},
+        }
+        for _ in range(3):
+            live_request = receive_control()
+            assert live_request["method"] in live_payloads
+            parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+                "v": 1, "kind": "admin.reply", "id": live_request["id"], "ok": True,
+                "result": live_payloads[live_request["method"]],
+            }))
+        live_thread.join(timeout=3)
+        assert not live_thread.is_alive() and not failures
+        assert live_messages[0]["type"] == "hello"
+        assert live_messages[0]["topics"] == ["connections", "peers", "status"]
+        assert {message["type"] for message in live_messages[1:]} == {"status", "connections", "peers"}
 
         def fetch_status() -> None:
             try:
