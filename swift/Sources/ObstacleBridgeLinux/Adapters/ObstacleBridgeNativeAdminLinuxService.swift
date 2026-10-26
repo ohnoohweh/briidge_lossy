@@ -12,7 +12,8 @@ import Glibc
 /// authenticated API, sessions, configuration, and log-query parity remain
 /// outside this intentionally narrow surface.
 public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
-    private static let liveTopics = ["status", "connections", "peers"]
+    private static let liveTopics = ["status", "connections", "peers", "tun_routing", "meta"]
+    private static let initialLiveTopics = ["status", "connections", "peers", "meta"]
     private struct WebSocketFrame {
         let opcode: UInt8
         let payload: Data
@@ -448,20 +449,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             return
         }
         if path == "/api/meta" {
-            let status = try? parentRPC.call(method: "get_status_snapshot")
-            let snapshot = status as? [String: Any] ?? [:]
-            let payload: [String: Any] = [
-                "app": "ObstacleBridgeLinux",
-                "platform": "linux",
-                "pid": ProcessInfo.processInfo.processIdentifier,
-                "uptime_sec": max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt)),
-                "admin_web_name": adminWebName,
-                "overlay_transport": overlayTransport,
-                "dashboard_enabled": dashboardEnabled ?? NSNull(),
-                "milestone": "C",
-                "build": snapshot["build"] ?? [:],
-                "runtime_dependencies": ["ok": true, "missing": [], "install_hint": ""],
-            ]
+            let payload = metaPayload()
             guard let responseBody = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
             writeResponse(client, status: "200 OK", body: responseBody)
             return
@@ -482,25 +470,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             return
         }
         if path == "/api/tun-routing/status" {
-            let status = try? parentRPC.call(method: "get_status_snapshot")
-            let snapshot = status as? [String: Any] ?? [:]
-            let tun = snapshot["tun"] as? [Any] ?? []
-            let helper = snapshot["tun_helper"] as? [String: Any] ?? [:]
-            let runtime = helper["runtime"] as? [String: Any] ?? [:]
-            let control: [String: Any] = [
-                "enabled": runtime["included_routes_active"] ?? false,
-                "startup_enabled": runtime["included_routes_startup_enabled"] ?? false,
-                "supported": runtime["included_routes_toggle_supported"] ?? false,
-            ]
-            let payload: [String: Any] = [
-                "tun": tun,
-                "shared_tun": snapshot["shared_tun"] ?? [],
-                "tun_helper": helper,
-                "tun_control": control,
-                "summary": ["tun_total": tun.count],
-                "app": "udp-bidirectional-mux",
-                "milestone": "C",
-            ]
+            let payload = tunRoutingPayload()
             guard let responseBody = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
             writeResponse(client, status: "200 OK", body: responseBody)
             return
@@ -512,6 +482,8 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             case "status": result = try? parentRPC.call(method: "get_status_snapshot")
             case "peers": result = try? parentRPC.call(method: "get_peer_connections_snapshot")
             case "connections": result = try? parentRPC.call(method: "get_connections_snapshot")
+            case "meta": result = metaPayload()
+            case "tun_routing": result = tunRoutingPayload()
             default:
                 writeResponse(client, status: "404 Not Found", body: Data("{\"error\":\"not found\"}".utf8))
                 return
@@ -676,6 +648,44 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         return ""
     }
 
+    private func metaPayload() -> [String: Any] {
+        let status = try? parentRPC.call(method: "get_status_snapshot")
+        let snapshot = status as? [String: Any] ?? [:]
+        return [
+            "app": "ObstacleBridgeLinux",
+            "platform": "linux",
+            "pid": ProcessInfo.processInfo.processIdentifier,
+            "uptime_sec": max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt)),
+            "admin_web_name": adminWebName,
+            "overlay_transport": overlayTransport,
+            "dashboard_enabled": dashboardEnabled ?? NSNull(),
+            "milestone": "C",
+            "build": snapshot["build"] ?? [:],
+            "runtime_dependencies": ["ok": true, "missing": [], "install_hint": ""],
+        ]
+    }
+
+    private func tunRoutingPayload() -> [String: Any] {
+        let status = try? parentRPC.call(method: "get_status_snapshot")
+        let snapshot = status as? [String: Any] ?? [:]
+        let tun = snapshot["tun"] as? [Any] ?? []
+        let helper = snapshot["tun_helper"] as? [String: Any] ?? [:]
+        let runtime = helper["runtime"] as? [String: Any] ?? [:]
+        return [
+            "tun": tun,
+            "shared_tun": snapshot["shared_tun"] ?? [],
+            "tun_helper": helper,
+            "tun_control": [
+                "enabled": runtime["included_routes_active"] ?? false,
+                "startup_enabled": runtime["included_routes_startup_enabled"] ?? false,
+                "supported": runtime["included_routes_toggle_supported"] ?? false,
+            ],
+            "summary": ["tun_total": tun.count],
+            "app": "udp-bidirectional-mux",
+            "milestone": "C",
+        ]
+    }
+
     private func isControlAuthorized(headers: [String: String]) -> Bool {
         controlToken.isEmpty || headers["authorization"] == "Bearer \(controlToken)"
     }
@@ -688,7 +698,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         let accept = Data(Insecure.SHA1.hash(data: Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8))).base64EncodedString()
         let handshake = Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n".utf8)
         guard handshake.withUnsafeBytes({ write(client, $0.baseAddress, handshake.count) == handshake.count }) else { return }
-        var topics = Set(Self.liveTopics)
+        var topics = Set(Self.initialLiveTopics)
         if let requested = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(liveTopic(target: target)) {
             topics = Self.liveTopics.contains(requested) ? [requested] : []
         }
@@ -735,8 +745,14 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     }
 
     private func livePayload(topic: String) -> [String: Any]? {
-        let method = topic == "status" ? "get_status_snapshot" : topic == "peers" ? "get_peer_connections_snapshot" : topic == "connections" ? "get_connections_snapshot" : ""
-        return method.isEmpty ? nil : (try? parentRPC.call(method: method)) as? [String: Any]
+        switch topic {
+        case "status": return (try? parentRPC.call(method: "get_status_snapshot")) as? [String: Any]
+        case "peers": return (try? parentRPC.call(method: "get_peer_connections_snapshot")) as? [String: Any]
+        case "connections": return (try? parentRPC.call(method: "get_connections_snapshot")) as? [String: Any]
+        case "meta": return metaPayload()
+        case "tun_routing": return tunRoutingPayload()
+        default: return nil
+        }
     }
 
     private func sendLiveJSON(_ client: Int32, value: [String: Any]) -> Bool {

@@ -156,12 +156,18 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         DispatchQueue.global().async {
             defer { websocketRPCReady.signal() }
             do {
-                guard let statusRequest = try? self.readControl(from: control.0),
-                      let statusRequestID = statusRequest["id"] as? String else { return }
-                try self.writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": statusRequestID, "ok": true, "result": ["state": "live"]]), to: control.0)
-                guard let peersRequest = try? self.readControl(from: control.0),
-                      let peersRequestID = peersRequest["id"] as? String else { return }
-                try self.writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": peersRequestID, "ok": true, "result": ["peers": [["id": "0:1"]]]]), to: control.0)
+                for _ in 0..<5 {
+                    guard let request = try? self.readControl(from: control.0),
+                          let requestID = request["id"] as? String else { return }
+                    let result: [String: Any]
+                    switch request["method"] as? String {
+                    case "get_status_snapshot": result = ["state": "live", "build": ["commit": "live"], "tun": [["id": "tun-live"]]]
+                    case "get_connections_snapshot": result = ["tcp": [], "udp": []]
+                    case "get_peer_connections_snapshot": result = ["peers": [["id": "0:1"]]]
+                    default: return
+                    }
+                    try self.writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": requestID, "ok": true, "result": result]), to: control.0)
+                }
             } catch {
                 return
             }
@@ -170,7 +176,10 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(websocketRPCReady.wait(timeout: .now() + 1) == .success)
         #expect(websocketResponse.range(of: Data("HTTP/1.1 101 Switching Protocols".utf8)) != nil)
         #expect(websocketResponse.range(of: Data("\"type\":\"hello\"".utf8)) != nil)
+        #expect(websocketResponse.range(of: Data("\"topics\":[\"connections\",\"meta\",\"peers\",\"status\"]".utf8)) != nil)
         #expect(websocketResponse.range(of: Data("\"type\":\"status\"".utf8)) != nil)
+        #expect(websocketResponse.range(of: Data("\"type\":\"connections\"".utf8)) != nil)
+        #expect(websocketResponse.range(of: Data("\"type\":\"meta\"".utf8)) != nil)
         #expect(websocketResponse.range(of: Data("\"state\":\"live\"".utf8)) != nil)
         #expect(websocketResponse.range(of: Data("\"type\":\"peers\"".utf8)) != nil)
         #expect(websocketResponse.range(of: Data("\"id\":\"0:1\"".utf8)) != nil)
@@ -596,7 +605,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
         guard connected == 0 else { throw POSIXError(.ECONNREFUSED) }
-        try writeAll(Data("GET /api/live?topic=status HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nCookie: \(cookie)\r\n\r\n".utf8), to: client)
+        try writeAll(Data("GET /api/live HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nCookie: \(cookie)\r\n\r\n".utf8), to: client)
         var output = try readSocketChunk(from: client)
         output.append(try readSocketChunk(from: client))
         let control = try JSONSerialization.data(withJSONObject: ["subscribe": ["peers"], "request": "peers"])
