@@ -117,6 +117,50 @@ enum ObstacleBridgeNativeAdminMacOSService {
             }
             return auth.revealSecret(body: body, secretName: "secure_link_psk", secretValue: config["secure_link_psk"] as? String ?? "")
         }
+        func control(_ method: String, body: Data?, headers: [String: String], required: String? = nil) -> ObstacleBridgeAdminAPIResponse {
+            if let denied = auth.validateBearer(headers: headers) { return denied }
+            guard let payload = (try? JSONSerialization.jsonObject(with: body ?? Data("{}".utf8))) as? [String: Any] else {
+                return json(["ok": false, "error": "invalid JSON body"], statusLine: "HTTP/1.1 400 Bad Request")
+            }
+            let peerID = (payload["peer_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if let required {
+                guard let value = payload[required] else {
+                    return json(["ok": false, "error": "\(required) is required"], statusLine: "HTTP/1.1 400 Bad Request")
+                }
+                if let text = value as? String, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return json(["ok": false, "error": "\(required) is required"], statusLine: "HTTP/1.1 400 Bad Request")
+                }
+            }
+            if method == "request_secure_link_reload",
+               !["revocation", "local_identity", "all"].contains((payload["scope"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) {
+                return json(["ok": false, "error": "scope must be one of revocation, local_identity, all"], statusLine: "HTTP/1.1 400 Bad Request")
+            }
+            if method == "request_tun_enabled", payload["enabled"] as? Bool == nil {
+                return json(["ok": false, "error": "enabled is required"], statusLine: "HTTP/1.1 400 Bad Request")
+            }
+            var kwargs = payload
+            kwargs.removeValue(forKey: "peer_id")
+            if method == "request_secure_link_reload" { kwargs["scope"] = (kwargs["scope"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            if !peerID.isEmpty { kwargs["target_peer_id"] = peerID }
+            let result = (try? parentRPC.call(method: method, kwargs: kwargs)) as? [String: Any] ?? ["ok": false, "error": "control unavailable", "retryable": true]
+            let statusLine: String
+            if result["ok"] as? Bool == true { statusLine = "HTTP/1.1 200 OK" }
+            else if result["reason"] as? String == "unknown_peer_id" { statusLine = "HTTP/1.1 404 Not Found" }
+            else { statusLine = "HTTP/1.1 409 Conflict" }
+            return json(result, statusLine: statusLine)
+        }
+        func remoteServices(body: Data?, headers: [String: String]) -> ObstacleBridgeAdminAPIResponse {
+            guard let payload = (try? JSONSerialization.jsonObject(with: body ?? Data())) as? [String: Any],
+                  let services = payload["remote_servers"] as? [Any] else {
+                return json(["ok": false, "error": "remote_servers must be an array"], statusLine: "HTTP/1.1 400 Bad Request")
+            }
+            let result = (try? parentRPC.call(method: "replace_remote_services_catalog", args: [services])) as? [Any] ?? []
+            let succeeded = (result.first as? Bool) ?? ((result.first as? NSNumber)?.boolValue ?? false)
+            guard succeeded else {
+                return json(["ok": false, "error": result.dropFirst().first as? String ?? "remote service update failed"], statusLine: "HTTP/1.1 400 Bad Request")
+            }
+            return json(["ok": true, "remote_servers": services])
+        }
         let server = try ObstacleBridgeWebAdminServer(
             bindHost: bindHost,
             port: requestedPort,
@@ -151,6 +195,14 @@ enum ObstacleBridgeNativeAdminMacOSService {
                     return generateInvite(body: body)
                 case ("POST", "/api/onboarding/preview"), ("POST", "/api/onboarding/invite/preview"):
                     return previewInvite(body: body)
+                case ("POST", "/api/channelmux/remote-services"): return remoteServices(body: body, headers: headers)
+                case ("POST", "/api/reconnect"): return control("request_overlay_reconnect", body: body, headers: headers)
+                case ("POST", "/api/secure-link/rekey"): return control("request_secure_link_rekey", body: body, headers: headers, required: "peer_id")
+                case ("POST", "/api/secure-link/reload"): return control("request_secure_link_reload", body: body, headers: headers, required: "scope")
+                case ("POST", "/api/tun-routing/control"): return control("request_tun_enabled", body: body, headers: headers, required: "enabled")
+                case ("POST", "/api/tun-helper/repair"): return control("request_tun_helper_repair", body: body, headers: headers)
+                case ("POST", "/api/restart"): return control("request_restart", body: Data("{\"reason\":\"admin_web:/api/restart\"}".utf8), headers: headers)
+                case ("POST", "/api/shutdown"): return control("request_shutdown", body: Data("{\"exit_code\":76,\"reason\":\"admin_web:/api/shutdown\"}".utf8), headers: headers)
                 case ("GET", "/api/tun-routing/status"):
                     let status = snapshot("get_status_snapshot")
                     let tun = status["tun"] as? [Any] ?? []

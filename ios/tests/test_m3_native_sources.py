@@ -30,6 +30,16 @@ def test_shared_native_admin_child_source_uses_inherited_control_and_lifetime_de
     assert '"/api/onboarding/invite/generate"' in macos_service
     assert '"/api/onboarding/invite/preview"' in macos_service
     assert '"/api/config/secret/secure-link-psk"' in macos_service
+    assert '"/api/reconnect"' in macos_service
+    assert '"/api/secure-link/rekey"' in macos_service
+    assert '"/api/secure-link/reload"' in macos_service
+    assert '"/api/channelmux/remote-services"' in macos_service
+    assert '"/api/tun-routing/control"' in macos_service
+    assert '"/api/tun-helper/repair"' in macos_service
+    assert '"/api/restart"' in macos_service
+    assert '"/api/shutdown"' in macos_service
+    assert 'kwargs["target_peer_id"] = peerID' in macos_service
+    assert "auth.validateBearer(headers: headers)" in macos_service
     assert "issueSecretRevealChallenge" in child or "issueSecretRevealChallenge" in (CORE_SWIFT_DIR / "ObstacleBridgeAdminAuth.swift").read_text(encoding="utf-8")
 SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
