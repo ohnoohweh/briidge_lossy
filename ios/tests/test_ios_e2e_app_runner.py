@@ -293,13 +293,17 @@ def test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state() -> N
                 admin_web_port = _unused_tcp_port()
                 report = await run_runtime_config(
                     config={
-                        "overlay_transport": "ws",
-                        "ws_peer": "127.0.0.1",
-                        "ws_peer_port": ws_peer_port,
-                        "admin_web": True,
-                        "admin_web_bind": "127.0.0.1",
-                        "admin_web_port": admin_web_port,
-                        "status": False,
+                        "runner": {"overlay_transport": "ws"},
+                        "ws_session": {
+                            "ws_peer": "127.0.0.1",
+                            "ws_peer_port": ws_peer_port,
+                        },
+                        "admin_web": {
+                            "admin_web": True,
+                            "admin_web_bind": "127.0.0.1",
+                            "admin_web_port": admin_web_port,
+                        },
+                        "stats_board": {"status": False},
                     },
                     hold_sec=0.0,
                 )
