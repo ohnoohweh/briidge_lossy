@@ -350,6 +350,7 @@ final class ObstacleBridgeWebAdminServer {
     }
 
     private func handleRequest(_ request: HTTPRequest, connection: NWConnection) {
+        let requestPath = Self.requestPath(request.path)
         if request.path.hasPrefix("/api/"),
            Self.authExemptPaths.contains(request.path) == false,
            authRequiredProvider(),
@@ -364,12 +365,13 @@ final class ObstacleBridgeWebAdminServer {
             })
             return
         }
-        if request.path == "/api/live", Self.isWebSocketUpgrade(headers: request.headers) {
+        if requestPath == "/api/live", Self.isWebSocketUpgrade(headers: request.headers) {
             let session = LiveSession(
                 connection: connection,
                 queue: queue,
                 topicProvider: liveTopicProvider,
                 supportedTopics: supportedLiveTopics,
+                initialTopic: Self.requestedLiveTopic(path: request.path),
                 intervalProvider: ObstacleBridgeWebAdminLiveTopicPolicy.interval,
                 onClose: { [weak self] session in
                     self?.liveSessions.removeValue(forKey: ObjectIdentifier(session))
@@ -504,6 +506,24 @@ final class ObstacleBridgeWebAdminServer {
         return upgrade == "websocket" && connection.contains("upgrade")
     }
 
+    /// The browser's initial live topic remains a compatibility fallback for
+    /// both HTTP polling and WebSocket startup.  Session control messages are
+    /// still the authoritative subscription mechanism after the handshake.
+    static func requestedLiveTopic(path: String) -> String? {
+        guard let query = path.split(separator: "?", maxSplits: 1).dropFirst().first else { return nil }
+        for pair in query.split(separator: "&") {
+            let fields = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard fields.count == 2, fields[0] == "topic" else { continue }
+            let topic = String(fields[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return topic.isEmpty ? nil : topic
+        }
+        return nil
+    }
+
+    private static func requestPath(_ path: String) -> String {
+        String(path.split(separator: "?", maxSplits: 1).first ?? "")
+    }
+
     static func liveTopicsForControlMessage(
         subscribe: Any?,
         activeTabs: [Any]?,
@@ -598,6 +618,7 @@ final class ObstacleBridgeWebAdminServer {
             queue: DispatchQueue,
             topicProvider: @escaping LiveTopicProvider,
             supportedTopics: [String],
+            initialTopic: String?,
             intervalProvider: @escaping (String) -> TimeInterval,
             onClose: @escaping (LiveSession) -> Void
         ) {
@@ -607,6 +628,11 @@ final class ObstacleBridgeWebAdminServer {
             self.supportedTopics = supportedTopics
             self.supportedTopicSet = Set(supportedTopics)
             self.topics = Set(supportedTopics)
+            if let initialTopic,
+               let topic = ObstacleBridgeWebAdminServer.parseLiveTopics(initialTopic).first,
+               self.supportedTopicSet.contains(topic) {
+                self.topics = [topic]
+            }
             self.intervalProvider = intervalProvider
             self.onClose = onClose
         }
@@ -644,7 +670,7 @@ final class ObstacleBridgeWebAdminServer {
                     "intervals_sec": intervals,
                 ])
                 let now = ProcessInfo.processInfo.systemUptime
-                for topic in self.supportedTopics {
+                for topic in self.topics.sorted() {
                     self.sendTopic(topic, now: now)
                 }
                 self.startTimer()

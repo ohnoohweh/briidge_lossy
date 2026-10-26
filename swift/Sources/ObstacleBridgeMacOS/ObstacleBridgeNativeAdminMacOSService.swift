@@ -197,6 +197,13 @@ enum ObstacleBridgeNativeAdminMacOSService {
                     return json(["ok": true, "client": client])
                 case ("GET", "/api/connections"): return json(snapshot("get_connections_snapshot"))
                 case ("GET", "/api/peers"): return json(snapshot("get_peer_connections_snapshot"))
+                case ("GET", "/api/live"):
+                    switch ObstacleBridgeWebAdminServer.requestedLiveTopic(path: path).flatMap({ ObstacleBridgeWebAdminServer.parseLiveTopics($0).first }) {
+                    case "status": return json(snapshot("get_status_snapshot"))
+                    case "connections": return json(snapshot("get_connections_snapshot"))
+                    case "peers": return json(snapshot("get_peer_connections_snapshot"))
+                    default: return json(["error": "not found"], statusLine: "HTTP/1.1 404 Not Found")
+                    }
                 case ("GET", "/api/onboarding/connection-profiles"):
                     let profiles = ObstacleBridgeWebAdminServer.onboardingConnectionProfiles(snapshot: snapshot("get_peer_connections_snapshot"))
                     return json(["ok": true, "count": profiles.count, "profiles": profiles])

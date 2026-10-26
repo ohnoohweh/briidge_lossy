@@ -992,6 +992,26 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         proof = hashlib.sha256(f"{challenge['seed']}:admin:secret".encode("utf-8")).hexdigest()
         assert local_post_json("/api/auth/login", {"challenge_id": challenge["challenge_id"], "proof": proof})["authenticated"] is True
 
+        legacy_live: dict[str, object] = {}
+
+        def fetch_legacy_live_snapshot() -> None:
+            try:
+                legacy_live.update(local_json("/api/live?topic=peers"))
+            except BaseException as error:
+                failures.append(error)
+
+        legacy_live_thread = threading.Thread(target=fetch_legacy_live_snapshot)
+        legacy_live_thread.start()
+        legacy_live_request = receive_control()
+        assert legacy_live_request["method"] == "get_peer_connections_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": legacy_live_request["id"], "ok": True,
+            "result": {"peers": [{"id": "legacy-live"}]},
+        }))
+        legacy_live_thread.join(timeout=3)
+        assert not legacy_live_thread.is_alive() and not failures
+        assert legacy_live == {"peers": [{"id": "legacy-live"}]}
+
         # Native Admin must advertise only the three snapshots it can obtain
         # through its bounded parent RPC, matching the Linux native child.
         session_cookie = next(f"{cookie.name}={cookie.value}" for cookie in local_cookies)
@@ -1005,6 +1025,7 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
                     live_messages.append(_recv_ws_json(live_socket))
                     for _ in range(3):
                         live_messages.append(_recv_ws_json(live_socket))
+                    _send_ws_close(live_socket)
             except BaseException as error:
                 failures.append(error)
 
@@ -1027,6 +1048,39 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert live_messages[0]["type"] == "hello"
         assert live_messages[0]["topics"] == ["connections", "peers", "status"]
         assert {message["type"] for message in live_messages[1:]} == {"status", "connections", "peers"}
+
+        scoped_live_messages: list[dict[str, object]] = []
+
+        def fetch_scoped_native_live_session() -> None:
+            try:
+                with contextlib.closing(_websocket_connect(
+                    "127.0.0.1", int(ready["port"]), "/api/live?topic=peers", headers={"Cookie": session_cookie}
+                )) as live_socket:
+                    scoped_live_messages.append(_recv_ws_json(live_socket))
+                    scoped_live_messages.append(_recv_ws_json(live_socket))
+            except BaseException as error:
+                failures.append(error)
+
+        scoped_live_thread = threading.Thread(target=fetch_scoped_native_live_session)
+        scoped_live_thread.start()
+        # The prior socket may have queued one final poll while its close frame
+        # crosses Network.framework. Service every bounded outstanding request
+        # until the scoped browser closes after receiving its peer document.
+        for _ in range(8):
+            scoped_live_request = receive_control()
+            assert scoped_live_request["method"] in live_payloads
+            parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+                "v": 1, "kind": "admin.reply", "id": scoped_live_request["id"], "ok": True,
+                "result": {"peers": [{"id": "scoped-live"}]} if scoped_live_request["method"] == "get_peer_connections_snapshot" else live_payloads[scoped_live_request["method"]],
+            }))
+            scoped_live_thread.join(timeout=0.1)
+            if not scoped_live_thread.is_alive():
+                break
+        scoped_live_thread.join(timeout=3)
+        assert not scoped_live_thread.is_alive() and not failures
+        assert scoped_live_messages[0]["type"] == "hello"
+        assert scoped_live_messages[0]["topics"] == ["peers"]
+        assert scoped_live_messages[1] == {"type": "peers", "data": {"peers": [{"id": "scoped-live"}]}}
 
         def fetch_status() -> None:
             try:
@@ -2500,6 +2554,11 @@ def _send_ws_json(sock: socket.socket, payload: dict) -> None:
     for index, byte in enumerate(raw):
         frame.append(byte ^ mask[index % 4])
     sock.sendall(frame)
+
+
+def _send_ws_close(sock: socket.socket) -> None:
+    # Browser-to-server frames are masked, including an empty close frame.
+    sock.sendall(b"\x88\x80" + os.urandom(4))
 
 
 def _wait_ws_message(sock: socket.socket, predicate, *, timeout_sec: float = 5.0) -> dict:
