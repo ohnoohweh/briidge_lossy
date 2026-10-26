@@ -292,6 +292,8 @@ pytest -q tests/integration/test_overlay_e2e.py -k 'linux_swift_supervises_loggi
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --run --admin-port 8080
 ```
 
+The Linux proxy component-log matrix closes its keep-open reference peer after the managed runtime exits; its final listener poll timeout is expected teardown rather than a test failure.
+
 `ObstacleBridgeLinuxAdminServerTests.adminAuthenticationUsesSharedCoreChallengesAndGuardsNativeRoutes` verifies the Linux HTTP adapter uses the shared Core login, configuration-change, and PSK-reveal policies: protected routes reject an unauthenticated request, a correct cookie-backed login admits the request, a configuration save requires a proof bound to the exact updates, and a password-confirmed PSK response is an AES-GCM envelope rather than plaintext.
 
 `ObstacleBridgeLinuxAdminServerTests.adminWebConfigurationAndLifecycleControlsMatchThePythonClientContract` verifies the authenticated Admin lifecycle controls dispatch reconnect, peer-targeted rekey, controlled foreground restart, and shutdown only after their HTTP success response is prepared.

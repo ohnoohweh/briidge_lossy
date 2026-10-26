@@ -955,6 +955,7 @@ ARC-CMP-005:
     - tests/unit/test_native_log_supervisor.py::test_swift_host_proxy_log_level_configuration
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_child_honors_component_log_level
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_proxy_component_log_level
+    # The keep-open reference peer permits only close-initiated listener poll timeout during teardown.
     - tests/integration/test_overlay_e2e.py::test_linux_swift_proxy_component_log_level
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input
     - tests/unit/test_managed_logging_worker.py::test_private_worker_exits_when_owner_lifetime_closes

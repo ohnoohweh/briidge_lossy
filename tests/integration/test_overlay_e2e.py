@@ -251,7 +251,11 @@ class LinuxSwiftSecureLinkPeer:
                         connection.settimeout(0.25 if self.keep_open else 5.0)
                         self._serve_stream(connection)
         except BaseException as exc:
-            self.error = exc
+            # keep_open intentionally lets accept poll while the owning test
+            # waits for runtime state.  A final poll timeout after close() is
+            # normal teardown, not a reference-peer failure.
+            if not (self._closing.is_set() and isinstance(exc, socket.timeout)):
+                self.error = exc
             self._ready.set()
         finally:
             self._done.set()
