@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import contextlib
+import http.cookiejar
 import textwrap
 import uuid
 import urllib.error
@@ -934,7 +935,7 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert receive_control() == {
             "v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": 7,
         }
-        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {"admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_dir": str(admin_web_dir), "admin_web_auth_disable": True}, "log_root_level": 0}))
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {"admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_dir": str(admin_web_dir), "admin_web_auth_disable": False, "admin_web_username": "admin", "admin_web_password": "secret"}, "log_root_level": 0}))
         request = receive_control()
         assert request["kind"] == "admin.call"
         assert request["id"] == "bootstrap-status"
@@ -961,7 +962,10 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
             raise AssertionError("local child qualification must not consult system proxies")
 
         monkeypatch.setattr(urllib.request, "getproxies", reject_system_proxy_lookup)
-        local_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        local_opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+        )
 
         def local_json(path: str) -> dict[str, object]:
             with local_opener.open(f"http://127.0.0.1:{ready['port']}{path}", timeout=3) as response:
@@ -970,6 +974,22 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         def local_text(path: str) -> str:
             with local_opener.open(f"http://127.0.0.1:{ready['port']}{path}", timeout=3) as response:
                 return response.read().decode("utf-8")
+
+        def local_post_json(path: str, payload: dict[str, object]) -> dict[str, object]:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{ready['port']}{path}",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with local_opener.open(request, timeout=3) as response:
+                return json.loads(response.read())
+
+        auth_state = local_json("/api/auth/state")
+        assert auth_state["auth_required"] is True and auth_state["authenticated"] is False
+        challenge = local_json("/api/auth/challenge")
+        proof = hashlib.sha256(f"{challenge['seed']}:admin:secret".encode("utf-8")).hexdigest()
+        assert local_post_json("/api/auth/login", {"challenge_id": challenge["challenge_id"], "proof": proof})["authenticated"] is True
 
         def fetch_status() -> None:
             try:
