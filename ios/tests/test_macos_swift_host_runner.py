@@ -1012,8 +1012,8 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert not legacy_live_thread.is_alive() and not failures
         assert legacy_live == {"peers": [{"id": "legacy-live"}]}
 
-        # Native Admin must advertise only the three snapshots it can obtain
-        # through its bounded parent RPC, matching the Linux native child.
+        # Native Admin starts with Python's browser-default snapshots and adds
+        # its bounded metadata/TUN documents only when requested.
         session_cookie = next(f"{cookie.name}={cookie.value}" for cookie in local_cookies)
         live_messages: list[dict[str, object]] = []
 
@@ -1023,7 +1023,7 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
                     "127.0.0.1", int(ready["port"]), headers={"Cookie": session_cookie}
                 )) as live_socket:
                     live_messages.append(_recv_ws_json(live_socket))
-                    for _ in range(3):
+                    for _ in range(4):
                         live_messages.append(_recv_ws_json(live_socket))
                     _send_ws_close(live_socket)
             except BaseException as error:
@@ -1032,11 +1032,11 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         live_thread = threading.Thread(target=fetch_native_live_session)
         live_thread.start()
         live_payloads = {
-            "get_status_snapshot": {"state": "native-live"},
+            "get_status_snapshot": {"state": "native-live", "build": {"version": "live"}, "tun": ["native-live-tun"]},
             "get_connections_snapshot": {"tcp": [], "udp": []},
             "get_peer_connections_snapshot": {"peers": []},
         }
-        for _ in range(3):
+        for _ in range(4):
             live_request = receive_control()
             assert live_request["method"] in live_payloads
             parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
@@ -1046,15 +1046,15 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         live_thread.join(timeout=3)
         assert not live_thread.is_alive() and not failures
         assert live_messages[0]["type"] == "hello"
-        assert live_messages[0]["topics"] == ["connections", "peers", "status"]
-        assert {message["type"] for message in live_messages[1:]} == {"status", "connections", "peers"}
+        assert live_messages[0]["topics"] == ["connections", "meta", "peers", "status"]
+        assert {message["type"] for message in live_messages[1:]} == {"status", "connections", "peers", "meta"}
 
         scoped_live_messages: list[dict[str, object]] = []
 
         def fetch_scoped_native_live_session() -> None:
             try:
                 with contextlib.closing(_websocket_connect(
-                    "127.0.0.1", int(ready["port"]), "/api/live?topic=peers", headers={"Cookie": session_cookie}
+                    "127.0.0.1", int(ready["port"]), "/api/live?topic=tun_routing", headers={"Cookie": session_cookie}
                 )) as live_socket:
                     scoped_live_messages.append(_recv_ws_json(live_socket))
                     scoped_live_messages.append(_recv_ws_json(live_socket))
@@ -1065,13 +1065,13 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         scoped_live_thread.start()
         # The prior socket may have queued one final poll while its close frame
         # crosses Network.framework. Service every bounded outstanding request
-        # until the scoped browser closes after receiving its peer document.
+        # until the scoped browser closes after receiving its TUN document.
         for _ in range(8):
             scoped_live_request = receive_control()
             assert scoped_live_request["method"] in live_payloads
             parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
                 "v": 1, "kind": "admin.reply", "id": scoped_live_request["id"], "ok": True,
-                "result": {"peers": [{"id": "scoped-live"}]} if scoped_live_request["method"] == "get_peer_connections_snapshot" else live_payloads[scoped_live_request["method"]],
+                "result": live_payloads[scoped_live_request["method"]],
             }))
             scoped_live_thread.join(timeout=0.1)
             if not scoped_live_thread.is_alive():
@@ -1079,8 +1079,9 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         scoped_live_thread.join(timeout=3)
         assert not scoped_live_thread.is_alive() and not failures
         assert scoped_live_messages[0]["type"] == "hello"
-        assert scoped_live_messages[0]["topics"] == ["peers"]
-        assert scoped_live_messages[1] == {"type": "peers", "data": {"peers": [{"id": "scoped-live"}]}}
+        assert scoped_live_messages[0]["topics"] == ["tun_routing"]
+        assert scoped_live_messages[1]["type"] == "tun_routing"
+        assert scoped_live_messages[1]["data"]["tun"] == ["native-live-tun"]
 
         def fetch_status() -> None:
             try:

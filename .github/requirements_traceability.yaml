@@ -1688,7 +1688,7 @@ REQ-ADM-001:
   # browser assets plus bounded standard process/uptime/transport/dashboard metadata,
   # status/config-schema/log/connection/peer
   # reads plus a legacy live-topic fallback and query-scoped version-13 WebSocket
-  # limited to those three supported snapshots,
+  # with Python-default status/connection/peer/meta snapshots and bounded TUN on request,
   # an update-bound password-confirmed configuration write and
   # refreshed redacted snapshot plus secret-free live onboarding connection
   # profiles and Core-owned invitation generation/PSK-masked preview plus

@@ -42,6 +42,27 @@ enum ObstacleBridgeNativeAdminMacOSService {
         func snapshot(_ method: String) -> [String: Any] {
             (try? parentRPC.call(method: method)) as? [String: Any] ?? ["state": "unavailable"]
         }
+        func metaPayload() -> [String: Any] {
+            let status = snapshot("get_status_snapshot")
+            return [
+                "app": "ObstacleBridgeMacOS",
+                "platform": "macos",
+                "pid": ProcessInfo.processInfo.processIdentifier,
+                "uptime_sec": max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt)),
+                "admin_web_name": arguments["admin_web_name"] as? String ?? "",
+                "overlay_transport": arguments["overlay_transport"] ?? NSNull(),
+                "dashboard_enabled": arguments["dashboard"] ?? NSNull(),
+                "milestone": "C",
+                "build": status["build"] ?? [:],
+                "runtime_dependencies": ["ok": true, "missing": [], "install_hint": ""],
+            ]
+        }
+        func tunRoutingPayload() -> [String: Any] {
+            let status = snapshot("get_status_snapshot")
+            let tun = status["tun"] as? [Any] ?? []
+            let helper = status["tun_helper"] as? [String: Any] ?? [:]
+            return ["tun": tun, "shared_tun": status["shared_tun"] ?? [], "tun_helper": helper, "summary": ["tun_total": tun.count], "app": "udp-bidirectional-mux", "milestone": "C"]
+        }
         func json(_ payload: Any, statusLine: String = "HTTP/1.1 200 OK") -> ObstacleBridgeAdminAPIResponse {
             .init(statusLine: statusLine, contentType: "application/json; charset=utf-8", body: ObstacleBridgeWebAdminServer.jsonBody(payload), headers: [])
         }
@@ -177,20 +198,7 @@ enum ObstacleBridgeNativeAdminMacOSService {
                 case ("POST", "/api/auth/logout"): return auth.authLogout(method: method, headers: headers)
                 case ("GET", "/api/health"): return json(["ok": true])
                 case ("GET", "/api/status"): return json(snapshot("get_status_snapshot"))
-                case ("GET", "/api/meta"):
-                    let status = snapshot("get_status_snapshot")
-                    return json([
-                        "app": "ObstacleBridgeMacOS",
-                        "platform": "macos",
-                        "pid": ProcessInfo.processInfo.processIdentifier,
-                        "uptime_sec": max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt)),
-                        "admin_web_name": arguments["admin_web_name"] as? String ?? "",
-                        "overlay_transport": arguments["overlay_transport"] ?? NSNull(),
-                        "dashboard_enabled": arguments["dashboard"] ?? NSNull(),
-                        "milestone": "C",
-                        "build": status["build"] ?? [:],
-                        "runtime_dependencies": ["ok": true, "missing": [], "install_hint": ""],
-                    ])
+                case ("GET", "/api/meta"): return json(metaPayload())
                 case ("GET", "/api/config"):
                     return json(["ok": true, "config": snapshot("get_config_snapshot"), "schema": snapshot("get_config_schema_snapshot")])
                 case ("POST", "/api/config/challenge"): return configChallenge(body: body)
@@ -214,6 +222,8 @@ enum ObstacleBridgeNativeAdminMacOSService {
                     case "status": return json(snapshot("get_status_snapshot"))
                     case "connections": return json(snapshot("get_connections_snapshot"))
                     case "peers": return json(snapshot("get_peer_connections_snapshot"))
+                    case "meta": return json(metaPayload())
+                    case "tun_routing": return json(tunRoutingPayload())
                     default: return json(["error": "not found"], statusLine: "HTTP/1.1 404 Not Found")
                     }
                 case ("GET", "/api/onboarding/connection-profiles"):
@@ -235,10 +245,7 @@ enum ObstacleBridgeNativeAdminMacOSService {
                 case ("POST", "/api/restart"): return control("request_restart", body: Data("{\"reason\":\"admin_web:/api/restart\"}".utf8), headers: headers)
                 case ("POST", "/api/shutdown"): return control("request_shutdown", body: Data("{\"exit_code\":76,\"reason\":\"admin_web:/api/shutdown\"}".utf8), headers: headers)
                 case ("GET", "/api/tun-routing/status"):
-                    let status = snapshot("get_status_snapshot")
-                    let tun = status["tun"] as? [Any] ?? []
-                    let helper = status["tun_helper"] as? [String: Any] ?? [:]
-                    return json(["tun": tun, "shared_tun": status["shared_tun"] ?? [], "tun_helper": helper, "summary": ["tun_total": tun.count], "app": "udp-bidirectional-mux", "milestone": "C"])
+                    return json(tunRoutingPayload())
                 default: return nil
                 }
             },
@@ -248,10 +255,13 @@ enum ObstacleBridgeNativeAdminMacOSService {
                 case "status": return snapshot("get_status_snapshot")
                 case "peers": return snapshot("get_peer_connections_snapshot")
                 case "connections": return snapshot("get_connections_snapshot")
+                case "meta": return metaPayload()
+                case "tun_routing": return tunRoutingPayload()
                 default: return nil
                 }
             },
-            supportedLiveTopics: ["status", "connections", "peers"],
+            supportedLiveTopics: ["status", "connections", "peers", "tun_routing", "meta"],
+            initialLiveTopics: ["status", "connections", "peers", "meta"],
             authRequiredProvider: { authRequired },
             authenticatedProvider: { auth.isAuthenticated(headers: $0) }
         )

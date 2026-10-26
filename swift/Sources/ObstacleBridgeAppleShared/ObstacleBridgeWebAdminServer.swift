@@ -58,6 +58,7 @@ final class ObstacleBridgeWebAdminServer {
     /// obtain.  In particular, the native Admin child must not advertise the
     /// broader HostRunner-only topics to browser clients.
     private let supportedLiveTopics: [String]
+    private let initialLiveTopics: [String]
     private let authRequiredProvider: () -> Bool
     private let authenticatedProvider: ([String: String]) -> Bool
     private let fallbackIndexTitle: String
@@ -78,6 +79,7 @@ final class ObstacleBridgeWebAdminServer {
         staticFileProvider: @escaping StaticFileProvider,
         liveTopicProvider: @escaping LiveTopicProvider,
         supportedLiveTopics: [String] = ObstacleBridgeWebAdminLiveTopicPolicy.allTopics,
+        initialLiveTopics: [String]? = nil,
         authRequiredProvider: @escaping () -> Bool = { false },
         authenticatedProvider: @escaping ([String: String]) -> Bool = { _ in true }
     ) throws {
@@ -94,8 +96,14 @@ final class ObstacleBridgeWebAdminServer {
         self.apiProvider = apiProvider
         self.staticFileProvider = staticFileProvider
         self.liveTopicProvider = liveTopicProvider
-        self.supportedLiveTopics = supportedLiveTopics.reduce(into: []) { topics, topic in
+        let normalizedSupportedTopics = supportedLiveTopics.reduce(into: [String]()) { topics, topic in
             guard Self.allLiveTopics.contains(topic), !topics.contains(topic) else { return }
+            topics.append(topic)
+        }
+        self.supportedLiveTopics = normalizedSupportedTopics
+        let requestedInitialTopics = initialLiveTopics ?? supportedLiveTopics
+        self.initialLiveTopics = requestedInitialTopics.reduce(into: []) { topics, topic in
+            guard normalizedSupportedTopics.contains(topic), !topics.contains(topic) else { return }
             topics.append(topic)
         }
         self.authRequiredProvider = authRequiredProvider
@@ -371,6 +379,7 @@ final class ObstacleBridgeWebAdminServer {
                 queue: queue,
                 topicProvider: liveTopicProvider,
                 supportedTopics: supportedLiveTopics,
+                initialTopics: initialLiveTopics,
                 initialTopic: Self.requestedLiveTopic(path: request.path),
                 intervalProvider: ObstacleBridgeWebAdminLiveTopicPolicy.interval,
                 onClose: { [weak self] session in
@@ -618,6 +627,7 @@ final class ObstacleBridgeWebAdminServer {
             queue: DispatchQueue,
             topicProvider: @escaping LiveTopicProvider,
             supportedTopics: [String],
+            initialTopics: [String],
             initialTopic: String?,
             intervalProvider: @escaping (String) -> TimeInterval,
             onClose: @escaping (LiveSession) -> Void
@@ -627,7 +637,7 @@ final class ObstacleBridgeWebAdminServer {
             self.topicProvider = topicProvider
             self.supportedTopics = supportedTopics
             self.supportedTopicSet = Set(supportedTopics)
-            self.topics = Set(supportedTopics)
+            self.topics = Set(initialTopics)
             if let initialTopic,
                let topic = ObstacleBridgeWebAdminServer.parseLiveTopics(initialTopic).first,
                self.supportedTopicSet.contains(topic) {
