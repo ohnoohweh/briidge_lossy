@@ -1011,6 +1011,31 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert not request_thread.is_alive() and not failures
         assert result == {"state": "native-child"}
 
+        concurrent_results: list[dict[str, object]] = []
+
+        def fetch_concurrent_status() -> None:
+            try:
+                concurrent_results.append(local_json("/api/status"))
+            except BaseException as error:
+                failures.append(error)
+
+        first_concurrent = threading.Thread(target=fetch_concurrent_status)
+        second_concurrent = threading.Thread(target=fetch_concurrent_status)
+        first_concurrent.start()
+        second_concurrent.start()
+        for index in range(2):
+            concurrent_request = receive_control()
+            assert concurrent_request["kind"] == "admin.call"
+            assert concurrent_request["method"] == "get_status_snapshot"
+            parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+                "v": 1, "kind": "admin.reply", "id": concurrent_request["id"], "ok": True,
+                "result": {"state": "native-child", "request": index},
+            }))
+        first_concurrent.join(timeout=3)
+        second_concurrent.join(timeout=3)
+        assert not first_concurrent.is_alive() and not second_concurrent.is_alive() and not failures
+        assert {item["request"] for item in concurrent_results} == {0, 1}
+
         assert "native-admin-browser" in local_text("/")
 
         config: dict[str, object] = {}

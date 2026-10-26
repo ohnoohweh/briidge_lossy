@@ -1685,7 +1685,8 @@ REQ-ADM-001:
   # refreshed redacted snapshot plus secret-free live onboarding connection
   # profiles and Core-owned invitation generation/PSK-masked preview plus
   # password-confirmed encrypted PSK reveal from its dedicated inherited invite
-  # source over parent RPC, plus authenticated remote-service and bearer-protected
+  # source over parent RPC, including concurrent authenticated status reads with
+  # correlated replies, plus authenticated remote-service and bearer-protected
   # peer, TUN-routing, TUN-helper, restart, and shutdown controls whose browser peer ID is translated
   # to the supervisor control argument; its Linux socketpair probe also covers bounded connection and peer
   # health/status snapshot reads, local metadata, the configuration schema, caller-bounded log reads, telemetry-client and read-only TUN-routing status, derived onboarding connection profiles and blueprints from parent snapshots, a legacy HTTP live-topic snapshot, a digest-confirmed configuration write with a refreshed redacted snapshot, authenticated remote-service catalog replacement, reconnect/rekey/reload peer controls and bearer-token-protected TUN routing/TUN-helper repair/restart/shutdown controls, an authenticated version-13 snapshot-first WebSocket status/peer/connection session with masked subscription/request controls, and only allowlisted browser base assets. Required Linux CI launches the selected host-native Admin through inherited descriptors, serves status, and proves same-port recovery after process loss. The direct-loopback HTTP probe rejects system proxy lookup. Full
