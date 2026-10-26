@@ -124,6 +124,37 @@ def test_linux_native_admin_worker_selection_recovers_same_port():
     asyncio.run(exercise())
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin" or not (Path(__file__).resolve().parents[2] / "ios/build/macos/ObstacleBridgeHostRunner").is_file(),
+    reason="requires the packaged macOS native Admin executable",
+)
+def test_macos_native_admin_worker_selection_recovers_same_port():
+    async def exercise():
+        runner = _runner()
+        runner.args.admin_web_worker = "native"
+        executable = Path(__file__).resolve().parents[2] / "ios/build/macos/ObstacleBridgeHostRunner"
+        worker = AdminWorker(runner, runner.args, implementation="native", native_executable=str(executable), supervised=True)
+        runner.admin_web = worker
+        await worker.start()
+        try:
+            original_port = worker.port
+            status, payload = await _request(original_port, "/api/status")
+            assert status == 200 and payload["admin_web_worker"]["implementation"] == "native"
+            old = worker.process
+            old.kill()
+            for _ in range(150):
+                if worker.generation >= 2 and worker.process is not old and worker.process.returncode is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert worker.generation >= 2 and worker.port == original_port
+            status, payload = await _request(original_port, "/api/status")
+            assert status == 200 and payload["admin_web_worker"]["implementation"] == "native"
+            assert payload["admin_web_worker"]["restarts"] >= 1
+        finally:
+            await worker.stop()
+    asyncio.run(exercise())
+
+
 def test_python_admin_worker_updates_runner_and_serves_concurrent_requests(monkeypatch):
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
