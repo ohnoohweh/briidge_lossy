@@ -96,6 +96,21 @@ enum ObstacleBridgeNativeAdminMacOSService {
             }
             return json(["ok": true, "config": snapshot("get_config_snapshot")])
         }
+        func generateInvite(body: Data?) -> ObstacleBridgeAdminAPIResponse {
+            guard let config = (try? parentRPC.call(method: "get_onboarding_config_snapshot")) as? [String: Any] else {
+                return json(["ok": false, "error": "configuration unavailable", "retryable": true], statusLine: "HTTP/1.1 503 Service Unavailable")
+            }
+            let peers = snapshot("get_peer_connections_snapshot")
+            let profiles = ObstacleBridgeWebAdminServer.onboardingConnectionProfiles(snapshot: peers)
+            return ObstacleBridgeWebAdminServer.apiResponse(ObstacleBridgeAdminOnboardingPort.generate(
+                body: body,
+                runtimeConfig: config,
+                profiles: profiles
+            ))
+        }
+        func previewInvite(body: Data?) -> ObstacleBridgeAdminAPIResponse {
+            ObstacleBridgeWebAdminServer.apiResponse(ObstacleBridgeAdminOnboardingPort.preview(body: body))
+        }
         let server = try ObstacleBridgeWebAdminServer(
             bindHost: bindHost,
             port: requestedPort,
@@ -123,6 +138,10 @@ enum ObstacleBridgeNativeAdminMacOSService {
                 case ("GET", "/api/onboarding/connection-profiles"):
                     let profiles = ObstacleBridgeWebAdminServer.onboardingConnectionProfiles(snapshot: snapshot("get_peer_connections_snapshot"))
                     return json(["ok": true, "count": profiles.count, "profiles": profiles])
+                case ("POST", "/api/onboarding/invite"), ("POST", "/api/onboarding/invite/generate"):
+                    return generateInvite(body: body)
+                case ("POST", "/api/onboarding/preview"), ("POST", "/api/onboarding/invite/preview"):
+                    return previewInvite(body: body)
                 case ("GET", "/api/tun-routing/status"):
                     let status = snapshot("get_status_snapshot")
                     let tun = status["tun"] as? [Any] ?? []

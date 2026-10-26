@@ -464,8 +464,9 @@ ARC-CMP-004:
   # The macOS native Admin child owns authenticated base-asset delivery and
   # read-only status/meta/config-schema/log/connection/peer/TUN documents plus
   # live status/peer/connection reads, secret-free live onboarding connection
-  # profiles, and update-bound password-confirmed configuration writes through
-  # serialized allowlisted parent RPC. Its
+  # profiles, Core-owned invitation generation and PSK-masked preview through
+  # a dedicated inherited invite source, and update-bound password-confirmed
+  # configuration writes through serialized allowlisted parent RPC. Its
   # host-local HTTP qualification bypasses system proxies and verifies the
   # browser asset, bounded request sequence, and owner-loss exit.
   # Linux owns allowlisted browser base assets, authenticated loopback-only health/status/local-metadata/configuration/schema/canonical-log-envelope/telemetry-client/TUN-routing/connection/peer/live-topic reads, derived onboarding connection profiles and blueprints from parent snapshots, Core-owned invite generation and PSK-masked preview plus password-confirmed encrypted PSK reveal from a dedicated authenticated invite-source RPC and peer snapshots; the Python persistence test proves that source retains only the PSK while public configuration and unrelated Admin secrets remain redacted, and a

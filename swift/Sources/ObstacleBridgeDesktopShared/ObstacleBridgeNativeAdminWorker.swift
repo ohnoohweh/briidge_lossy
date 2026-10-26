@@ -25,7 +25,7 @@ public enum ObstacleBridgeNativeAdminWorker {
     public final class ParentRPC: @unchecked Sendable {
         private static let methods: Set<String> = [
             "get_status_snapshot", "get_peer_connections_snapshot", "get_connections_snapshot",
-            "get_config_snapshot", "get_config_schema_snapshot", "get_debug_logs", "fetch_logs",
+            "get_config_snapshot", "get_onboarding_config_snapshot", "get_config_schema_snapshot", "get_debug_logs", "fetch_logs",
             "update_config", "replace_remote_services_catalog", "request_overlay_reconnect",
             "request_secure_link_rekey", "request_secure_link_reload", "request_tun_helper_repair",
             "request_restart", "request_shutdown", "request_tun_enabled",

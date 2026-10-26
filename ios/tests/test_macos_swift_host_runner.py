@@ -1100,6 +1100,37 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
             }],
         }
 
+        invite: dict[str, object] = {}
+
+        def generate_invite() -> None:
+            try:
+                invite.update(local_post_json("/api/onboarding/invite/generate", {"connection_id": "live:tcp:0:1"}))
+            except BaseException as error:
+                failures.append(error)
+
+        invite_thread = threading.Thread(target=generate_invite)
+        invite_thread.start()
+        invite_config_request = receive_control()
+        assert invite_config_request["method"] == "get_onboarding_config_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": invite_config_request["id"], "ok": True,
+            "result": {"overlay_transport": "tcp", "secure_link_mode": "psk", "secure_link_psk": "portable-peer-secret"},
+        }))
+        invite_peers_request = receive_control()
+        assert invite_peers_request["method"] == "get_peer_connections_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": invite_peers_request["id"], "ok": True,
+            "result": {"peers": [{"id": "0:1", "transport": "tcp", "state": "connected", "peer": "198.51.100.7:443"}]},
+        }))
+        invite_thread.join(timeout=3)
+        assert not invite_thread.is_alive() and not failures
+        invite_token = str(invite["invite_token"])
+        assert invite["ok"] is True and invite_token.startswith("ob1.")
+        preview = local_post_json("/api/onboarding/invite/preview", {"invite_token": invite_token})
+        assert preview["ok"] is True
+        assert preview["preview"]["secure_link_psk"] == "***hidden***"
+        assert preview["suggested_updates"]["secure_link_psk"] == "portable-peer-secret"
+
         logs: dict[str, object] = {}
 
         def fetch_logs() -> None:

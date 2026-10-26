@@ -206,6 +206,30 @@ final class ObstacleBridgeWebAdminServer {
         return (succeeded, values.dropFirst().first as? String ?? "configuration update failed")
     }
 
+    /// Preserve Core-owned Admin HTTP effects when an Apple adapter owns the
+    /// browser listener. This prevents platform-specific reserialization of
+    /// invite responses (including their intentionally redacted previews).
+    static func apiResponse(_ response: ObstacleBridgeAdminLinuxResponse) -> ObstacleBridgeAdminAPIResponse {
+        let phrase: String
+        switch response.statusCode {
+        case 200: phrase = "OK"
+        case 400: phrase = "Bad Request"
+        case 401: phrase = "Unauthorized"
+        case 403: phrase = "Forbidden"
+        case 404: phrase = "Not Found"
+        case 405: phrase = "Method Not Allowed"
+        case 428: phrase = "Precondition Required"
+        case 503: phrase = "Service Unavailable"
+        default: phrase = "Internal Server Error"
+        }
+        return .init(
+            statusLine: "HTTP/1.1 \(response.statusCode) \(phrase)",
+            contentType: response.contentType,
+            body: response.body,
+            headers: response.headers
+        )
+    }
+
     /// Project live peer state into secret-free onboarding connection choices.
     /// Platform owners retain transport/session retrieval through their own
     /// bounded parent RPC; Apple Admin adapters share the projection policy.
