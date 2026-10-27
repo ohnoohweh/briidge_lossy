@@ -616,6 +616,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             ObstacleBridgeRuntimeMetrics.shared.recordCPUSample(processCPUNS: cpuNS)
         }
         let status = statusProvider()
+        let configuration = ObstacleBridgeRuntimeConfigPort.flatten(adminConfigurationProvider())
         let health = runtimeHealthProvider()
         let healthRecords = runtimeHealthRecordsProvider().compactMap { record -> [String: Any]? in
             guard let data = try? JSONEncoder().encode(record) else { return nil }
@@ -627,6 +628,11 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             extra: ["app_ready": status.appReady, "failure_reason": status.failureReason as Any]
         )
         var payload: [String: Any] = [
+            // The shared Admin page applies every live status document to its
+            // headline and uptime widgets, so these must mirror `/api/meta`.
+            "app": "ObstacleBridgeLinux",
+            "admin_web_name": configuration["admin_web_name"] as? String ?? "",
+            "uptime_sec": max(0, Int(Date().timeIntervalSince(startedAt))),
             "platform": "linux-swift",
             "overlay_transport": status.transport,
             "transport_state": status.state,
