@@ -27,6 +27,7 @@ class FakeInnerSession:
         self.reset_transport_epoch_calls = 0
         self.frames_to_securelink = 0
         self.frames_from_securelink = 0
+        self.drop_next_securelink_type = None
 
     def connect_peer(self, peer):
         self._peer = peer
@@ -57,6 +58,13 @@ class FakeInnerSession:
 
     def send_app(self, payload: bytes, peer_id=None):
         self.sent.append((bytes(payload), peer_id))
+        if (
+            self.drop_next_securelink_type is not None
+            and len(payload) >= 2
+            and int(payload[1]) == int(self.drop_next_securelink_type)
+        ):
+            self.drop_next_securelink_type = None
+            return len(payload)
         if self._peer is None or not callable(self._peer._on_app):
             return len(payload)
         loop = asyncio.get_running_loop()
@@ -144,12 +152,60 @@ def _args(**overrides):
         secure_link_retry_backoff_initial_ms=1000,
         secure_link_retry_backoff_max_ms=5000,
         tcp_peer=None,
+        udp_peer=None,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
 
 
 class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def _assert_rekey_recovers_after_dropped_control(self, *, drop_sender: str, frame_type: int) -> None:
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+        client = SecureLinkPskSession(client_inner, _args(udp_peer='127.0.0.1'), 'myudp')
+        server = SecureLinkPskSession(server_inner, _args(), 'myudp')
+        client._REKEY_CONTROL_RETRY_INITIAL_S = 0.001
+        client._REKEY_CONTROL_RETRY_MAX_S = 0.002
+        client._REKEY_CONTROL_RETRY_MAX_ATTEMPTS = 3
+        try:
+            await client.start()
+            await server.start()
+            server_inner.emit_state(True)
+            client_inner.emit_state(True)
+            for _ in range(6):
+                await asyncio.sleep(0)
+            old_session_id = int(client._peer_states[0].session_id)
+            sender = client_inner if drop_sender == 'client' else server_inner
+            sender.drop_next_securelink_type = frame_type
+            client._start_client_rekey(client._peer_states[0], trigger='test')
+            for _ in range(30):
+                await asyncio.sleep(0.003)
+                client._expire_stale_handshakes()
+                server._expire_stale_handshakes()
+                state = client._peer_states[0]
+                if state.authenticated and int(state.session_id) != old_session_id:
+                    break
+            state = client._peer_states[0]
+            self.assertTrue(state.authenticated)
+            self.assertNotEqual(int(state.session_id), old_session_id)
+            self.assertEqual(int(state.auth_fail_code), 0)
+        finally:
+            await client.stop()
+            await server.stop()
+
+    async def test_rekey_retries_dropped_hello_reply_and_commit_idempotently(self):
+        await self._assert_rekey_recovers_after_dropped_control(
+            drop_sender='client', frame_type=SecureLinkPskSession._SL_TYPE_REKEY_HELLO,
+        )
+        await self._assert_rekey_recovers_after_dropped_control(
+            drop_sender='server', frame_type=SecureLinkPskSession._SL_TYPE_REKEY_REPLY,
+        )
+        await self._assert_rekey_recovers_after_dropped_control(
+            drop_sender='client', frame_type=SecureLinkPskSession._SL_TYPE_REKEY_COMMIT,
+        )
+
     async def test_secure_link_reports_protected_stream_record_budget(self):
         session = SecureLinkPskSession(FakeInnerSession(), _args(tcp_peer='127.0.0.1'), 'myudp')
 

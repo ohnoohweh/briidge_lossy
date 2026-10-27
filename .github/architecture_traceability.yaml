@@ -447,6 +447,9 @@ ARC-CMP-004:
   # Native peer-worker evidence includes bounded private-descriptor admission;
   # Linux executable qualification remains a CI-host responsibility.
   # Desktop process evidence covers delivered component-specific worker slices.
+  # The target supervisor coordinates only lifecycle, capability handoff,
+  # bounded RPC, and status; direct private channels carry packet/TUN traffic
+  # and record-only producer logging between their owning workers.
   # The completed PXY-2 proxy contract qualifies Python/native selections on
   # each host locally; it does not require a macOS-to-Linux process pairing.
   # A shared Python/Swift codec now qualifies bounded control/data framing,
@@ -458,11 +461,27 @@ ARC-CMP-004:
   # all privileged helpers bound unauthenticated initial admission and reject token-HELLO renegotiation; Python and macOS/Linux-native helpers negotiate HELLO/READY capabilities and carry generation-fenced OBIP request/response/event/data frames; the packaged macOS helper completes a Python-client snapshot exchange and exits after authenticated owner loss. The shared Swift decoder rejects duplicate object members, including escaped-key aliases. Python and shared Swift helper controls normalize nonempty operations to at most 64 characters; Python rejects non-finite/non-object JSON while Swift rejects boolean/fractional versions;
   # the Python Admin child does too, while collector probes and native-proxy supervisor
   # fixtures compile that shared codec;
-  # The macOS native Admin child owns a status listener, reports its bound port,
-  # and serves status through serialized allowlisted parent RPC. Its host-local
-  # HTTP qualification bypasses system proxies and verifies owner-loss exit.
-  # Full authenticated API/session parity and Linux listener support remain open.
-  # A shared native Admin bootstrap accepts only verified inherited Unix-stream control/lifetime and record-only log descriptors, exchanges Admin HELLO/READY, makes one deadline-limited correlated bootstrap-status parent RPC, fails closed when its reply is withheld, and exits on owner loss; packaged macOS and Linux-only socketpair tests cover that boundary, with Linux CI evidence pending. Host qualification remains. Admin HTTP/session parity, host-local selection, and broader lifecycle qualification remain in IPC-1A1, IPC-1A2, IPC-1A3, and IPC-1Q. Contract-v1
+  # The macOS native Admin child owns authenticated base-asset delivery and
+  # read-only status/meta/config-schema/log/connection/peer/TUN documents plus
+  # live status/peer/connection reads, secret-free live onboarding connection
+  # profiles, Core-owned invitation generation, PSK-masked preview, and
+  # password-confirmed encrypted PSK reveal through a dedicated inherited
+  # invite source, and update-bound password-confirmed
+  # configuration writes, concurrent authenticated status reads with correlated
+  # replies, same-port supervised native-child recovery, macOS transient-bind retry,
+  # stale-reply channel poisoning, shared secret-free onboarding blueprints,
+  # and configured telemetry status through inherited snapshots;
+  # authenticated remote-service plus bearer-protected
+  # peer, TUN-routing, TUN-helper, restart, and shutdown controls through serialized allowlisted
+  # parent RPC; peer browser fields are translated to the supervisor contract. Its
+  # host-local HTTP qualification bypasses system proxies and verifies the
+  # browser asset, standard native metadata, bounded request sequence, legacy live-topic fallback,
+  # Python-default metadata live topic plus query-scoped native TUN live session,
+  # and owner-loss exit.
+  # Linux owns allowlisted browser base assets, authenticated loopback-only health/status/local-metadata/configuration/schema/canonical-log-envelope/telemetry-client/TUN-routing/connection/peer/live-topic reads, derived onboarding connection profiles and blueprints from parent snapshots, Core-owned invite generation and PSK-masked preview plus password-confirmed encrypted PSK reveal from a dedicated authenticated invite-source RPC and peer snapshots; the Python persistence test proves that source retains only the PSK while public configuration and unrelated Admin secrets remain redacted, and a
+  # digest-confirmed configuration write with a refreshed redacted snapshot, authenticated remote-service catalog replacement plus reconnect/rekey/reload peer controls, bearer-token-protected TUN routing/TUN-helper repair/restart/shutdown controls, and an authenticated version-13 snapshot-first WebSocket session with Python-compatible status/connection/peer/meta defaults plus demand-scoped TUN telemetry and masked subscription/request controls; it applies the shared challenge/session policy before inherited parent RPC, and its socketpair probe completes them;
+  # Packaged macOS and Linux evidence cover the full dispatched browser-route, session, live-topic, configuration, log, and privileged-control surface; macOS host qualification retries one fresh distinct loopback port set after a transient released-allocation bind race.
+  # A shared native Admin bootstrap accepts only verified inherited Unix-stream control/lifetime and record-only log descriptors, exchanges Admin HELLO/READY, makes one deadline-limited correlated bootstrap-status parent RPC, fails closed when its reply is withheld, and exits on owner loss; packaged macOS and required Linux Swift socketpair tests cover the complete native Admin contract. Broader lifecycle qualification remains IPC-1Q. Contract-v1
   # requires explicit auth and rejects malformed
   # loopback bind and configuration before spawn while retaining the existing
   # IPv4/IPv6 egress-family declaration. Both supervisors expose the same
@@ -476,7 +495,9 @@ ARC-CMP-004:
   # the native relay serializes child records with collector lifecycle state;
   # PXY-3 CI matrices have recorded lifecycle and exact proxy-collector
   # success per host without a cross-operating-system process pair.
-  # PXY-4 discovery keeps configured and deployment-selected workers fail-closed.
+  # PXY-4 discovery keeps configured and deployment-selected workers fail-closed;
+  # transient initial worker launch failure retains configuration for the same
+  # bounded recovery path used after worker loss.
   # PXY-4's independently successful Linux and macOS host gates select
   # Python-supervisor and collector cases plus bundled-host HTTP/SOCKS traffic,
   # collector observability, replacement and shutdown for explicitly named
@@ -934,6 +955,7 @@ ARC-CMP-005:
     - tests/unit/test_native_log_supervisor.py::test_swift_host_proxy_log_level_configuration
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_child_honors_component_log_level
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_proxy_component_log_level
+    # The keep-open reference peer permits only close-initiated listener poll timeout during teardown.
     - tests/integration/test_overlay_e2e.py::test_linux_swift_proxy_component_log_level
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input
     - tests/unit/test_managed_logging_worker.py::test_private_worker_exits_when_owner_lifetime_closes
@@ -1084,6 +1106,7 @@ ARC-CMP-006:
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_without_recovery_option
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
     - tests/unit/test_secure_link_psk.py::test_listener_rekey_watchdog_fails_closed_when_client_commit_never_arrives
+    - tests/unit/test_secure_link_psk.py::test_rekey_retries_dropped_hello_reply_and_commit_idempotently
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_completes
     # Core/Apple guards pin the bounded server overlap for in-flight
     # old-generation data plus the Core-owned frame namespace, readiness,
@@ -1164,7 +1187,8 @@ ARC-CMP-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_service_round_trip
     # Full Python TCP/WS/myudp catalog publication, live withdrawal, reverse service delivery, and recovery.
     # Covers separate overlay-readiness and listener-publication convergence,
-    # including transient pre-send refusal/abort retries with fresh sockets.
+    # including transient pre-send refusal/abort retries with fresh sockets
+    # and worker-partitioned port allocation under xdist.
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_runtime_linux_swift_service_round_trip
     # Includes bounded listener-service recovery after Python peer replacement.
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip

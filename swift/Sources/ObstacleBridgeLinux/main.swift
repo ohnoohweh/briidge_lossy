@@ -23,14 +23,14 @@ enum ObstacleBridgeLinuxMain {
         if arguments.count == 6, arguments[0] == "--admin-worker-control-fd", let controlFD = Int32(arguments[1]),
            arguments[2] == "--admin-worker-lifetime-fd", let lifetimeFD = Int32(arguments[3]),
            arguments[4] == "--generation", let generation = Int(arguments[5]) {
-            do { try ObstacleBridgeNativeAdminWorker.run(controlFD: controlFD, lifetimeFD: lifetimeFD, generation: generation) } catch { exit(2) }
+            do { try runNativeAdminChild(controlFD: controlFD, lifetimeFD: lifetimeFD, logFD: nil, generation: generation) } catch { exit(2) }
             return
         }
         if arguments.count == 8, arguments[0] == "--admin-worker-control-fd", let controlFD = Int32(arguments[1]),
            arguments[2] == "--admin-worker-lifetime-fd", let lifetimeFD = Int32(arguments[3]),
            arguments[4] == "--generation", let generation = Int(arguments[5]),
            arguments[6] == "--log-fd", let logFD = Int32(arguments[7]) {
-            do { try ObstacleBridgeNativeAdminWorker.run(controlFD: controlFD, lifetimeFD: lifetimeFD, logFD: logFD, generation: generation) } catch { exit(2) }
+            do { try runNativeAdminChild(controlFD: controlFD, lifetimeFD: lifetimeFD, logFD: logFD, generation: generation) } catch { exit(2) }
             return
         }
         if let runOptions = ObstacleBridgeLinuxForegroundOptions.parse(arguments) {
@@ -69,6 +69,19 @@ enum ObstacleBridgeLinuxMain {
             writeError("Run ObstacleBridgeLinux --help for the LSW-002 build-baseline interface.")
             exit(2)
         }
+    }
+
+    private static func runNativeAdminChild(controlFD: Int32, lifetimeFD: Int32, logFD: Int32?, generation: Int) throws {
+        try ObstacleBridgeNativeAdminWorker.run(
+            controlFD: controlFD,
+            lifetimeFD: lifetimeFD,
+            logFD: logFD,
+            generation: generation,
+            serviceFactory: { arguments, parentRPC in
+                let service = try ObstacleBridgeNativeAdminLinuxService(arguments: arguments, parentRPC: parentRPC)
+                return .init(port: service.port, stop: { service.stop() })
+            }
+        )
     }
 
     private static func printHelp() {

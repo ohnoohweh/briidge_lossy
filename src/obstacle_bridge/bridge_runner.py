@@ -1784,11 +1784,17 @@ class Runner:
         # tunnel providers where WebAdmin is the recovery/config surface.
         if getattr(self.args, "admin_web", False) and self.admin_web is None:
             admin_worker = str(getattr(self.args, "admin_web_worker", "off") or "off")
-            if admin_worker == "python":
+            if admin_worker in {"python", "native"}:
                 if ios_admin_ui:
                     raise ValueError("Admin worker is unsupported in iOS runtimes")
                 from .bridge_admin_worker import AdminWorker
-                self.admin_web = AdminWorker(self, self.args, supervised=True)
+                self.admin_web = AdminWorker(
+                    self,
+                    self.args,
+                    implementation=admin_worker,
+                    native_executable=getattr(self.args, "admin_web_worker_native_executable", None),
+                    supervised=True,
+                )
             elif admin_worker == "off":
                 self.admin_web = AdminWebUI(self.args, self)
             else:
@@ -2811,6 +2817,19 @@ class Runner:
             else:
                 data[k] = str(v)
         return data
+
+    def get_onboarding_config_snapshot(self) -> dict:
+        """Return the portable invite source only to an authenticated Admin child.
+
+        The public configuration snapshot deliberately redacts secrets.  An
+        invite needs the configured PSK so the receiving machine can seal it
+        with its own identity; that value is therefore available only across
+        the inherited, generation-fenced Admin control channel.
+        """
+        snapshot = self.get_config_snapshot(include_secrets=True)
+        for key in AdminWebUI._secret_config_keys() - {"secure_link_psk"}:
+            snapshot[key] = ""
+        return snapshot
 
     def get_config_schema_snapshot(self) -> dict:
         sections = {k: set(v) for k, v in (getattr(self.args, "_config_sections", {}) or {}).items()}

@@ -9,6 +9,7 @@ import socket
 import struct
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import websockets
@@ -70,6 +71,85 @@ def test_python_admin_worker_serves_runner_config_and_authenticates():
             assert "secret-not-on-command-line" not in command
             status, payload = await _request(worker.port, "/api/config")
             assert status == 401 and not payload["authenticated"]
+        finally:
+            await worker.stop()
+    asyncio.run(exercise())
+
+
+def test_native_admin_worker_command_uses_only_inherited_descriptors(tmp_path):
+    runner = _runner()
+    executable = tmp_path / "ObstacleBridgeNativeAdmin"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o700)
+    worker = AdminWorker(runner, runner.args, implementation="native", native_executable=str(executable))
+    assert worker._native_command(31, 32, 7) == [
+        str(executable),
+        "--admin-worker-control-fd", "31",
+        "--admin-worker-lifetime-fd", "32",
+        "--generation", "7",
+    ]
+    worker.native_executable = str(tmp_path / "missing")
+    with pytest.raises(RuntimeError, match="native Admin worker executable"):
+        worker._native_command(31, 32, 7)
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or not (Path(__file__).resolve().parents[2] / "build/linux/ObstacleBridgeLinux").is_file(),
+    reason="requires the packaged Linux native Admin executable",
+)
+def test_linux_native_admin_worker_selection_recovers_same_port():
+    async def exercise():
+        runner = _runner()
+        runner.args.admin_web_worker = "native"
+        executable = Path(__file__).resolve().parents[2] / "build/linux/ObstacleBridgeLinux"
+        worker = AdminWorker(runner, runner.args, implementation="native", native_executable=str(executable), supervised=True)
+        runner.admin_web = worker
+        await worker.start()
+        try:
+            original_port = worker.port
+            status, payload = await _request(original_port, "/api/status")
+            assert status == 200 and payload["admin_web_worker"]["implementation"] == "native"
+            old = worker.process
+            old.kill()
+            for _ in range(150):
+                if worker.generation >= 2 and worker.process is not old and worker.process.returncode is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert worker.generation >= 2 and worker.port == original_port
+            status, payload = await _request(original_port, "/api/status")
+            assert status == 200 and payload["admin_web_worker"]["implementation"] == "native"
+            assert payload["admin_web_worker"]["restarts"] >= 1
+        finally:
+            await worker.stop()
+    asyncio.run(exercise())
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin" or not (Path(__file__).resolve().parents[2] / "ios/build/macos/ObstacleBridgeHostRunner").is_file(),
+    reason="requires the packaged macOS native Admin executable",
+)
+def test_macos_native_admin_worker_selection_recovers_same_port():
+    async def exercise():
+        runner = _runner()
+        runner.args.admin_web_worker = "native"
+        executable = Path(__file__).resolve().parents[2] / "ios/build/macos/ObstacleBridgeHostRunner"
+        worker = AdminWorker(runner, runner.args, implementation="native", native_executable=str(executable), supervised=True)
+        runner.admin_web = worker
+        await worker.start()
+        try:
+            original_port = worker.port
+            status, payload = await _request(original_port, "/api/status")
+            assert status == 200 and payload["admin_web_worker"]["implementation"] == "native"
+            old = worker.process
+            old.kill()
+            for _ in range(150):
+                if worker.generation >= 2 and worker.process is not old and worker.process.returncode is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert worker.generation >= 2 and worker.port == original_port
+            status, payload = await _request(original_port, "/api/status")
+            assert status == 200 and payload["admin_web_worker"]["implementation"] == "native"
+            assert payload["admin_web_worker"]["restarts"] >= 1
         finally:
             await worker.stop()
     asyncio.run(exercise())
@@ -194,6 +274,47 @@ def test_supervised_admin_retries_failed_bind_and_stops_without_orphans():
             assert worker.generation >= 2 and worker.port == port
             status, _ = await _request(port, "/api/config")
             assert status == 200
+        finally:
+            reserved.close()
+            await worker.stop()
+        assert worker.process.returncode is not None
+    asyncio.run(exercise())
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin" or not (Path(__file__).resolve().parents[2] / "ios/build/macos/ObstacleBridgeHostRunner").is_file(),
+    reason="requires the packaged macOS native Admin executable",
+)
+def test_macos_native_admin_retries_failed_bind_and_recovers_same_port():
+    async def exercise():
+        runner = _runner()
+        runner.args.admin_web_worker = "native"
+        executable = Path(__file__).resolve().parents[2] / "ios/build/macos/ObstacleBridgeHostRunner"
+        worker = AdminWorker(runner, runner.args, implementation="native", native_executable=str(executable), supervised=True)
+        runner.admin_web = worker
+        await worker.start()
+        port = worker.port
+        old = worker.process
+        reserved = socket.socket()
+        reserved.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            old.kill()
+            await old.wait()
+            reserved.bind(("127.0.0.1", port))
+            reserved.listen()
+            for _ in range(120):
+                if worker.failed_starts:
+                    break
+                await asyncio.sleep(0.05)
+            assert worker.failed_starts >= 1 and worker.generation == 1
+            reserved.close()
+            for _ in range(160):
+                if worker.generation >= 2 and worker.process.returncode is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert worker.generation >= 2 and worker.port == port
+            status, payload = await _request(port, "/api/status")
+            assert status == 200 and payload["admin_web_worker"]["implementation"] == "native"
         finally:
             reserved.close()
             await worker.stop()

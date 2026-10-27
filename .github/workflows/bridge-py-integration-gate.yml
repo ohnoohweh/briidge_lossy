@@ -121,14 +121,28 @@ jobs:
 
       # The Linux/Swift scenarios share one runner binary. Build it before
       # xdist starts so workers never wait on the test helper's global lock.
+      # Swift 6.3's parallel planning has intermittently crashed with SIGSEGV
+      # on hosted Linux before compilation begins. Keep ordinary builds fast,
+      # but retry that toolchain failure once with serialized planning.
       - name: Build Linux Swift runner once
-        run: ./scripts/build_linux_app.sh
+        run: |
+          set +e
+          ./scripts/build_linux_app.sh
+          status=$?
+          set -e
+          if [[ "$status" -ne 139 ]]; then
+            exit "$status"
+          fi
+          echo "SwiftPM crashed with SIGSEGV; retrying with one planning job."
+          rm -rf "$GITHUB_WORKSPACE/build/linux/.swift-build"
+          OBSTACLEBRIDGE_LINUX_SWIFT_JOBS=1 ./scripts/build_linux_app.sh
 
       - name: Run Linux Swift live-runtime closure tests
         run: |
           OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
           swift test --filter ObstacleBridgeLinuxRuntimeConfigurationTests
           swift test --filter ObstacleBridgeLinuxTunHelperAdapterTests
+          swift test --filter ObstacleBridgeLinuxTunDeviceTests
 
       - name: Qualify PXY-3C proxy collector matrix (Linux)
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py

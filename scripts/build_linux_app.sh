@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIGURATION="${OBSTACLEBRIDGE_LINUX_BUILD_CONFIGURATION:-release}"
 OUTPUT_DIR="${OBSTACLEBRIDGE_LINUX_OUTPUT_DIR:-${REPO_ROOT}/build/linux}"
 SCRATCH_DIR="${OBSTACLEBRIDGE_LINUX_SCRATCH_DIR:-${OUTPUT_DIR}/.swift-build}"
+SWIFT_JOBS="${OBSTACLEBRIDGE_LINUX_SWIFT_JOBS:-}"
 
 usage() {
   cat <<'EOF'
@@ -17,6 +18,7 @@ Environment:
   OBSTACLEBRIDGE_LINUX_BUILD_CONFIGURATION  release (default) or debug
   OBSTACLEBRIDGE_LINUX_OUTPUT_DIR           artifact directory (default: build/linux)
   OBSTACLEBRIDGE_LINUX_SCRATCH_DIR          SwiftPM scratch directory
+  OBSTACLEBRIDGE_LINUX_SWIFT_JOBS           optional maximum concurrent SwiftPM jobs
 EOF
 }
 
@@ -51,6 +53,11 @@ case "${CONFIGURATION}" in
     exit 2
     ;;
 esac
+
+if [[ -n "${SWIFT_JOBS}" && ! "${SWIFT_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[build_linux_app] OBSTACLEBRIDGE_LINUX_SWIFT_JOBS must be a positive integer, got ${SWIFT_JOBS}" >&2
+  exit 2
+fi
 
 if ! command -v swift >/dev/null 2>&1; then
   echo "[build_linux_app] swift is required; install Swift and make it available on PATH" >&2
@@ -106,13 +113,19 @@ enum ObstacleBridgeLinuxBuildInfo {
 EOF
 
 echo "[build_linux_app] compiling ${CONFIGURATION} Linux Swift artifact"
+SWIFT_BUILD_ARGS=(
+  --package-path "${REPO_ROOT}"
+  --scratch-path "${SCRATCH_DIR}"
+  --configuration "${CONFIGURATION}"
+)
+if [[ -n "${SWIFT_JOBS}" ]]; then
+  SWIFT_BUILD_ARGS+=(--jobs "${SWIFT_JOBS}")
+fi
 swift build \
-  --package-path "${REPO_ROOT}" \
-  --scratch-path "${SCRATCH_DIR}" \
-  --configuration "${CONFIGURATION}" \
+  "${SWIFT_BUILD_ARGS[@]}" \
   --product ObstacleBridgeLinux
-swift build --package-path "${REPO_ROOT}" --scratch-path "${SCRATCH_DIR}" --configuration "${CONFIGURATION}" --product ObstacleBridgeProxyWorker
-swift build --package-path "${REPO_ROOT}" --scratch-path "${SCRATCH_DIR}" --configuration "${CONFIGURATION}" --product ObstacleBridgeLogCollector
+swift build "${SWIFT_BUILD_ARGS[@]}" --product ObstacleBridgeProxyWorker
+swift build "${SWIFT_BUILD_ARGS[@]}" --product ObstacleBridgeLogCollector
 
 BINARY_SOURCE="${SCRATCH_DIR}/${CONFIGURATION}/ObstacleBridgeLinux"
 if [ ! -x "${BINARY_SOURCE}" ]; then

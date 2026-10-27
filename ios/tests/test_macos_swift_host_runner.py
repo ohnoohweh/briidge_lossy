@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import contextlib
+import http.cookiejar
 import textwrap
 import uuid
 import urllib.error
@@ -889,8 +890,11 @@ def test_macos_packaged_tun_helper_exits_after_authenticated_owner_loss() -> Non
             socket_path.unlink()
 
 
-def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     artifact = build_macos_swift_artifact()
+    admin_web_dir = tmp_path / "admin_web"
+    admin_web_dir.mkdir()
+    (admin_web_dir / "index.html").write_text("<main>native-admin-browser</main>", encoding="utf-8")
     parent_control, child_control = socket.socketpair()
     parent_lifetime, child_lifetime = socket.socketpair()
     parent_log, child_log = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -931,7 +935,7 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert receive_control() == {
             "v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": 7,
         }
-        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {"admin_web_bind": "127.0.0.1", "admin_web_port": 0}, "log_root_level": 0}))
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {"admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_dir": str(admin_web_dir), "telemetry_spool_directory": str(tmp_path / "telemetry"), "admin_web_auth_disable": False, "admin_web_username": "admin", "admin_web_password": "secret"}, "log_root_level": 0}))
         request = receive_control()
         assert request["kind"] == "admin.call"
         assert request["id"] == "bootstrap-status"
@@ -958,14 +962,133 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
             raise AssertionError("local child qualification must not consult system proxies")
 
         monkeypatch.setattr(urllib.request, "getproxies", reject_system_proxy_lookup)
+        local_cookies = http.cookiejar.CookieJar()
+        local_opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPCookieProcessor(local_cookies),
+        )
+
+        def local_json(path: str) -> dict[str, object]:
+            with local_opener.open(f"http://127.0.0.1:{ready['port']}{path}", timeout=3) as response:
+                return json.loads(response.read())
+
+        def local_text(path: str) -> str:
+            with local_opener.open(f"http://127.0.0.1:{ready['port']}{path}", timeout=3) as response:
+                return response.read().decode("utf-8")
+
+        def local_post_json(path: str, payload: dict[str, object], timeout: int = 3) -> dict[str, object]:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{ready['port']}{path}",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with local_opener.open(request, timeout=timeout) as response:
+                return json.loads(response.read())
+
+        auth_state = local_json("/api/auth/state")
+        assert auth_state["auth_required"] is True and auth_state["authenticated"] is False
+        challenge = local_json("/api/auth/challenge")
+        proof = hashlib.sha256(f"{challenge['seed']}:admin:secret".encode("utf-8")).hexdigest()
+        assert local_post_json("/api/auth/login", {"challenge_id": challenge["challenge_id"], "proof": proof})["authenticated"] is True
+        assert local_json("/api/health") == {"ok": True}
+
+        legacy_live: dict[str, object] = {}
+
+        def fetch_legacy_live_snapshot() -> None:
+            try:
+                legacy_live.update(local_json("/api/live?topic=peers"))
+            except BaseException as error:
+                failures.append(error)
+
+        legacy_live_thread = threading.Thread(target=fetch_legacy_live_snapshot)
+        legacy_live_thread.start()
+        legacy_live_request = receive_control()
+        assert legacy_live_request["method"] == "get_peer_connections_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": legacy_live_request["id"], "ok": True,
+            "result": {"peers": [{"id": "legacy-live"}]},
+        }))
+        legacy_live_thread.join(timeout=3)
+        assert not legacy_live_thread.is_alive() and not failures
+        assert legacy_live == {"peers": [{"id": "legacy-live"}]}
+
+        # Native Admin starts with Python's browser-default snapshots and adds
+        # its bounded metadata/TUN documents only when requested.
+        session_cookie = next(f"{cookie.name}={cookie.value}" for cookie in local_cookies)
+        live_messages: list[dict[str, object]] = []
+
+        def fetch_native_live_session() -> None:
+            try:
+                with contextlib.closing(_websocket_connect(
+                    "127.0.0.1", int(ready["port"]), headers={"Cookie": session_cookie}
+                )) as live_socket:
+                    live_messages.append(_recv_ws_json(live_socket))
+                    for _ in range(4):
+                        live_messages.append(_recv_ws_json(live_socket))
+                    _send_ws_close(live_socket)
+            except BaseException as error:
+                failures.append(error)
+
+        live_thread = threading.Thread(target=fetch_native_live_session)
+        live_thread.start()
+        live_payloads = {
+            "get_status_snapshot": {"state": "native-live", "build": {"version": "live"}, "tun": ["native-live-tun"]},
+            "get_connections_snapshot": {"tcp": [], "udp": []},
+            "get_peer_connections_snapshot": {"peers": []},
+        }
+        for _ in range(4):
+            live_request = receive_control()
+            assert live_request["method"] in live_payloads
+            parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+                "v": 1, "kind": "admin.reply", "id": live_request["id"], "ok": True,
+                "result": live_payloads[live_request["method"]],
+            }))
+        live_thread.join(timeout=3)
+        assert not live_thread.is_alive() and not failures
+        assert live_messages[0]["type"] == "hello"
+        assert live_messages[0]["topics"] == ["connections", "meta", "peers", "status"]
+        assert {message["type"] for message in live_messages[1:]} == {"status", "connections", "peers", "meta"}
+
+        scoped_live_messages: list[dict[str, object]] = []
+
+        def fetch_scoped_native_live_session() -> None:
+            try:
+                with contextlib.closing(_websocket_connect(
+                    "127.0.0.1", int(ready["port"]), "/api/live?topic=tun_routing", headers={"Cookie": session_cookie}
+                )) as live_socket:
+                    scoped_live_messages.append(_recv_ws_json(live_socket))
+                    scoped_live_messages.append(_recv_ws_json(live_socket))
+            except BaseException as error:
+                failures.append(error)
+
+        scoped_live_thread = threading.Thread(target=fetch_scoped_native_live_session)
+        scoped_live_thread.start()
+        # The prior socket may have queued one final poll while its close frame
+        # crosses Network.framework. Service every bounded outstanding request
+        # until the scoped browser closes after receiving its TUN document.
+        for _ in range(8):
+            scoped_live_request = receive_control()
+            assert scoped_live_request["method"] in live_payloads
+            parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+                "v": 1, "kind": "admin.reply", "id": scoped_live_request["id"], "ok": True,
+                "result": live_payloads[scoped_live_request["method"]],
+            }))
+            scoped_live_thread.join(timeout=0.1)
+            if not scoped_live_thread.is_alive():
+                break
+        scoped_live_thread.join(timeout=3)
+        assert not scoped_live_thread.is_alive() and not failures
+        assert scoped_live_messages[0]["type"] == "hello"
+        assert scoped_live_messages[0]["topics"] == ["tun_routing"]
+        assert scoped_live_messages[1]["type"] == "tun_routing"
+        assert scoped_live_messages[1]["data"]["tun"] == ["native-live-tun"]
 
         def fetch_status() -> None:
             try:
                 # This is a direct inherited-child listener probe. macOS system
                 # proxy discovery can block before any TCP connection is made.
-                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                with opener.open(f"http://127.0.0.1:{ready['port']}/api/status", timeout=3) as response:
-                    result.update(json.loads(response.read()))
+                result.update(local_json("/api/status"))
             except BaseException as error:
                 failures.append(error)
 
@@ -980,6 +1103,374 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         request_thread.join(timeout=3)
         assert not request_thread.is_alive() and not failures
         assert result == {"state": "native-child"}
+
+        metadata: dict[str, object] = {}
+
+        def fetch_metadata() -> None:
+            try:
+                metadata.update(local_json("/api/meta"))
+            except BaseException as error:
+                failures.append(error)
+
+        metadata_thread = threading.Thread(target=fetch_metadata)
+        metadata_thread.start()
+        metadata_request = receive_control()
+        assert metadata_request["method"] == "get_status_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": metadata_request["id"], "ok": True,
+            "result": {"build": {"version": "native-test"}},
+        }))
+        metadata_thread.join(timeout=3)
+        assert not metadata_thread.is_alive() and not failures
+        assert metadata["app"] == "ObstacleBridgeMacOS"
+        assert metadata["platform"] == "macos"
+        assert metadata["pid"] == process.pid
+        assert isinstance(metadata["uptime_sec"], int) and metadata["uptime_sec"] >= 0
+        assert metadata["milestone"] == "C"
+        assert metadata["build"] == {"version": "native-test"}
+
+        def fetch_snapshot(path: str, destination: dict[str, object]) -> None:
+            try:
+                destination.update(local_json(path))
+            except BaseException as error:
+                failures.append(error)
+
+        connections: dict[str, object] = {}
+        connections_thread = threading.Thread(target=fetch_snapshot, args=("/api/connections", connections))
+        connections_thread.start()
+        connections_request = receive_control()
+        assert connections_request["method"] == "get_connections_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": connections_request["id"], "ok": True,
+            "result": {"tcp": [{"id": "native-connection"}], "udp": []},
+        }))
+        connections_thread.join(timeout=3)
+        assert not connections_thread.is_alive() and not failures
+        assert connections == {"tcp": [{"id": "native-connection"}], "udp": []}
+
+        peers: dict[str, object] = {}
+        peers_thread = threading.Thread(target=fetch_snapshot, args=("/api/peers", peers))
+        peers_thread.start()
+        peers_request = receive_control()
+        assert peers_request["method"] == "get_peer_connections_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": peers_request["id"], "ok": True,
+            "result": {"peers": [{"id": "native-peer"}]},
+        }))
+        peers_thread.join(timeout=3)
+        assert not peers_thread.is_alive() and not failures
+        assert peers == {"peers": [{"id": "native-peer"}]}
+
+        tun_routing: dict[str, object] = {}
+        tun_routing_thread = threading.Thread(target=fetch_snapshot, args=("/api/tun-routing/status", tun_routing))
+        tun_routing_thread.start()
+        tun_routing_request = receive_control()
+        assert tun_routing_request["method"] == "get_status_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": tun_routing_request["id"], "ok": True,
+            "result": {"tun": [{"id": "native-tun"}], "tun_helper": {"state": "ready"}},
+        }))
+        tun_routing_thread.join(timeout=3)
+        assert not tun_routing_thread.is_alive() and not failures
+        assert tun_routing["tun"] == [{"id": "native-tun"}]
+        assert tun_routing["tun_helper"] == {"state": "ready"}
+
+        concurrent_results: list[dict[str, object]] = []
+
+        def fetch_concurrent_status() -> None:
+            try:
+                concurrent_results.append(local_json("/api/status"))
+            except BaseException as error:
+                failures.append(error)
+
+        first_concurrent = threading.Thread(target=fetch_concurrent_status)
+        second_concurrent = threading.Thread(target=fetch_concurrent_status)
+        first_concurrent.start()
+        second_concurrent.start()
+        for index in range(2):
+            concurrent_request = receive_control()
+            assert concurrent_request["kind"] == "admin.call"
+            assert concurrent_request["method"] == "get_status_snapshot"
+            parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+                "v": 1, "kind": "admin.reply", "id": concurrent_request["id"], "ok": True,
+                "result": {"state": "native-child", "request": index},
+            }))
+        first_concurrent.join(timeout=3)
+        second_concurrent.join(timeout=3)
+        assert not first_concurrent.is_alive() and not second_concurrent.is_alive() and not failures
+        assert {item["request"] for item in concurrent_results} == {0, 1}
+
+        assert "native-admin-browser" in local_text("/")
+
+        config: dict[str, object] = {}
+
+        def fetch_config() -> None:
+            try:
+                config.update(local_json("/api/config"))
+            except BaseException as error:
+                failures.append(error)
+
+        config_thread = threading.Thread(target=fetch_config)
+        config_thread.start()
+        config_request = receive_control()
+        assert config_request["method"] == "get_config_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": config_request["id"], "ok": True, "result": {"admin_web_bind": "127.0.0.1"},
+        }))
+        schema_request = receive_control()
+        assert schema_request["method"] == "get_config_schema_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": schema_request["id"], "ok": True, "result": {"admin_web_bind": {"type": "string"}},
+        }))
+        config_thread.join(timeout=3)
+        assert not config_thread.is_alive() and not failures
+        assert config["ok"] is True
+        assert config["config"] == {"admin_web_bind": "127.0.0.1"}
+        assert config["schema"] == {"admin_web_bind": {"type": "string"}}
+
+        telemetry: dict[str, object] = {}
+
+        def fetch_telemetry() -> None:
+            try:
+                telemetry.update(local_json("/api/telemetry"))
+            except BaseException as error:
+                failures.append(error)
+
+        telemetry_thread = threading.Thread(target=fetch_telemetry)
+        telemetry_thread.start()
+        telemetry_request = receive_control()
+        assert telemetry_request["method"] == "get_telemetry_client_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": telemetry_request["id"], "ok": True,
+            "result": {"enabled": True, "worker_state": "running"},
+        }))
+        telemetry_thread.join(timeout=3)
+        assert not telemetry_thread.is_alive() and not failures
+        assert telemetry == {"ok": True, "client": {"enabled": True, "worker_state": "running"}}
+
+        updates = {"admin_web_name": "native-admin"}
+        config_challenge = local_post_json("/api/config/challenge", {"updates": updates})
+        updates_digest = hashlib.sha256(json.dumps(updates, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        config_proof = hashlib.sha256(
+            f"{config_challenge['seed']}:admin:secret:{updates_digest}".encode("utf-8")
+        ).hexdigest()
+        update_result: dict[str, object] = {}
+
+        def post_config_update() -> None:
+            try:
+                update_result.update(local_post_json("/api/config", {
+                    "updates": updates,
+                    "challenge_id": config_challenge["challenge_id"],
+                    "proof": config_proof,
+                }))
+            except BaseException as error:
+                failures.append(error)
+
+        update_thread = threading.Thread(target=post_config_update)
+        update_thread.start()
+        update_request = receive_control()
+        assert update_request["method"] == "update_config" and update_request["args"] == [updates]
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": update_request["id"], "ok": True, "result": [True, ""],
+        }))
+        updated_snapshot_request = receive_control()
+        assert updated_snapshot_request["method"] == "get_config_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": updated_snapshot_request["id"], "ok": True, "result": updates,
+        }))
+        update_thread.join(timeout=3)
+        assert not update_thread.is_alive() and not failures
+        assert update_result == {"ok": True, "config": updates}
+
+        profiles: dict[str, object] = {}
+
+        def fetch_connection_profiles() -> None:
+            try:
+                profiles.update(local_json("/api/onboarding/connection-profiles"))
+            except BaseException as error:
+                failures.append(error)
+
+        profiles_thread = threading.Thread(target=fetch_connection_profiles)
+        profiles_thread.start()
+        profiles_request = receive_control()
+        assert profiles_request["method"] == "get_peer_connections_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": profiles_request["id"], "ok": True,
+            "result": {"peers": [{"id": "0:1", "transport": "tcp", "state": "connected", "peer": "198.51.100.7:443"}]},
+        }))
+        profiles_thread.join(timeout=3)
+        assert not profiles_thread.is_alive() and not failures
+        assert profiles == {
+            "ok": True, "count": 1,
+            "profiles": [{
+                "id": "live:tcp:0:1", "source": "live", "transport": "tcp", "role": "client",
+                "endpoint_host": "198.51.100.7", "endpoint_port": 443,
+                "label": "TCP client 198.51.100.7:443", "peer_host": "198.51.100.7", "peer_port": 443,
+            }],
+        }
+
+        blueprints: dict[str, object] = {}
+
+        def fetch_blueprints() -> None:
+            try:
+                blueprints.update(local_json("/api/onboarding/blueprints"))
+            except BaseException as error:
+                failures.append(error)
+
+        blueprints_thread = threading.Thread(target=fetch_blueprints)
+        blueprints_thread.start()
+        blueprints_request = receive_control()
+        assert blueprints_request["method"] == "get_connections_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": blueprints_request["id"], "ok": True,
+            "result": {"tcp": [{"peer_id": "0:1", "state": "open", "local_port": 23001, "remote_destination": "198.51.100.7:443"}]},
+        }))
+        blueprints_thread.join(timeout=3)
+        assert not blueprints_thread.is_alive() and not failures
+        assert blueprints == {
+            "ok": True, "count": 1,
+            "blueprints": [{"peer_id": "0:1", "own_servers": [{
+                "name": "bp-0:1-tcp-23001",
+                "listen": {"protocol": "tcp", "bind": "0.0.0.0", "port": 23001},
+                "target": {"protocol": "tcp", "host": "198.51.100.7", "port": 443},
+            }]}],
+        }
+
+        invite: dict[str, object] = {}
+
+        def generate_invite() -> None:
+            try:
+                invite.update(local_post_json("/api/onboarding/invite/generate", {"connection_id": "live:tcp:0:1"}))
+            except BaseException as error:
+                failures.append(error)
+
+        invite_thread = threading.Thread(target=generate_invite)
+        invite_thread.start()
+        invite_config_request = receive_control()
+        assert invite_config_request["method"] == "get_onboarding_config_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": invite_config_request["id"], "ok": True,
+            "result": {"overlay_transport": "tcp", "secure_link_mode": "psk", "secure_link_psk": "portable-peer-secret"},
+        }))
+        invite_peers_request = receive_control()
+        assert invite_peers_request["method"] == "get_peer_connections_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": invite_peers_request["id"], "ok": True,
+            "result": {"peers": [{"id": "0:1", "transport": "tcp", "state": "connected", "peer": "198.51.100.7:443"}]},
+        }))
+        invite_thread.join(timeout=3)
+        assert not invite_thread.is_alive() and not failures
+        invite_token = str(invite["invite_token"])
+        assert invite["ok"] is True and invite_token.startswith("ob1.")
+        preview = local_post_json("/api/onboarding/invite/preview", {"invite_token": invite_token})
+        assert preview["ok"] is True
+        assert preview["preview"]["secure_link_psk"] == "***hidden***"
+        assert preview["suggested_updates"]["secure_link_psk"] == "portable-peer-secret"
+
+        reveal_challenge = local_post_json("/api/config/secret/secure-link-psk/challenge", {})
+        reveal_proof = hashlib.sha256(
+            f"{reveal_challenge['seed']}:admin:secret:secure_link_psk".encode("utf-8")
+        ).hexdigest()
+        reveal: dict[str, object] = {}
+
+        def request_secret_reveal() -> None:
+            try:
+                reveal.update(local_post_json("/api/config/secret/secure-link-psk", {
+                    "challenge_id": reveal_challenge["challenge_id"], "proof": reveal_proof,
+                }, timeout=12))
+            except BaseException as error:
+                failures.append(error)
+
+        reveal_thread = threading.Thread(target=request_secret_reveal)
+        reveal_thread.start()
+        reveal_request = receive_control()
+        assert reveal_request["method"] == "get_onboarding_config_snapshot"
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": reveal_request["id"], "ok": True,
+            "result": {"secure_link_psk": "portable-peer-secret"},
+        }))
+        reveal_thread.join(timeout=12)
+        assert not reveal_thread.is_alive() and not failures
+        assert reveal["ok"] is True and reveal["secret_name"] == "secure_link_psk"
+        assert "portable-peer-secret" not in json.dumps(reveal)
+        assert reveal["encrypted"]["algorithm"] == "AES-GCM"
+
+        logs: dict[str, object] = {}
+
+        def fetch_logs() -> None:
+            try:
+                logs.update(local_json("/api/logs?limit=7"))
+            except BaseException as error:
+                failures.append(error)
+
+        logs_thread = threading.Thread(target=fetch_logs)
+        logs_thread.start()
+        logs_request = receive_control()
+        assert logs_request["method"] == "fetch_logs" and logs_request["args"] == [7]
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": logs_request["id"], "ok": True,
+            "result": {"available": True, "lines": ["native-admin-ready"], "error": ""},
+        }))
+        logs_thread.join(timeout=3)
+        assert not logs_thread.is_alive() and not failures
+        assert logs["lines"] == ["native-admin-ready"]
+        assert logs["available"] is True and logs["source"] == "managed"
+
+        def invoke_control(path: str, payload: dict[str, object], method: str, *, kwargs: dict[str, object] | None = None, result: object = None) -> dict[str, object]:
+            response: dict[str, object] = {}
+
+            def post() -> None:
+                try:
+                    response.update(local_post_json(path, payload))
+                except BaseException as error:
+                    failures.append(error)
+
+            thread = threading.Thread(target=post)
+            thread.start()
+            control_request = receive_control()
+            assert control_request["method"] == method
+            assert control_request["kwargs"] == (kwargs if kwargs is not None else payload)
+            parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+                "v": 1, "kind": "admin.reply", "id": control_request["id"], "ok": True,
+                "result": {"ok": True} if result is None else result,
+            }))
+            thread.join(timeout=3)
+            assert not thread.is_alive() and not failures
+            return response
+
+        remote_services = invoke_control(
+            "/api/channelmux/remote-services",
+            {"remote_servers": []},
+            "replace_remote_services_catalog",
+            kwargs={},
+            result=[True],
+        )
+        assert remote_services == {"ok": True, "remote_servers": []}
+        assert invoke_control(
+            "/api/reconnect", {"peer_id": "native-peer"}, "request_overlay_reconnect",
+            kwargs={"target_peer_id": "native-peer"},
+        )["ok"] is True
+        assert invoke_control(
+            "/api/secure-link/rekey", {"peer_id": "native-peer"}, "request_secure_link_rekey",
+            kwargs={"target_peer_id": "native-peer"},
+        )["ok"] is True
+        assert invoke_control(
+            "/api/secure-link/reload", {"peer_id": "native-peer", "scope": "all"}, "request_secure_link_reload",
+            kwargs={"target_peer_id": "native-peer", "scope": "all"},
+        )["ok"] is True
+        assert invoke_control(
+            "/api/tun-routing/control", {"enabled": True}, "request_tun_enabled",
+        )["ok"] is True
+        assert invoke_control(
+            "/api/tun-helper/repair", {}, "request_tun_helper_repair",
+        )["ok"] is True
+        assert invoke_control(
+            "/api/restart", {}, "request_restart", kwargs={"reason": "admin_web:/api/restart"},
+        )["ok"] is True
+        assert invoke_control(
+            "/api/shutdown", {}, "request_shutdown", kwargs={"exit_code": 76, "reason": "admin_web:/api/shutdown"},
+        )["ok"] is True
+        assert local_post_json("/api/auth/logout", {}) == {"ok": True, "authenticated": False}
         parent_lifetime.close()
         assert process.wait(timeout=3) == 0
     finally:
@@ -2192,6 +2683,11 @@ def _send_ws_json(sock: socket.socket, payload: dict) -> None:
     for index, byte in enumerate(raw):
         frame.append(byte ^ mask[index % 4])
     sock.sendall(frame)
+
+
+def _send_ws_close(sock: socket.socket) -> None:
+    # Browser-to-server frames are masked, including an empty close frame.
+    sock.sendall(b"\x88\x80" + os.urandom(4))
 
 
 def _wait_ws_message(sock: socket.socket, predicate, *, timeout_sec: float = 5.0) -> dict:
@@ -4026,26 +4522,40 @@ def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     artifact = build_macos_swift_artifact()
-    status_port, proxy_http_port, proxy_socks5_port, echo_port = _unused_tcp_ports(4)
-    echo = _TCPEchoServer("127.0.0.1", echo_port)
-    echo.start()
     config_path = tmp_path / "runtime.json"
-    config_path.write_text(json.dumps({
-        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
-        "debug_logging": {"log_worker": "python", "log_worker_python_executable": sys.executable},
-        "proxy_provider": {
-            "enabled": True, "bind": "127.0.0.1", "http_port": proxy_http_port,
-            "socks5_port": proxy_socks5_port, "protocols": ["http-connect", "socks5-connect"], "worker": implementation,
-            "worker_python_executable": sys.executable,
-            "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
-            "egress": {"mode": "direct"},
-            "policy": {"allow_private_destinations": True, "blocked_host_patterns": []},
-        },
-    }), encoding="utf-8")
-    process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    try:
+    process: subprocess.Popen[str] | None = None
+    echo: _TCPEchoServer | None = None
+    for attempt in range(3):
+        status_port, proxy_http_port, proxy_socks5_port, echo_port = _unused_tcp_ports(4)
+        echo = _TCPEchoServer("127.0.0.1", echo_port)
+        echo.start()
+        config_path.write_text(json.dumps({
+            "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+            "debug_logging": {"log_worker": "python", "log_worker_python_executable": sys.executable},
+            "proxy_provider": {
+                "enabled": True, "bind": "127.0.0.1", "http_port": proxy_http_port,
+                "socks5_port": proxy_socks5_port, "protocols": ["http-connect", "socks5-connect"], "worker": implementation,
+                "worker_python_executable": sys.executable,
+                "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
+                "egress": {"mode": "direct"},
+                "policy": {"allow_private_destinations": True, "blocked_host_patterns": []},
+            },
+        }), encoding="utf-8")
+        process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         url = f"http://127.0.0.1:{status_port}/api/status"
-        status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running" and item.get("logging_worker", {}).get("state") == "running", timeout_sec=20)
+        try:
+            status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running" and item.get("logging_worker", {}).get("state") == "running", timeout_sec=20)
+            break
+        except AssertionError:
+            if process.poll() is None:
+                process.terminate()
+            process.communicate(timeout=8)
+            echo.stop()
+            if attempt == 2:
+                raise
+    try:
+        assert process is not None and echo is not None
+        url = f"http://127.0.0.1:{status_port}/api/status"
         proxy = status["proxy_provider"]
         assert proxy["worker"]["implementation"] == implementation
         assert proxy["worker"]["pid"] > 1 and proxy["worker"]["pid"] != process.pid
@@ -4071,6 +4581,7 @@ def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.
         with pytest.raises(OSError):
             socket.create_connection(("127.0.0.1", proxy_socks5_port), timeout=1)
     finally:
+        assert process is not None and echo is not None
         process.terminate()
         try:
             process.communicate(timeout=8)

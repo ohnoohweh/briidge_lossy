@@ -38,7 +38,7 @@ final class ObstacleBridgeWebAdminServer {
         let consumed: Int
     }
 
-    private static let liveTopics = ObstacleBridgeWebAdminLiveTopicPolicy.allTopics
+    private static let allLiveTopics = ObstacleBridgeWebAdminLiveTopicPolicy.allTopics
     private static let liveWebSocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
     private let listener: NWListener
@@ -54,6 +54,11 @@ final class ObstacleBridgeWebAdminServer {
     private let apiProvider: APIProvider
     private let staticFileProvider: StaticFileProvider
     private let liveTopicProvider: LiveTopicProvider
+    /// Each owner declares only the live documents its provider can actually
+    /// obtain.  In particular, the native Admin child must not advertise the
+    /// broader HostRunner-only topics to browser clients.
+    private let supportedLiveTopics: [String]
+    private let initialLiveTopics: [String]
     private let authRequiredProvider: () -> Bool
     private let authenticatedProvider: ([String: String]) -> Bool
     private let fallbackIndexTitle: String
@@ -73,6 +78,8 @@ final class ObstacleBridgeWebAdminServer {
         apiProvider: @escaping APIProvider,
         staticFileProvider: @escaping StaticFileProvider,
         liveTopicProvider: @escaping LiveTopicProvider,
+        supportedLiveTopics: [String] = ObstacleBridgeWebAdminLiveTopicPolicy.allTopics,
+        initialLiveTopics: [String]? = nil,
         authRequiredProvider: @escaping () -> Bool = { false },
         authenticatedProvider: @escaping ([String: String]) -> Bool = { _ in true }
     ) throws {
@@ -89,6 +96,16 @@ final class ObstacleBridgeWebAdminServer {
         self.apiProvider = apiProvider
         self.staticFileProvider = staticFileProvider
         self.liveTopicProvider = liveTopicProvider
+        let normalizedSupportedTopics = supportedLiveTopics.reduce(into: [String]()) { topics, topic in
+            guard Self.allLiveTopics.contains(topic), !topics.contains(topic) else { return }
+            topics.append(topic)
+        }
+        self.supportedLiveTopics = normalizedSupportedTopics
+        let requestedInitialTopics = initialLiveTopics ?? supportedLiveTopics
+        self.initialLiveTopics = requestedInitialTopics.reduce(into: []) { topics, topic in
+            guard normalizedSupportedTopics.contains(topic), !topics.contains(topic) else { return }
+            topics.append(topic)
+        }
         self.authRequiredProvider = authRequiredProvider
         self.authenticatedProvider = authenticatedProvider
         self.fallbackIndexTitle = fallbackIndexTitle
@@ -154,7 +171,7 @@ final class ObstacleBridgeWebAdminServer {
     }
 
     func broadcastLiveTopic(_ topic: String, payload: Any) {
-        guard Self.liveTopics.contains(topic) else {
+        guard supportedLiveTopics.contains(topic) else {
             return
         }
         for session in liveSessions.values {
@@ -171,6 +188,146 @@ final class ObstacleBridgeWebAdminServer {
             "error": "snapshot was not a valid JSON object",
         ]
         return ObstacleBridgeCanonicalJSON.data(fromJSONObject: fallback) ?? Data("{}".utf8)
+    }
+
+    /// Resolve a browser asset without allowing request paths to escape its
+    /// configured bundle directory. Native Apple Admin owners share this
+    /// surface rather than implementing platform-specific file admission.
+    static func staticAssetResponse(path: String, assetDirectory: String) -> (contentType: String, body: Data)? {
+        guard !assetDirectory.isEmpty else { return nil }
+        let root = URL(fileURLWithPath: assetDirectory, isDirectory: true).standardizedFileURL
+        let relative = path == "/" ? "index.html" : String(path.drop(while: { $0 == "/" }))
+        guard !relative.isEmpty else { return nil }
+        let candidate = root.appendingPathComponent(relative).standardizedFileURL
+        guard candidate.path.hasPrefix(root.path + "/"), let body = try? Data(contentsOf: candidate) else { return nil }
+        let contentType: String
+        switch candidate.pathExtension.lowercased() {
+        case "html": contentType = "text/html; charset=utf-8"
+        case "js": contentType = "application/javascript; charset=utf-8"
+        case "css": contentType = "text/css; charset=utf-8"
+        case "json": contentType = "application/json; charset=utf-8"
+        case "svg": contentType = "image/svg+xml"
+        case "png": contentType = "image/png"
+        case "jpg", "jpeg": contentType = "image/jpeg"
+        case "ico": contentType = "image/x-icon"
+        default: return nil
+        }
+        return (contentType, body)
+    }
+
+    /// Normalize the inherited Admin-owner configuration result consistently
+    /// for every Apple WebAdmin adapter, including packaged native children.
+    static func normalizedConfigUpdateResult(_ result: Any?) -> (succeeded: Bool, error: String) {
+        let values = result as? [Any] ?? []
+        let succeeded = (values.first as? Bool) ?? ((values.first as? NSNumber)?.boolValue ?? false)
+        return (succeeded, values.dropFirst().first as? String ?? "configuration update failed")
+    }
+
+    /// Preserve Core-owned Admin HTTP effects when an Apple adapter owns the
+    /// browser listener. This prevents platform-specific reserialization of
+    /// invite responses (including their intentionally redacted previews).
+    static func apiResponse(_ response: ObstacleBridgeAdminLinuxResponse) -> ObstacleBridgeAdminAPIResponse {
+        let phrase: String
+        switch response.statusCode {
+        case 200: phrase = "OK"
+        case 400: phrase = "Bad Request"
+        case 401: phrase = "Unauthorized"
+        case 403: phrase = "Forbidden"
+        case 404: phrase = "Not Found"
+        case 405: phrase = "Method Not Allowed"
+        case 428: phrase = "Precondition Required"
+        case 503: phrase = "Service Unavailable"
+        default: phrase = "Internal Server Error"
+        }
+        return .init(
+            statusLine: "HTTP/1.1 \(response.statusCode) \(phrase)",
+            contentType: response.contentType,
+            body: response.body,
+            headers: response.headers
+        )
+    }
+
+    static func unavailableSecretResponse(_ secretName: String) -> ObstacleBridgeAdminAPIResponse {
+        ObstacleBridgeAdminAPI.jsonResponse(
+            ["ok": false, "error": "\(secretName) unavailable", "retryable": true],
+            statusLine: "HTTP/1.1 503 Service Unavailable"
+        )
+    }
+
+    /// Project live peer state into secret-free onboarding connection choices.
+    /// Platform owners retain transport/session retrieval through their own
+    /// bounded parent RPC; Apple Admin adapters share the projection policy.
+    static func onboardingConnectionProfiles(snapshot: [String: Any]) -> [[String: Any]] {
+        guard let rows = snapshot["peers"] as? [[String: Any]] else { return [] }
+        return rows.compactMap { row in
+            let transport = String(describing: row["transport"] ?? "").lowercased()
+            guard ["udp", "tcp", "quic", "ws", "myudp"].contains(transport) else { return nil }
+            let role = String(describing: row["state"] ?? "").lowercased() == "listening" ? "server" : "client"
+            let endpoint = onboardingEndpoint(row[role == "server" ? "listen" : "peer"])
+            let identifier = String(describing: row["id"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            var profile: [String: Any] = [
+                "id": "live:\(transport):\(identifier)",
+                "source": "live",
+                "transport": transport == "udp" ? "myudp" : transport,
+                "role": role,
+                "endpoint_host": endpoint?.host ?? "",
+                "endpoint_port": endpoint?.port ?? NSNull(),
+                "label": endpoint.map { "\(transport.uppercased()) \(role) \($0.host):\($0.port)" } ?? "\(transport.uppercased()) \(role)",
+            ]
+            if role == "server" {
+                profile["listen_bind"] = endpoint?.host ?? ""
+                profile["listen_port"] = endpoint?.port ?? NSNull()
+            } else {
+                profile["peer_host"] = endpoint?.host ?? ""
+                profile["peer_port"] = endpoint?.port ?? NSNull()
+            }
+            return profile
+        }
+    }
+
+    /// Project live connection snapshots into portable receiver-owned service
+    /// blueprints without copying runtime credentials into the browser surface.
+    static func onboardingBlueprints(snapshot: [String: Any]) -> [[String: Any]] {
+        var grouped = [String: [[String: Any]]]()
+        for transport in ["udp", "tcp"] {
+            guard let rows = snapshot[transport] as? [[String: Any]] else { continue }
+            for row in rows {
+                guard String(describing: row["state"] ?? "").lowercased() != "listening",
+                      let peerID = row["peer_id"].map({ String(describing: $0) }).flatMap({ $0.isEmpty ? nil : $0 }),
+                      let localPort = onboardingPort(row["local_port"]),
+                      let destination = onboardingEndpoint(row["remote_destination"])
+                else { continue }
+                let blueprint: [String: Any] = [
+                    "name": "bp-\(peerID)-\(transport)-\(localPort)",
+                    "listen": ["protocol": transport, "bind": "0.0.0.0", "port": localPort],
+                    "target": ["protocol": transport, "host": destination.host, "port": destination.port],
+                ]
+                if !(grouped[peerID] ?? []).contains(where: { ($0["name"] as? String) == blueprint["name"] as? String }) {
+                    grouped[peerID, default: []].append(blueprint)
+                }
+            }
+        }
+        return grouped.keys.sorted().compactMap { peerID in
+            guard let servers = grouped[peerID], !servers.isEmpty else { return nil }
+            return ["peer_id": peerID, "own_servers": servers]
+        }
+    }
+
+    private static func onboardingEndpoint(_ value: Any?) -> (host: String, port: Int)? {
+        let text = String(describing: value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separator = text.lastIndex(of: ":"),
+              let port = Int(text[text.index(after: separator)...]),
+              (1...65535).contains(port) else { return nil }
+        let host = String(text[..<separator]).trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+        return host.isEmpty ? nil : (host, port)
+    }
+
+    private static func onboardingPort(_ value: Any?) -> Int? {
+        let port: Int
+        if let number = value as? NSNumber { port = number.intValue }
+        else if let text = value as? String, let parsed = Int(text) { port = parsed }
+        else { return nil }
+        return (1...65535).contains(port) ? port : nil
     }
 
     private func handle(_ connection: NWConnection) {
@@ -201,6 +358,7 @@ final class ObstacleBridgeWebAdminServer {
     }
 
     private func handleRequest(_ request: HTTPRequest, connection: NWConnection) {
+        let requestPath = Self.requestPath(request.path)
         if request.path.hasPrefix("/api/"),
            Self.authExemptPaths.contains(request.path) == false,
            authRequiredProvider(),
@@ -215,11 +373,14 @@ final class ObstacleBridgeWebAdminServer {
             })
             return
         }
-        if request.path == "/api/live", Self.isWebSocketUpgrade(headers: request.headers) {
+        if requestPath == "/api/live", Self.isWebSocketUpgrade(headers: request.headers) {
             let session = LiveSession(
                 connection: connection,
                 queue: queue,
                 topicProvider: liveTopicProvider,
+                supportedTopics: supportedLiveTopics,
+                initialTopics: initialLiveTopics,
+                initialTopic: Self.requestedLiveTopic(path: request.path),
                 intervalProvider: ObstacleBridgeWebAdminLiveTopicPolicy.interval,
                 onClose: { [weak self] session in
                     self?.liveSessions.removeValue(forKey: ObjectIdentifier(session))
@@ -354,6 +515,24 @@ final class ObstacleBridgeWebAdminServer {
         return upgrade == "websocket" && connection.contains("upgrade")
     }
 
+    /// The browser's initial live topic remains a compatibility fallback for
+    /// both HTTP polling and WebSocket startup.  Session control messages are
+    /// still the authoritative subscription mechanism after the handshake.
+    static func requestedLiveTopic(path: String) -> String? {
+        guard let query = path.split(separator: "?", maxSplits: 1).dropFirst().first else { return nil }
+        for pair in query.split(separator: "&") {
+            let fields = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard fields.count == 2, fields[0] == "topic" else { continue }
+            let topic = String(fields[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return topic.isEmpty ? nil : topic
+        }
+        return nil
+    }
+
+    private static func requestPath(_ path: String) -> String {
+        String(path.split(separator: "?", maxSplits: 1).first ?? "")
+    }
+
     static func liveTopicsForControlMessage(
         subscribe: Any?,
         activeTabs: [Any]?,
@@ -433,9 +612,11 @@ final class ObstacleBridgeWebAdminServer {
         private let connection: NWConnection
         private let queue: DispatchQueue
         private let topicProvider: LiveTopicProvider
+        private let supportedTopics: [String]
+        private let supportedTopicSet: Set<String>
         private let intervalProvider: (String) -> TimeInterval
         private let onClose: (LiveSession) -> Void
-        private var topics = Set(ObstacleBridgeWebAdminServer.liveTopics)
+        private var topics: Set<String>
         private var nextDue: [String: TimeInterval] = [:]
         private var receiveBuffer = Data()
         private var timer: DispatchSourceTimer?
@@ -445,12 +626,23 @@ final class ObstacleBridgeWebAdminServer {
             connection: NWConnection,
             queue: DispatchQueue,
             topicProvider: @escaping LiveTopicProvider,
+            supportedTopics: [String],
+            initialTopics: [String],
+            initialTopic: String?,
             intervalProvider: @escaping (String) -> TimeInterval,
             onClose: @escaping (LiveSession) -> Void
         ) {
             self.connection = connection
             self.queue = queue
             self.topicProvider = topicProvider
+            self.supportedTopics = supportedTopics
+            self.supportedTopicSet = Set(supportedTopics)
+            self.topics = Set(initialTopics)
+            if let initialTopic,
+               let topic = ObstacleBridgeWebAdminServer.parseLiveTopics(initialTopic).first,
+               self.supportedTopicSet.contains(topic) {
+                self.topics = [topic]
+            }
             self.intervalProvider = intervalProvider
             self.onClose = onClose
         }
@@ -481,14 +673,14 @@ final class ObstacleBridgeWebAdminServer {
             let response = Data(responseText.utf8)
             connection.send(content: response, completion: .contentProcessed { [weak self] _ in
                 guard let self else { return }
-                let intervals = Dictionary(uniqueKeysWithValues: ObstacleBridgeWebAdminServer.liveTopics.map { ($0, self.intervalProvider($0)) })
+                let intervals = Dictionary(uniqueKeysWithValues: self.supportedTopics.map { ($0, self.intervalProvider($0)) })
                 self.sendJSON([
                     "type": "hello",
                     "topics": Array(self.topics).sorted(),
                     "intervals_sec": intervals,
                 ])
                 let now = ProcessInfo.processInfo.systemUptime
-                for topic in ObstacleBridgeWebAdminServer.liveTopics {
+                for topic in self.topics.sorted() {
                     self.sendTopic(topic, now: now)
                 }
                 self.startTimer()
@@ -582,7 +774,7 @@ final class ObstacleBridgeWebAdminServer {
                 subscribe: object["subscribe"],
                 activeTabs: object["active_tabs"] as? [Any],
                 currentTopics: topics
-            )
+            ).intersection(supportedTopicSet)
             let requestTopics = ObstacleBridgeWebAdminServer.parseLiveTopics(object["request"])
             let now = ProcessInfo.processInfo.systemUptime
             for topic in requestTopics.sorted() {

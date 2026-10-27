@@ -19,10 +19,30 @@ def test_shared_native_admin_child_source_uses_inherited_control_and_lifetime_de
     macos_service = (ROOT / "swift" / "Sources" / "ObstacleBridgeMacOS" / "ObstacleBridgeNativeAdminMacOSService.swift").read_text(encoding="utf-8")
     assert "run(controlFD: Int32, lifetimeFD: Int32, logFD: Int32? = nil, generation: Int," in child
     assert '"admin.control"' in child
+    assert '"get_onboarding_config_snapshot"' in child
     assert '"admin.ready"' in child
     assert "lifetime.availableData" in child
     assert "ObstacleBridgeWebAdminServer" in macos_service
     assert '"/api/status"' in macos_service
+    assert "staticAssetResponse" in macos_service
+    assert "normalizedConfigUpdateResult" in macos_service
+    assert '"/api/onboarding/connection-profiles"' in macos_service
+    assert '"/api/onboarding/blueprints"' in macos_service
+    assert '"/api/telemetry"' in macos_service
+    assert '"/api/onboarding/invite/generate"' in macos_service
+    assert '"/api/onboarding/invite/preview"' in macos_service
+    assert '"/api/config/secret/secure-link-psk"' in macos_service
+    assert '"/api/reconnect"' in macos_service
+    assert '"/api/secure-link/rekey"' in macos_service
+    assert '"/api/secure-link/reload"' in macos_service
+    assert '"/api/channelmux/remote-services"' in macos_service
+    assert '"/api/tun-routing/control"' in macos_service
+    assert '"/api/tun-helper/repair"' in macos_service
+    assert '"/api/restart"' in macos_service
+    assert '"/api/shutdown"' in macos_service
+    assert 'kwargs["target_peer_id"] = peerID' in macos_service
+    assert "auth.validateBearer(headers: headers)" in macos_service
+    assert "issueSecretRevealChallenge" in child or "issueSecretRevealChallenge" in (CORE_SWIFT_DIR / "ObstacleBridgeAdminAuth.swift").read_text(encoding="utf-8")
 SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
@@ -739,6 +759,12 @@ def test_webadmin_server_source_exists() -> None:
     assert "ObstacleBridgeWebAdminLiveTopicPolicy.interval" in runtime
     assert "type\": \"hello\"" in runtime
     assert 'label: "ObstacleBridgeWebAdminServer.StaticFileRead"' in runtime
+    assert "static func staticAssetResponse(path: String, assetDirectory: String)" in runtime
+    assert "candidate.path.hasPrefix(root.path + \"/\")" in runtime
+    assert "static func normalizedConfigUpdateResult(_ result: Any?)" in runtime
+    assert "static func apiResponse(_ response: ObstacleBridgeAdminLinuxResponse)" in runtime
+    assert "static func unavailableSecretResponse(_ secretName: String)" in runtime
+    assert "static func onboardingConnectionProfiles(snapshot: [String: Any])" in runtime
     assert "staticFileReadQueue.async" in runtime
     assert "respondWithStaticFile(for: request, connection: connection)" in runtime
     assert "self.queue.async" in runtime

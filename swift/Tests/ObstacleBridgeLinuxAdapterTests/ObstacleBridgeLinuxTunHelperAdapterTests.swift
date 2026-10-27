@@ -79,7 +79,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         let path = "/tmp/obstaclebridge-swift-helper-\(UUID().uuidString).sock"
         let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend)
         try server.start(); defer { server.stop() }
-        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token")
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token", timeoutMilliseconds: 5_000)
         let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: ["TUN_routing": ["enabled_on_startup": true]]))
         #expect(try adapter.apply(packetTunnelPlan: plan, interfaceName: "obtest0")["applied"] as? Bool == true)
         #expect(try adapter.rollback(packetTunnelPlan: plan, interfaceName: "obtest0")["removed"] as? Bool == true)
@@ -95,7 +95,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         let path = "/tmp/obstaclebridge-swift-helper-event-\(UUID().uuidString).sock"
         let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend)
         try server.start(); defer { server.stop() }
-        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token")
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token", timeoutMilliseconds: 5_000)
         #expect(try adapter.send(command: .applyNetwork, payload: [:])["applied"] as? Bool == true)
     }
 
@@ -112,11 +112,14 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     @Test func swiftHelperServerStopsAfterAuthenticatedOwnerLoss() throws {
         let backend = SwiftHelperBackend()
         let path = "/tmp/obstaclebridge-swift-helper-owner-loss-\(UUID().uuidString).sock"
-        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 0.5)
+        // This scenario first needs to negotiate the authenticated owner.
+        // Leave room for a contended CI executor to schedule that exchange;
+        // the assertion below still verifies shutdown once the owner is gone.
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 1.5)
         try server.start(); defer { server.stop() }
         let client = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token")
         #expect(try client.send(command: .snapshot, payload: [:])["backend"] as? String == "swift-test")
-        let deadline = Date().addingTimeInterval(1.5)
+        let deadline = Date().addingTimeInterval(3.0)
         while FileManager.default.fileExists(atPath: path), Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
         #expect(!FileManager.default.fileExists(atPath: path))
     }

@@ -55,11 +55,18 @@ def _probe_logging_config(*, root: Path | None, name: str) -> dict[str, Any]:
 
 
 def _webadmin_url_from_config(config: Mapping[str, Any]) -> str | None:
-    if not isinstance(config, Mapping) or not bool(config.get("admin_web")):
+    if not isinstance(config, Mapping):
         return None
-    bind = str(config.get("admin_web_bind") or "127.0.0.1").strip() or "127.0.0.1"
-    port = int(config.get("admin_web_port") or 18080)
-    path = str(config.get("admin_web_path") or "/").strip() or "/"
+    # The embeddable runtime accepts registered, sectioned configuration. Keep
+    # the probe report aligned with those effective Admin Web settings while
+    # retaining compatibility with the older flat diagnostic input shape.
+    admin = config.get("admin_web")
+    values = admin if isinstance(admin, Mapping) else config
+    if not bool(values.get("admin_web")):
+        return None
+    bind = str(values.get("admin_web_bind") or "127.0.0.1").strip() or "127.0.0.1"
+    port = int(values.get("admin_web_port") or 18080)
+    path = str(values.get("admin_web_path") or "/").strip() or "/"
     if not path.startswith("/"):
         path = "/" + path
     host = "127.0.0.1" if bind in {"0.0.0.0", "::", "*", "localhost"} else bind

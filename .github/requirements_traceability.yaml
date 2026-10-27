@@ -167,7 +167,8 @@ REQ-AUT-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip
     # Full Python TCP/WS/myudp catalog publication, live withdrawal, reverse service delivery, and recovery.
     # Covers the bounded listener-publication wait after authenticated readiness,
-    # including transient pre-send refusal/abort retries with fresh sockets.
+    # including transient pre-send refusal/abort retries with fresh sockets
+    # and worker-partitioned port allocation under xdist.
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_runtime_linux_swift_service_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_disabled
@@ -352,6 +353,7 @@ REQ-AUT-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_rekey_is_rejected
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_psk_rekey_rotates_session_id_and_keeps_data_flowing
+    - tests/unit/test_secure_link_psk.py::test_rekey_retries_dropped_hello_reply_and_commit_idempotently
     - tests/unit/test_secure_link_psk.py::test_data_counter_zero_is_rejected_as_lifecycle_violation
     - tests/unit/test_secure_link_psk.py::test_counter_exhaustion_fails_closed_before_nonce_wrap
     - tests/unit/test_secure_link_psk.py::test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state
@@ -709,8 +711,9 @@ REQ-PRX-001:
   # supervisors project the redacted lifecycle shape (identity/state/
   # generation/restart/failure/capabilities, listeners, and last_error), and
   # configured status omits all authentication secret values. Worker loss and
-  # failed replacement, including native host projection sourced from the
-  # shared Apple vocabulary, use the stable redacted unavailable/startup_failed codes.
+  # a transient initial launch failure retain the selected configuration for
+  # bounded replacement; native host projection sourced from the shared Apple
+  # vocabulary uses the stable redacted unavailable/startup_failed codes.
   # Enabled is configured intent through the shared Apple projection; listener,
   # worker, and error fields are runtime state.
   # Python and native Admin both project selected collector lifecycle/drop state;
@@ -1314,6 +1317,7 @@ REQ-MUX-004:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_myudp_two_clients_server_restart_reoffers_remote_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_runtime_linux_swift_service_round_trip
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
     - tests/unit/test_channel_mux_listener_mode.py::test_passive_listener_starts_peer_tcp_listener_from_remote_catalog
@@ -1661,18 +1665,43 @@ REQ-ADM-001:
   # Linux native-process coverage reads the collector through `/api/logs` and
   # asserts its canonical `runtime.lifecycle` record, while worker lifecycle
   # state remains observable through `/api/status`.
+  # The native Admin socketpair route normalizes that inherited collector
+  # result into the shared top-level `lines`/availability/source/error/worker
+  # envelope consumed by the shipped browser.
   # Python contract tests pin the same public worker fields and log envelope.
   # The isolated Admin-worker query path is covered by the same contract.
+  # The desktop supervisor remains a control-plane coordinator: it hands out
+  # capabilities and aggregates bounded lifecycle/status RPC, while direct
+  # private worker channels carry packet/TUN data and record-only logging.
+  # Packaged macOS and Linux native Admin selections retain their status port
+  # after supervised child-loss recovery; macOS retries transient bind contention
+  # with one fresh distinct loopback port set after a released-allocation race,
+  # stale replies poison the inherited Admin RPC channel, and authenticated
+  # onboarding profiles/blueprints and configured telemetry status derive only
+  # from bounded parent snapshots.
   # Common desktop-worker framing independently verifies bounded control/data
   # frames, generation fencing, and capability-intersection parity in Python
   # and Swift. Python plus macOS/Linux-native peer children use the shared frames end
   # to end under the Python supervisor, with negotiated opaque data exchange; Linux CI launches, snapshots, stops, and exercises its packaged peer. Python/native proxy and private logging
   # exchanges use those frames too; peer, proxy, and private (not public UDP) logging children exchange a capability hello,
   # while native-supervisor collector builds use the codec, private logging and all privileged helpers bound unauthenticated initial admission and reject token-HELLO renegotiation; Python and macOS/Linux-native helpers negotiate HELLO/READY capabilities and carry generation-fenced OBIP request/response/event/data frames; the packaged macOS helper completes a Python-client snapshot exchange and exits after authenticated owner loss. The shared Swift decoder rejects duplicate object members, including escaped-key aliases. Python and shared Swift helper controls normalize nonempty operations to at most 64 characters; Python rejects non-finite/non-object JSON while Swift rejects boolean/fractional versions; the Python Admin worker also exchanges a capability hello with generation-
-  # fenced frames too; the Linux helper suite contains the matching authenticated-owner-loss case, pending host-local CI evidence. A shared native Admin bootstrap accepts only verified inherited Unix-stream control/lifetime and record-only log descriptors, exchanges Admin HELLO/READY, makes one deadline-limited correlated bootstrap-status parent RPC, fails closed when its reply is withheld, and exits on owner loss; packaged macOS and Linux-only socketpair tests cover that boundary, with Linux CI evidence pending. Admin HTTP/session parity, host-local selection, and broader lifecycle qualification remain in IPC-1A1, IPC-1A2, IPC-1A3, and IPC-1Q.
-  # The macOS child reports its bound status port and serves status over parent
-  # RPC; the direct-loopback HTTP probe rejects system proxy lookup. Full
-  # authentication/API/session parity and Linux listener support remain open.
+  # fenced frames too; the required Linux Swift integration lane runs the matching authenticated-owner-loss helper case. A shared native Admin bootstrap accepts only verified inherited Unix-stream control/lifetime and record-only log descriptors, exchanges Admin HELLO/READY, makes one deadline-limited correlated bootstrap-status parent RPC, fails closed when its reply is withheld, and exits on owner loss; the Python supervisor services that call before awaiting readiness. Packaged macOS and required Linux Swift socketpair tests cover the complete native Admin contract; broader lifecycle qualification remains IPC-1Q.
+  # The macOS child reports its bound status port and serves authenticated
+  # browser assets plus bounded standard process/uptime/transport/dashboard metadata,
+  # status/config-schema/log/connection/peer
+  # reads plus a legacy live-topic fallback and query-scoped version-13 WebSocket
+  # with Python-default status/connection/peer/meta snapshots and bounded TUN on request,
+  # an update-bound password-confirmed configuration write and
+  # refreshed redacted snapshot plus secret-free live onboarding connection
+  # profiles and Core-owned invitation generation/PSK-masked preview plus
+  # password-confirmed encrypted PSK reveal from its dedicated inherited invite
+  # source over parent RPC, including concurrent authenticated status reads with
+  # correlated replies, plus authenticated remote-service and bearer-protected
+  # peer, TUN-routing, TUN-helper, restart, and shutdown controls whose browser peer ID is translated
+  # to the supervisor control argument; its Linux socketpair probe also covers bounded connection and peer
+  # health/status snapshot reads, local metadata, the configuration schema, caller-bounded log reads, telemetry-client and read-only TUN-routing status, derived onboarding connection profiles and blueprints from parent snapshots, a legacy HTTP live-topic snapshot, a digest-confirmed configuration write with a refreshed redacted snapshot, authenticated remote-service catalog replacement, reconnect/rekey/reload peer controls and bearer-token-protected TUN routing/TUN-helper repair/restart/shutdown controls, an authenticated version-13 snapshot-first WebSocket session with Python-compatible status/connection/peer/meta defaults plus demand-scoped TUN telemetry and masked subscription/request controls, and only allowlisted browser base assets. The packaged macOS probe drives the matching complete dispatched route surface through the inherited boundary. Required Linux CI launches the selected host-native Admin through inherited descriptors, serves status, and proves same-port recovery after process loss. The direct-loopback HTTP probe rejects system proxy lookup. Full
+  # Linux owns a loopback-only status listener through inherited parent RPC and
+  # its socketpair probe completes authenticated status/configuration/log reads and a WebSocket status snapshot; full browser-session/API parity and Python-side native selection remain open.
   integration_tests:
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
@@ -1763,7 +1792,7 @@ REQ-ADM-001:
     - tests/integration/test_overlay_e2e.py::test_linux_swift_supervises_logging_worker
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_child_logs_follow_collector_and_proxy_restarts
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_proxy_logs_follow_collector
-    # The Linux matrix gives each concurrent case a distinct loopback Admin endpoint.
+    # The Linux matrix gives each concurrent case a distinct loopback Admin endpoint and treats a post-close reference-peer poll timeout as expected teardown.
     - tests/integration/test_overlay_e2e.py::test_linux_swift_proxy_logs_follow_collector
     - tests/unit/test_native_log_supervisor.py::test_swift_host_proxy_log_level_configuration
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_child_honors_component_log_level
@@ -1966,17 +1995,23 @@ REQ-ADM-008:
     - tests/unit/test_admin_web_payloads.py::test_config_save_requires_challenge_bound_to_update_block
 
 REQ-ADM-010:
+  # The native Admin child receives the portable invite PSK only through its
+  # inherited authenticated onboarding RPC; public config snapshots and other
+  # Admin secrets stay redacted.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_onboarding_invite_api_masks_psk_and_returns_apply_updates
   unit_tests:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::onboardingHTTPUsesCoreTokenPolicyAndCarriesSecretsForRecipientOwnedPersistence
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::secretBearingInviteApplyPersistsForReceivingLinuxMachine
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss
     - tests/unit/test_admin_web_payloads.py::test_onboarding_connection_profiles_expose_configured_transports
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_applies_client_options_for_every_transport
     - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_preview_hides_psk_and_updates_keep_plaintext
     - tests/unit/test_runner_config_persistence.py::test_update_config_accepts_grouped_tun_routing_section
+    - tests/unit/test_runner_config_persistence.py::test_onboarding_config_snapshot_keeps_secrets_off_public_snapshot
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and_compression
 
 REQ-ADM-011:
@@ -1987,6 +2022,8 @@ REQ-ADM-011:
 
 REQ-ADM-012:
   unit_tests:
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::adminAuthenticationUsesSharedCoreChallengesAndGuardsNativeRoutes
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_requires_password_proof_and_returns_encrypted_envelope
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_insecure_context_notice_prefers_own_server_path

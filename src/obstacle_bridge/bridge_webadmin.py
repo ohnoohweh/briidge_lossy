@@ -89,8 +89,13 @@ class AdminWebUI:
     def register_cli(p):
         g = p.add_argument_group("admin_web")
         g.add_argument(
-            "--admin-web-worker", choices=["off", "python"], default="off",
-            help="Run desktop Admin Web in a private Python worker process.",
+            "--admin-web-worker", choices=["off", "python", "native"], default="off",
+            help="Run desktop Admin Web in a private Python or host-native worker process.",
+        )
+        g.add_argument(
+            "--admin-web-worker-native-executable",
+            default=None,
+            help="Host-native Admin worker executable; defaults to ObstacleBridgeHostRunner on macOS or ObstacleBridgeLinux on Linux.",
         )
         g.add_argument(
             "--admin-web",

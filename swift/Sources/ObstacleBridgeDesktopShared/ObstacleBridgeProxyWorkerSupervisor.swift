@@ -289,10 +289,18 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
 
     public func start(config: [String: Any]) throws {
         lifecycleLock.lock(); defer { lifecycleLock.unlock() }
-        stateLock.lock(); let canStart = stopped && generation == 0; if canStart { stopped = false }; stateLock.unlock()
+        stateLock.lock(); let canStart = stopped && generation == 0; if canStart { stopped = false; configuration = config }; stateLock.unlock()
         guard canStart else { throw ObstacleBridgeProxyWorkerSupervisor.Failure.invalidConfiguration }
         do { try launch(config) }
-        catch { stateLock.lock(); stopped = true; stateLock.unlock(); throw error }
+        catch let failure as ObstacleBridgeProxyWorkerSupervisor.Failure {
+            if case .invalidConfiguration = failure {
+                stateLock.lock(); stopped = true; configuration = nil; stateLock.unlock()
+                throw failure
+            }
+            recordLaunchFailure(failure)
+        } catch {
+            recordLaunchFailure(error)
+        }
         let source = DispatchSource.makeTimerSource(queue: monitorQueue)
         source.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
         source.setEventHandler { [weak self] in self?.recoverIfNeeded() }
@@ -318,19 +326,20 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
         do {
             try launch(config)
             stateLock.lock(); retryDelay = 0.25; stateLock.unlock()
-        } catch {
-            stateLock.lock()
-            failedStarts += 1
-            if let failure = error as? ObstacleBridgeProxyWorkerSupervisor.Failure {
-                switch failure {
-                case .invalidConfiguration: lastError = "invalid_configuration"
-                case .invalidFrame, .unavailable, .timeout: lastError = "startup_failed"
-                }
-            } else { lastError = "startup_failed" }
-            nextAttempt = Date().addingTimeInterval(retryDelay)
-            retryDelay = min(retryDelay * 2, 5)
-            stateLock.unlock()
-        }
+        } catch { recordLaunchFailure(error) }
+    }
+
+    private func recordLaunchFailure(_ error: Error) {
+        stateLock.lock(); defer { stateLock.unlock() }
+        failedStarts += 1
+        if let failure = error as? ObstacleBridgeProxyWorkerSupervisor.Failure {
+            switch failure {
+            case .invalidConfiguration: lastError = "invalid_configuration"
+            case .invalidFrame, .unavailable, .timeout: lastError = "startup_failed"
+            }
+        } else { lastError = "startup_failed" }
+        nextAttempt = Date().addingTimeInterval(retryDelay)
+        retryDelay = min(retryDelay * 2, 5)
     }
 
     public func snapshot() -> [String: Any] {
