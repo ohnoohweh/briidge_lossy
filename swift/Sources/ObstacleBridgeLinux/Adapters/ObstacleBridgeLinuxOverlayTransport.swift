@@ -231,6 +231,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     send: { payload in _ = try datagram.send(payload) },
                     receive: { try datagram.receive().payload },
                     probeLiveness: { try datagram.serviceTimers() },
+                    protocolStats: { datagram.protocolStatsSnapshot() },
                     close: { datagram.close() }
                 )
             }
@@ -534,17 +535,19 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
     private let sendImpl: ((Data) throws -> Void)?
     private let receiveImpl: (() throws -> Data)?
     private let probeLivenessImpl: (() throws -> Void)?
+    private let protocolStatsImpl: (() -> [String: UInt64])?
     private let closeImpl: () -> Void
     private let lock = NSLock()
     private var closed = false
 
     public var onLivenessSample: ((Double) -> Void)?
 
-    init(exchange: @escaping (Data) throws -> Data, send: ((Data) throws -> Void)? = nil, receive: (() throws -> Data)? = nil, probeLiveness: (() throws -> Void)? = nil, close: @escaping () -> Void) {
+    init(exchange: @escaping (Data) throws -> Data, send: ((Data) throws -> Void)? = nil, receive: (() throws -> Data)? = nil, probeLiveness: (() throws -> Void)? = nil, protocolStats: (() -> [String: UInt64])? = nil, close: @escaping () -> Void) {
         self.exchangeImpl = exchange
         self.sendImpl = send
         self.receiveImpl = receive
         self.probeLivenessImpl = probeLiveness
+        self.protocolStatsImpl = protocolStats
         self.closeImpl = close
     }
 
@@ -569,6 +572,7 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
     }
 
     public var supportsLivenessProbes: Bool { probeLivenessImpl != nil }
+    public var protocolStatsSnapshot: [String: UInt64] { protocolStatsImpl?() ?? [:] }
 
     public func probeLiveness() throws {
         lock.lock(); let isClosed = closed; lock.unlock()

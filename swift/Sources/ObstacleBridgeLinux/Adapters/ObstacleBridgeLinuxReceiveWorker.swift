@@ -7,6 +7,7 @@ public struct ObstacleBridgeLinuxReceiveWorkerSnapshot: Equatable, Sendable {
     public let receivedFrames: Int
     public let droppedFrames: Int
     public let queueDepth: Int
+    public let lastReceivedUnixTS: TimeInterval?
     public let failureReason: String?
 }
 
@@ -29,6 +30,7 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
     private var received = 0
     private var dropped = 0
     private var failure: String?
+    private var lastReceivedUnixTS: TimeInterval?
 
     public init(epoch: UInt64, capacity: Int = 128, receive: @escaping () throws -> Data, cancelReceive: @escaping () -> Void, sink: @escaping (UInt64, Data) -> Void, onFailure: @escaping (UInt64, String) -> Void = { _, _ in }) {
         self.epoch = epoch; self.capacity = max(1, capacity); self.receive = receive; self.cancelReceive = cancelReceive; self.sink = sink; self.onFailure = onFailure
@@ -46,7 +48,7 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
 
     public func snapshot() -> ObstacleBridgeLinuxReceiveWorkerSnapshot {
         lock.lock(); defer { lock.unlock() }
-        return .init(epoch: epoch, state: stopped ? "stopped" : (failure == nil ? "running" : "failed"), receivedFrames: received, droppedFrames: dropped, queueDepth: queued.count, failureReason: failure)
+        return .init(epoch: epoch, state: stopped ? "stopped" : (failure == nil ? "running" : "failed"), receivedFrames: received, droppedFrames: dropped, queueDepth: queued.count, lastReceivedUnixTS: lastReceivedUnixTS, failureReason: failure)
     }
 
     private func readLoop() {
@@ -69,6 +71,7 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard !stopped else { return }
         received += 1
+        lastReceivedUnixTS = Date().timeIntervalSince1970
         guard queued.count < capacity else { dropped += 1; return }
         queued.append(data)
         guard !dispatching else { return }

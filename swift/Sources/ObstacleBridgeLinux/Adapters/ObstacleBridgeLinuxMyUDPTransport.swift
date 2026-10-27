@@ -184,6 +184,15 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         try execute(peerRuntime.tick(nowNS: DispatchTime.now().uptimeNanoseconds))
     }
 
+    public func protocolStatsSnapshot() -> [String: UInt64] {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return peerRuntime.protocolStatsSnapshot().reduce(into: [:]) { result, entry in
+            if let value = entry.value as? Int { result[entry.key] = UInt64(max(0, value)) }
+            else if let value = entry.value as? UInt64 { result[entry.key] = value }
+            else if let value = entry.value as? Double { result[entry.key] = UInt64(max(0, value.rounded())) }
+        }
+    }
+
     private func sendWire(_ wire: Data) throws {
         // The POSIX owner sends only records accepted by the portable facade.
         // The peer engine remains the state owner; this boundary prevents a

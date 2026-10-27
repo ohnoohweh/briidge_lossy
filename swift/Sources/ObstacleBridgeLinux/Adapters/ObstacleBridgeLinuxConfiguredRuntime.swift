@@ -26,6 +26,9 @@ public struct ObstacleBridgeLinuxPeerSnapshot: Codable, Equatable, Sendable {
     public let protectedFramesReceivedTotal: UInt64
     public let authenticatedGenerationsTotal: UInt64
     public let rekeysCompletedTotal: UInt64
+    public let connectedSinceUnixTS: TimeInterval?
+    public let lastIncomingAgeSeconds: TimeInterval?
+    public let myudpStats: [String: UInt64]
     public let compression: ObstacleBridgeMuxCompressionSnapshot
 }
 
@@ -287,6 +290,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     public var secureLinkProtocolState: ObstacleBridgeSecureLinkPSKState? {
         overlayAdapter?.secureLinkProtocolState() ?? secureLink?.state ?? secureLinkServer?.state
     }
+    public var transportProtocolStats: [String: UInt64] { lowerSession.protocolStatsSnapshot }
 
     public func close() {
         overlayAdapter?.handleTransportDisconnected()
@@ -365,6 +369,7 @@ final class ObstacleBridgeLinuxConnectionAdmission: @unchecked Sendable {
     var snapshot: ObstacleBridgeLinuxOverlaySnapshot
     var activeSession: ObstacleBridgeLinuxConfiguredSession?
     var activeHost: String?
+    var connectedSinceUnixTS: TimeInterval?
     var secureLinkState: String
     var connectionEpoch: UInt64 = 0
     var candidateStartIndex = 0
@@ -477,6 +482,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
         admission.beginInFlightConnection()
         admission.activeSession?.close()
         admission.activeSession = nil
+        admission.connectedSinceUnixTS = nil
         var lastError: Error?
         for offset in configuration.peerCandidates.indices {
             let index = (admission.candidateStartIndex + offset) % configuration.peerCandidates.count
@@ -508,6 +514,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 admission.snapshot = .init(transport: configuration.transport.rawValue, state: "connected", attempts: index + 1, failureReason: nil)
                 admission.connectionEpoch &+= 1
                 admission.activeHost = host
+                admission.connectedSinceUnixTS = Date().timeIntervalSince1970
                 admission.candidateStartIndex = index
                 admission.activeSession = session
                 onDiagnostic?("overlay.connect.authenticated", [
@@ -569,6 +576,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
         admission.activeSession = session
         admission.connectionEpoch &+= 1
         admission.activeHost = host
+        admission.connectedSinceUnixTS = Date().timeIntervalSince1970
         admission.secureLinkState = configuration.secureLinkPSK == nil ? "off" : "authenticated"
         admission.snapshot = .init(transport: configuration.transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
     }
@@ -585,6 +593,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
         admission.activeSession?.close()
         admission.activeSession = nil
         admission.activeHost = nil
+        admission.connectedSinceUnixTS = nil
         admission.secureLinkState = configuration.secureLinkPSK == nil ? "off" : "disconnected"
         if admission.snapshot.state != "failed" {
             admission.snapshot = .init(transport: configuration.transport.rawValue, state: "disconnected", attempts: admission.snapshot.attempts, failureReason: nil)
@@ -645,6 +654,9 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 protectedFramesReceivedTotal: coreState?.protectedFramesReceivedTotal ?? 0,
                 authenticatedGenerationsTotal: coreState?.authenticatedGenerationsTotal ?? 0,
                 rekeysCompletedTotal: coreState?.rekeysCompletedTotal ?? 0,
+                connectedSinceUnixTS: admission.connectedSinceUnixTS,
+                lastIncomingAgeSeconds: nil,
+                myudpStats: admission.activeSession?.transportProtocolStats ?? [:],
                 compression: compressionTelemetry.snapshot()
             )
         )

@@ -709,6 +709,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             let transportConnected = row.snapshot.lifecycleState == "connected"
             let secureLinkEnabled = status.secureLinkMode != "off"
             let secureLinkConnected = secureLinkEnabled ? row.snapshot.authenticated : transportConnected
+            let compressionConnected = row.snapshot.compression.enabled && row.snapshot.ready
             let endpointHost = status.activeHost ?? status.configuredCandidates.first
             let peerHost: Any = endpointHost ?? NSNull()
             let connectionLayers: [[String: Any]] = [
@@ -728,19 +729,51 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                     "connected": secureLinkConnected,
                     "app_ready": row.snapshot.ready,
                 ],
+                [
+                    "layer": "compression",
+                    "transport": row.snapshot.transport,
+                    "state": compressionConnected ? "connected" : "disconnected",
+                    "epoch": row.snapshot.connectionEpoch,
+                    "connected": compressionConnected,
+                    "app_ready": row.snapshot.ready,
+                ],
             ]
             peer["id"] = row.identity
             peer["connected"] = transportConnected
+            peer["connected_since_unix_ts"] = row.snapshot.connectedSinceUnixTS as Any
+            peer["last_incoming_age_seconds"] = row.snapshot.lastIncomingAgeSeconds as Any
             peer["peer"] = ["host": peerHost, "port": status.port]
             peer["connection_layers"] = connectionLayers
             if var secureLink = peer["secure_link"] as? [String: Any] {
                 secureLink["enabled"] = secureLinkEnabled
                 secureLink["mode"] = status.secureLinkMode
+                secureLink["rekey_in_progress"] = row.snapshot.pendingRekeySessionID != nil
+                secureLink["frames_from_client_passed_total"] = row.snapshot.protectedFramesSentTotal
+                secureLink["frames_from_client_dropped_total"] = 0
+                secureLink["frames_to_client_passed_total"] = row.snapshot.protectedFramesReceivedTotal
+                secureLink["connected_since_unix_ts"] = row.snapshot.connectedSinceUnixTS as Any
                 peer["secure_link"] = secureLink
             }
             // The shared WebAdmin page reads `compress_layer`; retain the
             // original Linux spelling for existing API consumers as well.
             peer["compress_layer"] = peer["compression_layer"]
+            if var compression = peer["compress_layer"] as? [String: Any] {
+                compression["decompress_ok_total"] = 0
+                compression["decompress_fail_total"] = 0
+                peer["compress_layer"] = compression
+            }
+            if row.snapshot.transport == "myudp" {
+                peer["myudp"] = row.snapshot.myudpStats
+                peer["rtt_est_ms"] = row.snapshot.myudpStats["rtt_est_ms"] ?? 0
+                peer["transmit_delay_est_ms"] = row.snapshot.myudpStats["transmit_delay_est_ms"] ?? 0
+                peer["decode_errors"] = row.snapshot.myudpStats["stream_decode_errors"] ?? 0
+                peer["inflight"] = row.snapshot.myudpStats["inflight"] ?? 0
+            }
+            peer["open_connections"] = [
+                "tcp": status.activeTCPChannels,
+                "udp": status.activeUDPChannels,
+                "tun": 0,
+            ]
             peer["configured_candidates"] = status.configuredCandidates
             peer["active_host"] = status.activeHost as Any
             peer["port"] = status.port
