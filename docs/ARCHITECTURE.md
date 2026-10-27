@@ -23,14 +23,14 @@ The peer-address protocol is a delivered transport-adjacent layer. It obtains th
 
 This table is the authoritative desktop process-isolation snapshot. “Delivered
 slice” means the stated process boundary exists in production code and has
-focused evidence; it does not imply that the target exchangeability model is
-complete. No work package below is complete yet.
+focused evidence; it does not imply that later worker-specific ownership
+packages are complete.
 
 | Boundary | Current ownership and delivered slice | Remaining gap before the target boundary is complete |
 | --- | --- | --- |
-| Admin Web | The Python runner can supervise a Python Admin child over private, correlated Unix-stream IPC. It owns the HTTP listener, authentication and browser sessions; replacement is bounded and retains the original bound port. The native macOS child can serve status from parent RPC through its own listener. | Native selection, full authenticated API/live-session parity, and mixed Python/native host qualification remain open; the Linux native child currently covers bootstrap only. |
-| Logging | Python and native collectors are selectable by Python, macOS-native and Linux-native supervisors. Private inherited sockets carry bounded records, correlated log queries and owner-lifetime detection; collectors restart with a new generation. | This is a logging-specific protocol, not the common worker contract. Only selected producers are connected, aggregate drop accounting is incomplete, and cross-host/mixed-worker qualification is incomplete. |
-| Peer stack | A Python supervisor can isolate one outbound TCP stack in a Python child on macOS/Linux or a native child on macOS/Linux. The child owns the transport-through-ChannelMux stack and has generation-fenced snapshots, replacement and owner-loss shutdown. | It is not per accepted/listener peer; it lacks the other transport modes, TUN/catalog ownership and a binary data-plane IPC contract. Native peer control is intentionally limited, and the common worker protocol is absent. |
+| Admin Web | Python and native macOS/Linux Admin children own the HTTP listener, authentication, browser sessions, and the complete allowlisted parent-RPC contract over inherited Unix-stream control/lifetime capabilities. Replacement is bounded, generation-fenced, and retains the original bound port. | Default in-process ownership remains supported; broader mixed-worker product migration belongs to later Admin/qualification packages. |
+| Logging | Python and native collectors are selectable by Python, macOS-native and Linux-native supervisors. Private inherited capabilities carry bounded common-IPC control, record delivery, correlated Admin queries, and owner-lifetime detection; collectors restart with a new generation. | Only selected producers are connected, aggregate drop accounting is incomplete, and cross-host/mixed-worker qualification is incomplete. |
+| Peer stack | A Python supervisor can isolate one outbound TCP stack in a Python child on macOS/Linux or a native child on macOS/Linux. The child owns the transport-through-ChannelMux stack and exchanges generation-fenced, capability-negotiated control and opaque binary data over the common protocol; replacement and owner loss are bounded. | It is not per accepted/listener peer and lacks the other transport modes, TUN/catalog ownership, and broad native control. |
 | Shared TUN | Python and Swift privileged TUN helpers own device and host-policy operations across protocol-v1 IPC; macOS also has its existing XPC/helper path. | There is no separate shared-TUN routing worker. Peer/channel arbitration, packet routing and exchangeable Python/native ownership still run outside this boundary. |
 
 ### Design decisions already in force
@@ -47,9 +47,10 @@ complete. No work package below is complete yet.
 - A selected worker is never silently replaced by an in-process fallback.
   Replacement uses fresh capabilities and a new generation; existing browser,
   proxy and peer connections do not survive it.
-- The current component-specific IPC mechanisms are intentionally transitional.
-  The target is one versioned, language-neutral desktop worker protocol used by
-  Python and native implementations on both macOS and Linux.
+- The common desktop worker protocol is versioned and language-neutral. Python
+  and native implementations use bounded inherited capabilities, positive
+  generations, negotiated capabilities, and fresh descriptors on replacement
+  on both macOS and Linux.
 
 ### Implementation evidence and current limits
 
@@ -77,10 +78,11 @@ using `debug_logging.log_worker` (`off`, `python`, or `native`), with optional
 Their shared supervisor exposes bounded queries and restart status to Admin;
 the hosts currently emit only selected runtime lifecycle events, and their drop
 counter does not include records rejected during lock contention. Unsupported
-file and UDP sinks are rejected when this worker mode is selected. This is a
-logging-specific slice, not the common worker protocol. The capability
-protects against unprivileged processes without the inherited descriptors, not
-a hostile debugger acting as the same user.
+file and UDP sinks are rejected when this worker mode is selected. Logging
+retains a record-delivery policy specific to this boundary while its control
+uses the common worker protocol. The capability protects against unprivileged
+processes without the inherited descriptors, not a hostile debugger acting as
+the same user.
 
 The Python supervisor's Admin and peer children and the Python/native proxy children of
 either host feed the selected logging child through separate inherited
@@ -134,9 +136,9 @@ or control stream with bounded backoff and reports generation, restarts and
 failed starts; each replacement uses fresh capabilities and retains the first
 bound port even if it was initially ephemeral. Existing browser sessions do
 not survive replacement. Embedded restart callbacks are rejected in this
-mode. This is an opt-in Python-only slice: native Admin and native supervision,
-comprehensive API/security parity, and full operation-generation fencing
-remain open. Synchronous runner calls execute on the runner loop;
+mode. The Python and native macOS/Linux implementations share the same bounded
+bootstrap, allowlisted parent-RPC, owner-loss, recovery, and browser contract.
+Synchronous runner calls execute on the runner loop;
 deadlines cannot undo an operation already started.
 
 The Python desktop runner can opt into `--peer-stack-worker python` for one
@@ -175,9 +177,10 @@ uses the same no-file JSON admission path and currently admits only outbound
 TCP without TUN or proxy ownership. Listener-side peer ownership, other transports,
 broader peer-control qualification, live peer configuration, terminal status,
 and shared-TUN routing/data IPC remain open; there is no shared-TUN worker yet.
-The peer control stream is not yet the common cross-runtime worker protocol:
-it has no capability negotiation, binary data-plane contract, write deadline,
-or duplicate-key-rejecting native JSON parser.
+The peer control stream uses the common cross-runtime worker protocol: it
+negotiates capabilities, admits opaque binary data only after
+`peer.binary-data` negotiation, bounds frame admission and deadlines, and
+rejects malformed or duplicate-key control input before it reaches the worker.
 
 The Python/Swift Admin component probe compiles against the shared runtime
 policy and currently exposes three parity gaps: TUN routing summary/control
@@ -187,8 +190,9 @@ claiming Admin parity.
 
 The existing TUN-helper protocol-v1 framing has a 1 MiB payload ceiling in
 both Python and Swift, checked from the header before waiting for the body.
-This protects that existing IPC boundary but does not implement the common
-worker protocol, generation fencing, or worker supervision in `IPC-1`.
+The helper uses the common worker framing, positive generations, capability
+negotiation, bounded admission, and owner-loss retirement. It remains distinct
+from the future shared-TUN routing worker, which owns peer/channel arbitration.
 
 ### Target ownership decisions
 
@@ -258,12 +262,11 @@ contract independently; a later cross-platform review compares their recorded
 contracts and evidence, not executable processes.
 
 Logging separation is the active implementation focus. Its ordered,
-platform-local packages are defined below. `IPC-1` remains the later convergence point that
-replaces component-specific IPC across all worker roles; it is not a prerequisite
-for completing the logging worker's selected-worker ownership boundary. Every package in
-this table is open. A completed package is removed from this table and its
-durable ownership decision is retained above instead of being restated as a
-completed plan item.
+platform-local packages are defined below. They use the delivered common worker
+protocol but retain their own producer, accounting, and operator-contract work.
+Every package in this table is open. A completed package is removed from this
+table and its durable ownership decision is retained above instead of being
+restated as a completed plan item.
 
 ### Delivered macOS logging producer boundary (`IPC-2M-1`)
 
@@ -283,7 +286,6 @@ Native Admin onboarding projections are shared across the desktop children: auth
 
 | Package | Scope and definition of done | Gap to close |
 | --- | --- | --- |
-| `IPC-1` — common transport and supervision | Define and implement the bounded authenticated local control/data protocol, capability negotiation, worker generation fencing, startup handoff, and supervised teardown in Python and Swift. DoD: Python/native peers exchange requests, responses, events and binary data in both directions; malformed, oversized, unauthenticated, timed-out and stale-generation input fails closed; parent/child loss and restart do not leak workers, credentials or sockets on macOS and Linux. | The Python/Swift v1 codec defines bounded inherited-socket frames, control/data kinds, generation fields, strict Python control decoding, and mutual capability negotiation. Python-supervised peer control (including the Linux-native peer), Python/native proxy, Python Admin control, private Python/native logging, and the Python privileged helper exchange a generation-fenced capability hello before bootstrap or readiness; peer workers echo bounded opaque data only after negotiating `peer.binary-data`, while all privileged helpers bound unauthenticated initial admission and reject token-HELLO renegotiation. A single retirement rule closes a control channel on malformed, stale, partial, or deadline-expired traffic; a replacement uses fresh descriptors and generation, and an ownerless helper/Admin child closes its lifetime capability within its bounded idle window. Linux CI starts, snapshots, stops, and exercises data exchange with the packaged native peer, shared stale-reply retirement, native helper owner loss, and native Admin bootstrap/owner loss using only Linux artifacts; equivalent packaged macOS probes run only on macOS. |
 | `IPC-2M-2` — macOS logging supervision and accounting | Complete macOS collector lifecycle behavior for the Python and native desktop supervisors. DoD: startup, owner loss, crash, malformed record/query, stale generation, saturation, relay-allocation failure, collector replacement, and shutdown are bounded; every in-scope producer and relay contributes to one redacted aggregate drop snapshot; Admin and the Admin-worker path return the same bounded status and recent-log envelope; and neither forwarding nor listener recovery waits for logging. | Existing lifecycle/restart coverage omits records rejected during lock contention and does not aggregate all producer/relay drops into one macOS snapshot. |
 | `IPC-2M-3` — macOS logging qualification and operator contract | Qualify the completed macOS logging boundary with same-host Python/native selector combinations and publish its supported configuration, status fields, recovery behavior, and rollback. DoD: an automated macOS lane covers collector loss/restart under proxy, Admin, and peer-worker traffic; a packaged macOS host discovers the selected local worker without ambient endpoints; source/runtime checks prove private-worker mode installs no direct file, UDP, stdout, or stderr logging sink in migrated producers; and the operator documentation states the loss and restart semantics. | The macOS lane covers selected supervisor/proxy cases, but does not qualify the full producer inventory or packaged-worker discovery under collector loss. |
 | `IPC-2L-1` — Linux logging producer boundary | Reproduce the macOS producer-boundary contract in the Linux native runtime and Python runner on Linux, using only Linux executables and local inherited capabilities. DoD: the Linux inventory covers its foreground lifecycle owner and every delivered Linux desktop worker; each in-scope producer has record-only delivery to either local Python or native collector; and local Python/native selection preserves the canonical redacted envelope and component-level policy. | Linux currently emits selected foreground lifecycle records and proxy-child records only; the full producer inventory and record-only boundary are not implemented. |
