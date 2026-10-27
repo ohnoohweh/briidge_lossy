@@ -23,6 +23,10 @@ public enum ObstacleBridgeAdminSnapshotSupport {
         extra: [String: Any] = [:]
     ) -> [String: Any] {
         var payload: [String: Any] = [
+            // These keys are consumed directly by the shared Admin page. A
+            // host supplies facts in `extra`, but Core owns the stable shape.
+            "app": runtimeOwner,
+            "platform": runtimeMode,
             "runtime_owner": runtimeOwner,
             "runtime_mode": runtimeMode,
             "admin_web_name": adminWebName,
@@ -33,6 +37,11 @@ public enum ObstacleBridgeAdminSnapshotSupport {
             "bootstrap_state": bootstrapState,
             "transport_runtime": transportRuntime,
             "compress_layer": compressLayer,
+            "overlay_transport": stringValue(transportRuntime["kind"]) ?? "",
+            "transport_state": transportRuntime["status"] ?? "disconnected",
+            "app_ready": appReady(from: transportRuntime),
+            "connection_layers": connectionLayers(from: transportRuntime),
+            "peer": NSNull(),
         ]
         for (key, value) in extra {
             payload[key] = value
@@ -104,6 +113,133 @@ public enum ObstacleBridgeAdminSnapshotSupport {
             snapshot[key] = value
         }
         return snapshot
+    }
+
+    /// Builds the portable `/api/peers` row. Runtime hosts supply measured
+    /// facts; Core supplies every field and nested object expected by the
+    /// shared WebAdmin and API consumers. This prevents host-specific omitted
+    /// fields from becoming misleading `n/a` values in the dashboard.
+    public static func peerEnvelope(
+        id: Any,
+        peerID: Any? = nil,
+        transport: String,
+        state: String,
+        connected: Bool,
+        appReady: Bool,
+        peer: Any = NSNull(),
+        listen: Any = NSNull(),
+        resolvedPeer: Any = NSNull(),
+        connectionEpoch: Any = NSNull(),
+        connectedSinceUnixTS: Any = NSNull(),
+        lastIncomingAgeSeconds: Any = NSNull(),
+        rttEstimateMS: Any = NSNull(),
+        transmitDelayEstimateMS: Any = NSNull(),
+        decodeErrors: Any = 0,
+        inflight: Any = 0,
+        traffic: [String: Any] = [:],
+        openConnections: [String: Any] = [:],
+        connectionLayers: [[String: Any]] = [],
+        secureLink: [String: Any] = [:],
+        compressionLayer: [String: Any] = [:],
+        throttle: [String: Any] = [:],
+        runtime: [String: Any] = [:],
+        extra: [String: Any] = [:]
+    ) -> [String: Any] {
+        let normalizedSecureLink: [String: Any] = [
+            "state": "disconnected", "authenticated": false,
+            "enabled": false, "mode": "off",
+            "rekey_in_progress": false,
+            "frames_from_client_passed_total": 0,
+            "frames_from_client_dropped_total": 0,
+            "frames_to_client_passed_total": 0,
+            "connected_since_unix_ts": NSNull(),
+        ].merging(secureLink, uniquingKeysWith: { _, supplied in supplied })
+        let normalizedCompression: [String: Any] = [
+            "enabled": false, "algorithm": "",
+            "compress_attempts_total": 0, "compress_applied_total": 0,
+            "compress_input_bytes_total": 0, "compress_output_bytes_total": 0,
+            "decompress_ok_total": 0, "decompress_fail_total": 0,
+        ].merging(compressionLayer, uniquingKeysWith: { _, supplied in supplied })
+        let normalizedTraffic: [String: Any] = [
+            "rx_bytes": 0, "tx_bytes": 0, "rx_msgs": 0, "tx_msgs": 0,
+        ].merging(traffic, uniquingKeysWith: { _, supplied in supplied })
+        let normalizedConnections: [String: Any] = [
+            "udp": 0, "tcp": 0, "tun": 0,
+        ].merging(openConnections, uniquingKeysWith: { _, supplied in supplied })
+        let normalizedThrottle: [String: Any] = [
+            "applicable": false, "active": false, "reason": "no_local_ingress",
+        ].merging(throttle, uniquingKeysWith: { _, supplied in supplied })
+
+        var payload = extra
+        payload["id"] = id
+        payload["peer_id"] = peerID ?? id
+        payload["transport"] = transport
+        payload["state"] = state
+        payload["connected"] = connected
+        payload["app_ready"] = appReady
+        payload["listen"] = listen
+        payload["peer"] = peer
+        payload["resolved_peer"] = resolvedPeer
+        payload["connection_epoch"] = connectionEpoch
+        payload["connected_since_unix_ts"] = connectedSinceUnixTS
+        payload["last_incoming_age_seconds"] = lastIncomingAgeSeconds
+        payload["rtt_est_ms"] = rttEstimateMS
+        payload["transmit_delay_est_ms"] = transmitDelayEstimateMS
+        payload["decode_errors"] = decodeErrors
+        payload["inflight"] = inflight
+        payload["traffic"] = normalizedTraffic
+        payload["open_connections"] = normalizedConnections
+        payload["connection_layers"] = connectionLayers
+        payload["secure_link"] = normalizedSecureLink
+        // Keep the legacy spelling while making the shared spelling canonical.
+        payload["compress_layer"] = normalizedCompression
+        payload["compression_layer"] = normalizedCompression
+        payload["throttle"] = normalizedThrottle
+        payload["runtime"] = runtime
+        return payload
+    }
+
+    /// The live socket is a high-frequency rendering channel, not a transport
+    /// for diagnostic histories. Keep its status schema identical for
+    /// dashboard fields while leaving bounded-but-large diagnostics on the
+    /// full `/api/status` document.
+    public static func liveStatusEnvelope(_ status: [String: Any]) -> [String: Any] {
+        var live = status
+        live.removeValue(forKey: "runtime_metrics")
+        live.removeValue(forKey: "runtime_health_recent_records")
+        return live
+    }
+
+    /// Accept older host snapshots during the migration, but serialize all of
+    /// them through the same Core-owned `/api/peers` structure.
+    public static func canonicalPeerEnvelope(_ peer: [String: Any]) -> [String: Any] {
+        let identifier = peer["id"] ?? peer["peer_id"] ?? "configured-peer"
+        return peerEnvelope(
+            id: identifier,
+            peerID: peer["peer_id"],
+            transport: stringValue(peer["transport"]) ?? "",
+            state: stringValue(peer["state"]) ?? "disconnected",
+            connected: boolValue(peer["connected"]),
+            appReady: boolValue(peer["app_ready"]),
+            peer: peer["peer"] ?? NSNull(),
+            listen: peer["listen"] ?? NSNull(),
+            resolvedPeer: peer["resolved_peer"] ?? NSNull(),
+            connectionEpoch: peer["connection_epoch"] ?? NSNull(),
+            connectedSinceUnixTS: peer["connected_since_unix_ts"] ?? NSNull(),
+            lastIncomingAgeSeconds: peer["last_incoming_age_seconds"] ?? NSNull(),
+            rttEstimateMS: peer["rtt_est_ms"] ?? NSNull(),
+            transmitDelayEstimateMS: peer["transmit_delay_est_ms"] ?? NSNull(),
+            decodeErrors: peer["decode_errors"] ?? 0,
+            inflight: peer["inflight"] ?? 0,
+            traffic: peer["traffic"] as? [String: Any] ?? [:],
+            openConnections: peer["open_connections"] as? [String: Any] ?? [:],
+            connectionLayers: peer["connection_layers"] as? [[String: Any]] ?? [],
+            secureLink: peer["secure_link"] as? [String: Any] ?? [:],
+            compressionLayer: (peer["compress_layer"] ?? peer["compression_layer"]) as? [String: Any] ?? [:],
+            throttle: peer["throttle"] as? [String: Any] ?? [:],
+            runtime: peer["runtime"] as? [String: Any] ?? [:],
+            extra: peer
+        )
     }
 
     static func transportConnected(lastRttOKNSValue: Any?, lastRxWallNSValue: Any? = nil, fallbackConnected: Bool) -> Bool {
@@ -215,12 +351,10 @@ public enum ObstacleBridgeAdminSnapshotSupport {
         ]
     }
 
-    static func peersSnapshotForAPI(_ peers: [[String: Any]]) -> [[String: Any]] {
+    public static func peersSnapshotForAPI(_ peers: [[String: Any]]) -> [[String: Any]] {
         peers.map { peer in
-            guard let throttle = peer["throttle"] as? [String: Any] else {
-                return peer
-            }
-            var sanitized = peer
+            var sanitized = canonicalPeerEnvelope(peer)
+            guard let throttle = sanitized["throttle"] as? [String: Any] else { return sanitized }
             sanitized["throttle"] = throttle.filter { key, _ in
                 ![
                     "scope_id", "mode", "budget_bytes", "used_bytes", "remaining_bytes",

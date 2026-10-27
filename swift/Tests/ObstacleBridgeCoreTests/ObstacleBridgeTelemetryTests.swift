@@ -8,6 +8,55 @@ struct ObstacleBridgeTelemetryTests {
         #expect(ObstacleBridgeAdminSnapshotSupport.serviceConnectionRole(catalog: "remote_servers") == "client")
     }
 
+    @Test func adminPeerEnvelopeOwnsTheSharedAPIShapeAndPreservesMeasuredFacts() {
+        let peer = ObstacleBridgeAdminSnapshotSupport.peerEnvelope(
+            id: 1,
+            peerID: "configured-peer",
+            transport: "myudp",
+            state: "connected",
+            connected: true,
+            appReady: true,
+            peer: ["host": "198.51.100.7", "port": 443],
+            secureLink: ["state": "authenticated", "authenticated": true],
+            compressionLayer: ["enabled": true, "decompress_ok_total": 7],
+            extra: ["configured_candidates": ["198.51.100.7"]]
+        )
+        #expect(peer["peer_id"] as? String == "configured-peer")
+        #expect(peer["connected"] as? Bool == true)
+        #expect(peer["traffic"] as? [String: Any] != nil)
+        #expect(peer["open_connections"] as? [String: Any] != nil)
+        #expect((peer["secure_link"] as? [String: Any])?["authenticated"] as? Bool == true)
+        #expect((peer["compress_layer"] as? [String: Any])?["decompress_ok_total"] as? Int == 7)
+        #expect((peer["compression_layer"] as? [String: Any])?["decompress_ok_total"] as? Int == 7)
+        #expect(peer["configured_candidates"] as? [String] == ["198.51.100.7"])
+    }
+
+    @Test func adminStatusEnvelopeOwnsSharedDashboardFields() {
+        let status = ObstacleBridgeAdminSnapshotSupport.statusEnvelope(
+            runtimeOwner: "native",
+            runtimeMode: "linux-swift",
+            adminWebName: "ObstacleBridge Fedora Native",
+            adminUI: [:], securityAdvisor: [:],
+            startedAt: 1, uptimeSec: 2,
+            bootstrapState: ["status": "connected"],
+            transportRuntime: ["kind": "myudp", "status": "connected", "app_ready": true],
+            compressLayer: [:]
+        )
+        #expect(status["app"] as? String == "native")
+        #expect(status["platform"] as? String == "linux-swift")
+        #expect(status["overlay_transport"] as? String == "myudp")
+        #expect(status["transport_state"] as? String == "connected")
+        #expect(status["app_ready"] as? Bool == true)
+        #expect(status["peer"] is NSNull)
+        let live = ObstacleBridgeAdminSnapshotSupport.liveStatusEnvelope(status.merging([
+            "runtime_metrics": ["history": Array(repeating: 1, count: 32)],
+            "runtime_health_recent_records": [["state": "connected"]],
+        ], uniquingKeysWith: { _, supplied in supplied }))
+        #expect(live["overlay_transport"] as? String == "myudp")
+        #expect(live["runtime_metrics"] == nil)
+        #expect(live["runtime_health_recent_records"] == nil)
+    }
+
     private func vectorEvent() throws -> ObstacleBridgeTelemetryEvent {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

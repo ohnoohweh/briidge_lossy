@@ -5,8 +5,8 @@ import Foundation
 public enum ObstacleBridgeAdminLiveTopicPort {
     public static func payload(topic: String, status: [String: Any], peers: [[String: Any]], connections: [String: Any] = [:]) -> Any? {
         switch topic {
-        case "status": return status
-        case "peers": return ["peers": peers]
+        case "status": return ObstacleBridgeAdminSnapshotSupport.liveStatusEnvelope(status)
+        case "peers": return ["peers": ObstacleBridgeAdminSnapshotSupport.peersSnapshotForAPI(peers)]
         case "connections": return connections
         default: return nil
         }

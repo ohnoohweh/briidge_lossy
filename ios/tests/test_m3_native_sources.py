@@ -243,7 +243,10 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'summary["secure_link_recover_after_failure"]' not in provider
     assert 'summary["secure_link_recover_delay_seconds"]' not in provider
     assert "static func peerThrottleSnapshot(peerID: Int, connectionsSnapshot: [String: Any]) -> [String: Any]" in snapshot_support
-    assert "static func peersSnapshotForAPI(_ peers: [[String: Any]]) -> [[String: Any]]" in snapshot_support
+    assert "public static func peerEnvelope(" in snapshot_support
+    assert "public static func canonicalPeerEnvelope(_ peer: [String: Any]) -> [String: Any]" in snapshot_support
+    assert "public static func peersSnapshotForAPI(_ peers: [[String: Any]]) -> [[String: Any]]" in snapshot_support
+    assert "ObstacleBridgeAdminSnapshotSupport.canonicalPeerEnvelope(peer)" in provider
     assert "peerThrottleRatio" not in snapshot_support
     assert '"budget_bytes", "used_bytes", "remaining_bytes"' in snapshot_support
 

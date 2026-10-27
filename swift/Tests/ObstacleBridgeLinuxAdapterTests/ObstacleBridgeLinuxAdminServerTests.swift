@@ -374,6 +374,11 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(status["overlay_transport"] as? String == "tcp")
         #expect(status["transport_state"] as? String == "disconnected")
         #expect(status["app_ready"] as? Bool == false)
+        #expect(status["runtime_owner"] as? String == "ObstacleBridgeLinux")
+        #expect(status["runtime_mode"] as? String == "linux-swift")
+        #expect(status["bootstrap_state"] as? [String: Any] != nil)
+        #expect(status["transport_runtime"] as? [String: Any] != nil)
+        #expect(status["compress_layer"] as? [String: Any] != nil)
         #expect((status["logging_worker"] as? [String: Any])?["state"] as? String == "off")
         let layers = status["connection_layers"] as? [[String: Any]]
         #expect(layers?.count == 2)
@@ -398,6 +403,10 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let rows = peers["peers"] as? [[String: Any]]
         #expect(rows?.first?["configured_candidates"] as? [String] == ["first.example", "second.example"])
         #expect(rows?.first?["failure_reason"] is NSNull)
+        #expect(rows?.first?["traffic"] as? [String: Any] != nil)
+        #expect(rows?.first?["open_connections"] as? [String: Any] != nil)
+        #expect(rows?.first?["secure_link"] as? [String: Any] != nil)
+        #expect(rows?.first?["compress_layer"] as? [String: Any] != nil)
         let connections = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/connections") as? [String: Any])
         #expect((connections["tcp"] as? [[String: Any]])?.isEmpty == true)
         #expect((connections["udp"] as? [[String: Any]])?.isEmpty == true)

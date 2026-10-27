@@ -1764,7 +1764,7 @@ final class ObstacleBridgeHostRunner {
                 "frames_from_securelink": myudpProtocolStats["frames_from_securelink"] ?? 0,
             ]
         }
-        return [peer]
+        return [ObstacleBridgeAdminSnapshotSupport.canonicalPeerEnvelope(peer)]
     }
 
     private func peerTrafficTotals(from connections: [String: Any]) -> (rxBytes: Int, txBytes: Int) {

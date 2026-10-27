@@ -2008,7 +2008,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             preferredKind: transport
         )
         let myudpProtocolStats = myudpRuntime["protocol_stats"] as? [String: Any] ?? [:]
-        return [[
+        let peer: [String: Any] = [
             "id": 1,
             "transport": transport,
             "state": state,
@@ -2053,7 +2053,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "frames_to_securelink": myudpProtocolStats["frames_to_securelink"] ?? 0,
                 "frames_from_securelink": myudpProtocolStats["frames_from_securelink"] ?? 0,
             ],
-        ]]
+        ]
+        return [ObstacleBridgeAdminSnapshotSupport.canonicalPeerEnvelope(peer)]
     }
 
     private func adminTransportConnectedState(bridgeSnapshot: [String: Any]) -> Bool {
