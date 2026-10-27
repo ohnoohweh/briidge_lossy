@@ -71,6 +71,12 @@ same bidirectional transferred-byte contract at both process boundaries.
 Linux and Python Admin peer consumers use the common `/api/peers` wrapper
 object, whose `peers` member contains the peer rows.
 
+Implementation note: ChannelMux channel identifiers are wire identifiers scoped
+to an authenticated peer session. A Python listener that serves multiple peers
+shall keep TCP socket ownership keyed by both peer and wire channel while
+preserving the original wire channel on every reply, so a reconnecting peer
+cannot route data to another peer that has the same active channel number.
+
 Implementation note: a native TCP service read may be 65,535 bytes, while its
 ChannelMux envelope occupies eight further wire bytes. The shared Swift TCP
 runtime therefore segments stream reads at the transport-safe body boundary

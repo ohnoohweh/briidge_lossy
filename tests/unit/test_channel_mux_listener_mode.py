@@ -152,6 +152,15 @@ class _FakeBackpressureWriter:
         return None
 
 
+class _CaptureWriter(_FakeBackpressureWriter):
+    def __init__(self, transport):
+        super().__init__(transport)
+        self.written = []
+
+    def write(self, payload):
+        self.written.append(bytes(payload))
+
+
 def test_channelmux_tcp_backpressure_is_demand_driven_and_cancelled_on_close():
     async def _run():
         mux = ChannelMux(_FakeSession(connected=True), asyncio.get_running_loop())
@@ -179,6 +188,34 @@ def test_channelmux_tcp_backpressure_is_demand_driven_and_cancelled_on_close():
         finally:
             for task in list(mux._tcp_backpressure_tasks.values()):
                 task.cancel()
+
+    asyncio.run(_run())
+
+
+def test_channelmux_tcp_inbound_channels_are_scoped_to_authenticated_peer():
+    async def _run():
+        mux = ChannelMux(_FakeSession(connected=True), asyncio.get_running_loop())
+        wire_chan = 9
+        # A different peer already owns the same wire ID. This models a
+        # shared Python listener accepting two native clients after either
+        # client reconnects and restarts its odd-ID allocator.
+        incumbent = _CaptureWriter(_FakeBackpressureTransport())
+        mux._tcp_by_chan[wire_chan] = (1, incumbent)
+        mux._tcp_role_by_chan[wire_chan] = "client"
+
+        local_chan = mux._bind_inbound_tcp_channel(peer_id=50, wire_chan=wire_chan)
+        assert local_chan != wire_chan
+        peer_writer = _CaptureWriter(_FakeBackpressureTransport())
+        mux._tcp_by_chan[local_chan] = (13, peer_writer)
+        mux._tcp_role_by_chan[local_chan] = "client"
+
+        mux._rx_tcp(wire_chan, ChannelMux.MType.DATA, b"reply", peer_id=50)
+        assert peer_writer.written == [b"reply"]
+        assert incumbent.written == []
+
+        mux._rx_tcp(wire_chan, ChannelMux.MType.CLOSE, b"", peer_id=50)
+        assert (50, wire_chan) not in mux._tcp_inbound_wire_to_local
+        assert wire_chan in mux._tcp_by_chan
 
     asyncio.run(_run())
 

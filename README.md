@@ -663,6 +663,12 @@ Current websocket payload forms:
 | `--mux-tcp-bp-latency-ms` | `300` | Mux TCP: if > 0, drain writers after this ms when bytes pending. |
 | `--mux-tcp-bp-poll-interval-ms` | `50` | Mux TCP: polling interval for time-based backpressure (ms). |
 
+On a shared listener, a TCP ChannelMux wire channel belongs to the authenticated
+peer that opened it. The Python runtime keeps that peer identity in its local
+socket ownership while returning replies with the peer's original channel ID,
+so one reconnecting client cannot collide with another active client's reused
+channel number.
+
 #### Reverse service publishing with `--remote-servers`
 
 `--remote-servers` lets one peer ask the connected peer to expose listeners and bridge them to peer-local targets.
