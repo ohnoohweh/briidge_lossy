@@ -7,6 +7,25 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxAdminServerTests {
+    @Test func statusEmbedsCoreAdminUIForTheSharedHomeTab() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: 1
+        ))
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: [
+            "admin_web": [
+                "admin_web_first_tab": "status",
+                "admin_web_security_advisor_disable": false,
+            ],
+        ])
+        try server.start(); defer { server.stop() }
+        let status = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/status") as? [String: Any])
+        let adminUI = try #require(status["admin_ui"] as? [String: Any])
+        #expect(adminUI["home_tab_enabled"] as? Bool == true)
+        #expect(adminUI["first_tab"] as? String == "status")
+        #expect(adminUI["platform"] as? String == "linux-swift")
+        #expect(status["security_advisor"] as? [String: Any] != nil)
+    }
+
     @Test func logsEndpointReturnsBoundedRedactedNativeDiagnostics() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let server = ObstacleBridgeLinuxAdminServer(
@@ -378,6 +397,11 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(status["runtime_mode"] as? String == "linux-swift")
         #expect(status["bootstrap_state"] as? [String: Any] != nil)
         #expect(status["transport_runtime"] as? [String: Any] != nil)
+        let adminUI = try #require(status["admin_ui"] as? [String: Any])
+        #expect(adminUI["home_tab_enabled"] as? Bool == true)
+        #expect(adminUI["first_tab"] as? String == "home")
+        #expect(adminUI["platform"] as? String == "linux-swift")
+        #expect(status["security_advisor"] as? [String: Any] != nil)
         #expect(status["compress_layer"] as? [String: Any] != nil)
         #expect((status["logging_worker"] as? [String: Any])?["state"] as? String == "off")
         let layers = status["connection_layers"] as? [[String: Any]]

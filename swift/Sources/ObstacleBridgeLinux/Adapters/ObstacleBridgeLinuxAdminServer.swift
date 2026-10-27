@@ -725,8 +725,14 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             runtimeOwner: "ObstacleBridgeLinux",
             runtimeMode: "linux-swift",
             adminWebName: configuration["admin_web_name"] as? String ?? "",
-            adminUI: [:],
-            securityAdvisor: [:],
+            adminUI: ObstacleBridgeAdminWebPort.uiPayload(
+                runtimeConfig: adminConfigurationProvider(),
+                platform: "linux-swift"
+            ),
+            securityAdvisor: ObstacleBridgeAdminWebPort.securityAdvisorPayload(
+                runtimeConfig: adminConfigurationProvider(),
+                bindHostFallback: "127.0.0.1"
+            ),
             startedAt: startedAt.timeIntervalSince1970,
             uptimeSec: max(0, Int(Date().timeIntervalSince(startedAt))),
             bootstrapState: [
