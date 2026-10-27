@@ -1,5 +1,71 @@
 import Foundation
 
+/// Redacted, host-neutral facts needed to render one protocol peer in the
+/// Admin API. Runtime adapters translate their own state into this value; Core
+/// owns the resulting JSON shape so Apple and Linux cannot drift by omission.
+public struct ObstacleBridgeAdminPeerFacts: Sendable {
+    public let identity: String
+    public let transport: String
+    public let lifecycleState: String
+    public let secureLinkState: String
+    public let connectionEpoch: UInt64
+    public let sessionID: UInt64?
+    public let pendingRekeySessionID: UInt64?
+    public let ready: Bool
+    public let authenticated: Bool
+    public let applicationSendingBlocked: Bool
+    public let attempts: Int
+    public let nextRetryMilliseconds: Int?
+    public let protectedTxCounter: UInt64
+    public let protectedRxCounter: UInt64
+    public let protectedFramesSentTotal: UInt64
+    public let protectedFramesReceivedTotal: UInt64
+    public let authenticatedGenerationsTotal: UInt64
+    public let rekeysCompletedTotal: UInt64
+    public let connectedSinceUnixTS: TimeInterval?
+    public let lastIncomingAgeSeconds: TimeInterval?
+    public let compression: ObstacleBridgeMuxCompressionSnapshot
+    public let secureLinkMode: String
+    public let endpointHost: String?
+    public let endpointPort: Int
+    public let configuredCandidates: [String]
+    public let activeTCPChannels: Int
+    public let activeUDPChannels: Int
+    public let failureReason: String?
+    public let myudpStats: [String: UInt64]
+
+    public init(
+        identity: String, transport: String, lifecycleState: String,
+        secureLinkState: String, connectionEpoch: UInt64, sessionID: UInt64?,
+        pendingRekeySessionID: UInt64?, ready: Bool, authenticated: Bool,
+        applicationSendingBlocked: Bool, attempts: Int,
+        nextRetryMilliseconds: Int?, protectedTxCounter: UInt64,
+        protectedRxCounter: UInt64, protectedFramesSentTotal: UInt64,
+        protectedFramesReceivedTotal: UInt64,
+        authenticatedGenerationsTotal: UInt64, rekeysCompletedTotal: UInt64,
+        connectedSinceUnixTS: TimeInterval?, lastIncomingAgeSeconds: TimeInterval?,
+        compression: ObstacleBridgeMuxCompressionSnapshot, secureLinkMode: String,
+        endpointHost: String?, endpointPort: Int, configuredCandidates: [String],
+        activeTCPChannels: Int, activeUDPChannels: Int, failureReason: String?,
+        myudpStats: [String: UInt64]
+    ) {
+        self.identity = identity; self.transport = transport; self.lifecycleState = lifecycleState
+        self.secureLinkState = secureLinkState; self.connectionEpoch = connectionEpoch
+        self.sessionID = sessionID; self.pendingRekeySessionID = pendingRekeySessionID
+        self.ready = ready; self.authenticated = authenticated
+        self.applicationSendingBlocked = applicationSendingBlocked; self.attempts = attempts
+        self.nextRetryMilliseconds = nextRetryMilliseconds; self.protectedTxCounter = protectedTxCounter
+        self.protectedRxCounter = protectedRxCounter; self.protectedFramesSentTotal = protectedFramesSentTotal
+        self.protectedFramesReceivedTotal = protectedFramesReceivedTotal
+        self.authenticatedGenerationsTotal = authenticatedGenerationsTotal; self.rekeysCompletedTotal = rekeysCompletedTotal
+        self.connectedSinceUnixTS = connectedSinceUnixTS; self.lastIncomingAgeSeconds = lastIncomingAgeSeconds
+        self.compression = compression; self.secureLinkMode = secureLinkMode
+        self.endpointHost = endpointHost; self.endpointPort = endpointPort
+        self.configuredCandidates = configuredCandidates; self.activeTCPChannels = activeTCPChannels
+        self.activeUDPChannels = activeUDPChannels; self.failureReason = failureReason; self.myudpStats = myudpStats
+    }
+}
+
 public enum ObstacleBridgeAdminSnapshotSupport {
     /// Maps the portable ChannelMux service catalog to the role shown by the
     /// Admin API. `own_servers` accepts local connections on this runtime;
@@ -197,6 +263,85 @@ public enum ObstacleBridgeAdminSnapshotSupport {
         payload["throttle"] = normalizedThrottle
         payload["runtime"] = runtime
         return payload
+    }
+
+    /// Renders a complete peer row from the portable facts used by every
+    /// native host. No HTTP adapter constructs protocol or compression schema.
+    public static func peerEnvelope(facts: ObstacleBridgeAdminPeerFacts) -> [String: Any] {
+        let transportConnected = facts.lifecycleState == "connected"
+        let secureLinkEnabled = facts.secureLinkMode != "off"
+        let secureLinkConnected = secureLinkEnabled ? facts.authenticated : transportConnected
+        let compressionConnected = facts.compression.enabled && facts.ready
+        let compression: [String: Any] = [
+            "enabled": facts.compression.enabled, "algorithm": facts.compression.algorithm,
+            "level": facts.compression.level, "min_bytes": facts.compression.minimumBodyBytes,
+            "compress_attempts_total": facts.compression.compressAttemptsTotal,
+            "compress_applied_total": facts.compression.compressAppliedTotal,
+            "compress_skipped_no_gain_total": facts.compression.compressSkippedNoGainTotal,
+            "compress_input_bytes_total": facts.compression.compressInputBytesTotal,
+            "compress_output_bytes_total": facts.compression.compressOutputBytesTotal,
+            "compressed_frames_sent_total": facts.compression.compressedFramesSentTotal,
+            "compressed_frames_received_total": facts.compression.compressedFramesReceivedTotal,
+            "compressed_input_bytes_sent_total": facts.compression.compressedInputBytesSentTotal,
+            "compressed_output_bytes_sent_total": facts.compression.compressedOutputBytesSentTotal,
+            "compressed_input_bytes_received_total": facts.compression.compressedInputBytesReceivedTotal,
+            "compressed_output_bytes_received_total": facts.compression.compressedOutputBytesReceivedTotal,
+            "uncompressed_frames_sent_total": facts.compression.uncompressedFramesSentTotal,
+            "uncompressed_frames_received_total": facts.compression.uncompressedFramesReceivedTotal,
+            "uncompressed_bytes_sent_total": facts.compression.uncompressedBytesSentTotal,
+            "uncompressed_bytes_received_total": facts.compression.uncompressedBytesReceivedTotal,
+            "decompress_ok_total": facts.compression.decompressOKTotal,
+            "decompress_fail_total": facts.compression.decompressFailTotal,
+            "rejected_frames_total": facts.compression.rejectedFramesTotal,
+            "rejected_bytes_total": facts.compression.rejectedBytesTotal,
+        ]
+        let layers: [[String: Any]] = [
+            ["layer": "transport", "transport": facts.transport, "state": facts.lifecycleState, "epoch": facts.connectionEpoch, "connected": transportConnected, "app_ready": facts.ready],
+            ["layer": "secure_link", "transport": facts.transport, "state": facts.secureLinkState, "epoch": facts.connectionEpoch, "connected": secureLinkConnected, "app_ready": facts.ready],
+            ["layer": "compression", "transport": facts.transport, "state": compressionConnected ? "connected" : "disconnected", "epoch": facts.connectionEpoch, "connected": compressionConnected, "app_ready": facts.ready],
+        ]
+        var extra: [String: Any] = [
+            "configured_candidates": facts.configuredCandidates,
+            "active_host": facts.endpointHost ?? NSNull(),
+            "port": facts.endpointPort,
+            "failure_reason": facts.failureReason ?? NSNull(),
+        ]
+        if facts.transport == "myudp" {
+            extra["myudp"] = facts.myudpStats
+        }
+        return peerEnvelope(
+            id: facts.identity, peerID: facts.identity, transport: facts.transport,
+            state: facts.lifecycleState, connected: transportConnected, appReady: facts.ready,
+            peer: ["host": (facts.endpointHost as Any?) ?? NSNull(), "port": facts.endpointPort],
+            connectionEpoch: facts.connectionEpoch,
+            connectedSinceUnixTS: facts.connectedSinceUnixTS ?? NSNull(),
+            lastIncomingAgeSeconds: facts.lastIncomingAgeSeconds ?? NSNull(),
+            rttEstimateMS: facts.myudpStats["rtt_est_ms"] ?? 0,
+            transmitDelayEstimateMS: facts.myudpStats["transmit_delay_est_ms"] ?? 0,
+            decodeErrors: facts.myudpStats["stream_decode_errors"] ?? 0,
+            inflight: facts.myudpStats["inflight"] ?? 0,
+            openConnections: ["tcp": facts.activeTCPChannels, "udp": facts.activeUDPChannels, "tun": 0],
+            connectionLayers: layers,
+            secureLink: [
+                "state": facts.secureLinkState, "authenticated": facts.authenticated,
+                "session_id": facts.sessionID ?? NSNull(),
+                "pending_rekey_session_id": facts.pendingRekeySessionID ?? NSNull(),
+                "application_sending_blocked": facts.applicationSendingBlocked,
+                "attempts": facts.attempts, "next_retry_milliseconds": facts.nextRetryMilliseconds ?? NSNull(),
+                "protected_tx_counter": facts.protectedTxCounter, "protected_rx_counter": facts.protectedRxCounter,
+                "protected_frames_sent_total": facts.protectedFramesSentTotal,
+                "protected_frames_received_total": facts.protectedFramesReceivedTotal,
+                "authenticated_generations_total": facts.authenticatedGenerationsTotal,
+                "rekeys_completed_total": facts.rekeysCompletedTotal,
+                "enabled": secureLinkEnabled, "mode": facts.secureLinkMode,
+                "rekey_in_progress": facts.pendingRekeySessionID != nil,
+                "frames_from_client_passed_total": facts.protectedFramesSentTotal,
+                "frames_from_client_dropped_total": 0,
+                "frames_to_client_passed_total": facts.protectedFramesReceivedTotal,
+                "connected_since_unix_ts": facts.connectedSinceUnixTS ?? NSNull(),
+            ],
+            compressionLayer: compression, extra: extra
+        )
     }
 
     /// The live socket is a high-frequency rendering channel, not a transport

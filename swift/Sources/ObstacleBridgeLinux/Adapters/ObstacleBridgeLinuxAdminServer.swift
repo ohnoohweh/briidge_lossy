@@ -712,7 +712,12 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                 "queue_depth": status.receiveQueueDepth,
                 "failure_reason": status.receiveFailureReason as Any,
             ],
-            "peer": peerPayload(status.peer),
+            "peer": ObstacleBridgeAdminSnapshotSupport.peerEnvelope(facts: peerFacts(
+                status.peer,
+                identity: "configured-peer",
+                endpointHost: status.activeHost ?? status.configuredCandidates.first,
+                status: status
+            )),
             "build": buildInfoProvider(),
         ]
         payload["runtime_metrics"] = ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()
@@ -763,134 +768,34 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private func peersPayload() -> [[String: Any]] {
         let status = statusProvider()
         return ObstacleBridgeAdminSnapshotSupport.peersSnapshotForAPI(peersProvider().map { row in
-            var peer = peerPayload(row.snapshot, identity: row.identity)
-            let transportConnected = row.snapshot.lifecycleState == "connected"
-            let secureLinkEnabled = status.secureLinkMode != "off"
-            let secureLinkConnected = secureLinkEnabled ? row.snapshot.authenticated : transportConnected
-            let compressionConnected = row.snapshot.compression.enabled && row.snapshot.ready
             let endpointHost = status.activeHost ?? status.configuredCandidates.first
-            let peerHost: Any = endpointHost ?? NSNull()
-            let connectionLayers: [[String: Any]] = [
-                [
-                    "layer": "transport",
-                    "transport": row.snapshot.transport,
-                    "state": row.snapshot.lifecycleState,
-                    "epoch": row.snapshot.connectionEpoch,
-                    "connected": transportConnected,
-                    "app_ready": row.snapshot.ready,
-                ],
-                [
-                    "layer": "secure_link",
-                    "transport": row.snapshot.transport,
-                    "state": row.snapshot.secureLinkState,
-                    "epoch": row.snapshot.connectionEpoch,
-                    "connected": secureLinkConnected,
-                    "app_ready": row.snapshot.ready,
-                ],
-                [
-                    "layer": "compression",
-                    "transport": row.snapshot.transport,
-                    "state": compressionConnected ? "connected" : "disconnected",
-                    "epoch": row.snapshot.connectionEpoch,
-                    "connected": compressionConnected,
-                    "app_ready": row.snapshot.ready,
-                ],
-            ]
-            peer["id"] = row.identity
-            peer["connected"] = transportConnected
-            peer["connected_since_unix_ts"] = row.snapshot.connectedSinceUnixTS as Any
-            peer["last_incoming_age_seconds"] = row.snapshot.lastIncomingAgeSeconds as Any
-            peer["peer"] = ["host": peerHost, "port": status.port]
-            peer["connection_layers"] = connectionLayers
-            if var secureLink = peer["secure_link"] as? [String: Any] {
-                secureLink["enabled"] = secureLinkEnabled
-                secureLink["mode"] = status.secureLinkMode
-                secureLink["rekey_in_progress"] = row.snapshot.pendingRekeySessionID != nil
-                secureLink["frames_from_client_passed_total"] = row.snapshot.protectedFramesSentTotal
-                secureLink["frames_from_client_dropped_total"] = 0
-                secureLink["frames_to_client_passed_total"] = row.snapshot.protectedFramesReceivedTotal
-                secureLink["connected_since_unix_ts"] = row.snapshot.connectedSinceUnixTS as Any
-                peer["secure_link"] = secureLink
-            }
-            // The shared WebAdmin page reads `compress_layer`; retain the
-            // original Linux spelling for existing API consumers as well.
-            peer["compress_layer"] = peer["compression_layer"]
-            if var compression = peer["compress_layer"] as? [String: Any] {
-                compression["decompress_ok_total"] = row.snapshot.compression.decompressOKTotal
-                compression["decompress_fail_total"] = row.snapshot.compression.decompressFailTotal
-                peer["compress_layer"] = compression
-            }
-            if row.snapshot.transport == "myudp" {
-                peer["myudp"] = row.snapshot.myudpStats
-                peer["rtt_est_ms"] = row.snapshot.myudpStats["rtt_est_ms"] ?? 0
-                peer["transmit_delay_est_ms"] = row.snapshot.myudpStats["transmit_delay_est_ms"] ?? 0
-                peer["decode_errors"] = row.snapshot.myudpStats["stream_decode_errors"] ?? 0
-                peer["inflight"] = row.snapshot.myudpStats["inflight"] ?? 0
-            }
-            peer["open_connections"] = [
-                "tcp": status.activeTCPChannels,
-                "udp": status.activeUDPChannels,
-                "tun": 0,
-            ]
-            peer["configured_candidates"] = status.configuredCandidates
-            peer["active_host"] = status.activeHost as Any
-            peer["port"] = status.port
-            peer["failure_reason"] = status.failureReason as Any
-            return peer
+            return ObstacleBridgeAdminSnapshotSupport.peerEnvelope(facts: peerFacts(
+                row.snapshot, identity: row.identity, endpointHost: endpointHost, status: status
+            ))
         })
     }
 
-    /// Serialize the one Core/adapter-derived peer projection. Do not read
-    /// configuration secrets or construct protocol counters in this HTTP
-    /// adapter: all SecureLink fields arrive through `status.peer`.
-    private func peerPayload(_ peer: ObstacleBridgeLinuxPeerSnapshot, identity: String = "configured-peer") -> [String: Any] {
-        return [
-            "peer_id": identity,
-            "transport": peer.transport,
-            "state": peer.lifecycleState,
-            "connection_epoch": peer.connectionEpoch,
-            "app_ready": peer.ready,
-            "secure_link": [
-                "state": peer.secureLinkState,
-                "authenticated": peer.authenticated,
-                "session_id": peer.sessionID ?? NSNull(),
-                "pending_rekey_session_id": peer.pendingRekeySessionID ?? NSNull(),
-                "application_sending_blocked": peer.applicationSendingBlocked,
-                "attempts": peer.attempts,
-                "next_retry_milliseconds": peer.nextRetryMilliseconds ?? NSNull(),
-                "protected_tx_counter": peer.protectedTxCounter,
-                "protected_rx_counter": peer.protectedRxCounter,
-                "protected_frames_sent_total": peer.protectedFramesSentTotal,
-                "protected_frames_received_total": peer.protectedFramesReceivedTotal,
-                "authenticated_generations_total": peer.authenticatedGenerationsTotal,
-                "rekeys_completed_total": peer.rekeysCompletedTotal,
-            ],
-            "compression_layer": [
-                "enabled": peer.compression.enabled,
-                "algorithm": peer.compression.algorithm,
-                "level": peer.compression.level,
-                "min_bytes": peer.compression.minimumBodyBytes,
-                "compress_attempts_total": peer.compression.compressAttemptsTotal,
-                "compress_applied_total": peer.compression.compressAppliedTotal,
-                "compress_skipped_no_gain_total": peer.compression.compressSkippedNoGainTotal,
-                "compress_input_bytes_total": peer.compression.compressInputBytesTotal,
-                "compress_output_bytes_total": peer.compression.compressOutputBytesTotal,
-                "compressed_frames_sent_total": peer.compression.compressedFramesSentTotal,
-                "compressed_frames_received_total": peer.compression.compressedFramesReceivedTotal,
-                "compressed_input_bytes_sent_total": peer.compression.compressedInputBytesSentTotal,
-                "compressed_output_bytes_sent_total": peer.compression.compressedOutputBytesSentTotal,
-                "compressed_input_bytes_received_total": peer.compression.compressedInputBytesReceivedTotal,
-                "compressed_output_bytes_received_total": peer.compression.compressedOutputBytesReceivedTotal,
-                "uncompressed_frames_sent_total": peer.compression.uncompressedFramesSentTotal,
-                "uncompressed_frames_received_total": peer.compression.uncompressedFramesReceivedTotal,
-                "uncompressed_bytes_sent_total": peer.compression.uncompressedBytesSentTotal,
-                "uncompressed_bytes_received_total": peer.compression.uncompressedBytesReceivedTotal,
-                "decompress_ok_total": peer.compression.decompressOKTotal,
-                "decompress_fail_total": peer.compression.decompressFailTotal,
-                "rejected_frames_total": peer.compression.rejectedFramesTotal,
-                "rejected_bytes_total": peer.compression.rejectedBytesTotal,
-            ],
-        ]
+    /// Convert Linux-owned runtime state into portable facts. Core owns every
+    /// `/api/peers` key and nested object derived from those facts.
+    private func peerFacts(_ peer: ObstacleBridgeLinuxPeerSnapshot, identity: String, endpointHost: String?, status: ObstacleBridgeLinuxRuntimeStatus) -> ObstacleBridgeAdminPeerFacts {
+        .init(
+            identity: identity, transport: peer.transport, lifecycleState: peer.lifecycleState,
+            secureLinkState: peer.secureLinkState, connectionEpoch: peer.connectionEpoch,
+            sessionID: peer.sessionID, pendingRekeySessionID: peer.pendingRekeySessionID,
+            ready: peer.ready, authenticated: peer.authenticated,
+            applicationSendingBlocked: peer.applicationSendingBlocked, attempts: peer.attempts,
+            nextRetryMilliseconds: peer.nextRetryMilliseconds, protectedTxCounter: peer.protectedTxCounter,
+            protectedRxCounter: peer.protectedRxCounter, protectedFramesSentTotal: peer.protectedFramesSentTotal,
+            protectedFramesReceivedTotal: peer.protectedFramesReceivedTotal,
+            authenticatedGenerationsTotal: peer.authenticatedGenerationsTotal,
+            rekeysCompletedTotal: peer.rekeysCompletedTotal,
+            connectedSinceUnixTS: peer.connectedSinceUnixTS,
+            lastIncomingAgeSeconds: peer.lastIncomingAgeSeconds, compression: peer.compression,
+            secureLinkMode: status.secureLinkMode, endpointHost: endpointHost, endpointPort: status.port,
+            configuredCandidates: status.configuredCandidates, activeTCPChannels: status.activeTCPChannels,
+            activeUDPChannels: status.activeUDPChannels, failureReason: status.failureReason,
+            myudpStats: peer.myudpStats
+        )
     }
 
     private func json(_ object: Any) -> Data { ObstacleBridgeCanonicalJSON.data(fromJSONObject: object) ?? Data("{}".utf8) }

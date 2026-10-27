@@ -31,6 +31,35 @@ struct ObstacleBridgeTelemetryTests {
         #expect(peer["configured_candidates"] as? [String] == ["198.51.100.7"])
     }
 
+    @Test func typedPeerFactsKeepProtocolAndCompressionSchemaInCore() {
+        let compression = ObstacleBridgeMuxCompressionTelemetry(
+            policy: .init(enabled: true)
+        )
+        compression.recordFailedDecompression(bodyBytes: 17)
+        let peer = ObstacleBridgeAdminSnapshotSupport.peerEnvelope(facts: .init(
+            identity: "configured-peer", transport: "myudp", lifecycleState: "connected",
+            secureLinkState: "authenticated", connectionEpoch: 4, sessionID: 9,
+            pendingRekeySessionID: 10, ready: true, authenticated: true,
+            applicationSendingBlocked: false, attempts: 1, nextRetryMilliseconds: nil,
+            protectedTxCounter: 12, protectedRxCounter: 13, protectedFramesSentTotal: 14,
+            protectedFramesReceivedTotal: 15, authenticatedGenerationsTotal: 2,
+            rekeysCompletedTotal: 1, connectedSinceUnixTS: 20, lastIncomingAgeSeconds: 1,
+            compression: compression.snapshot(), secureLinkMode: "psk",
+            endpointHost: "198.51.100.7", endpointPort: 443,
+            configuredCandidates: ["198.51.100.7"], activeTCPChannels: 3,
+            activeUDPChannels: 4, failureReason: nil,
+            myudpStats: ["rtt_est_ms": 7, "inflight": 2]
+        ))
+        let secureLink = try! #require(peer["secure_link"] as? [String: Any])
+        let compressionLayer = try! #require(peer["compress_layer"] as? [String: Any])
+        #expect(secureLink["pending_rekey_session_id"] as? UInt64 == 10)
+        #expect(secureLink["rekey_in_progress"] as? Bool == true)
+        #expect(compressionLayer["decompress_fail_total"] as? UInt64 == 1)
+        #expect((peer["connection_layers"] as? [[String: Any]])?.count == 3)
+        #expect(peer["rtt_est_ms"] as? UInt64 == 7)
+        #expect(JSONSerialization.isValidJSONObject(peer))
+    }
+
     @Test func adminStatusEnvelopeOwnsSharedDashboardFields() {
         let status = ObstacleBridgeAdminSnapshotSupport.statusEnvelope(
             runtimeOwner: "native",
