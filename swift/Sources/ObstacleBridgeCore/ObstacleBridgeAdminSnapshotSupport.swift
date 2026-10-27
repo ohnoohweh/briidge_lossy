@@ -1,6 +1,14 @@
 import Foundation
 
 public enum ObstacleBridgeAdminSnapshotSupport {
+    /// Maps the portable ChannelMux service catalog to the role shown by the
+    /// Admin API. `own_servers` accepts local connections on this runtime;
+    /// `remote_servers` represents a listener owned by the authenticated peer.
+    /// This is protocol semantics, not a host socket implementation detail.
+    public static func serviceConnectionRole(catalog: String) -> String {
+        catalog == "own_servers" ? "server" : "client"
+    }
+
     public static func statusEnvelope(
         runtimeOwner: String,
         runtimeMode: String,

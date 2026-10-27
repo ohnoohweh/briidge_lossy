@@ -11,6 +11,12 @@ enum ObstacleBridgeAppleRuntimeMetricsSampler {
 }
 
 enum ObstacleBridgeRuntimeConfig {
+    /// Service-catalog names are part of the portable Admin and ChannelMux
+    /// contract. Keeping the vocabulary here prevents Apple hosts from
+    /// independently spelling the same direction markers.
+    static let ownServiceCatalog = "own_servers"
+    static let remoteServiceCatalog = "remote_servers"
+
     /// Version shared by desktop hosts when handing runtime configuration to an isolated worker.
     static let isolatedWorkerProtocolVersion = 1
     /// The iOS packet-flow bridge is the only Apple runtime with this FIFO, but

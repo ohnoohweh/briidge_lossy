@@ -1145,12 +1145,12 @@ final class PythonOverlayPeer {
             s.close()
             """
         }
-        if mode == "myudp-securelink" || mode == "myudp-secure-mux" || mode == "myudp-securelink-duplex" || mode == "myudp-securelink-mux-duplex" || mode == "myudp-securelink-close-after-ack" || mode == "myudp-securelink-silent" || mode == "myudp-securelink-malformed" || mode == "myudp-securelink-replay" || mode == "myudp-securelink-rekey" {
+        if mode == "myudp-securelink" || mode == "myudp-secure-mux" || mode == "myudp-secure-mux-stream" || mode == "myudp-securelink-duplex" || mode == "myudp-securelink-mux-duplex" || mode == "myudp-securelink-close-after-ack" || mode == "myudp-securelink-silent" || mode == "myudp-securelink-malformed" || mode == "myudp-securelink-replay" || mode == "myudp-securelink-rekey" {
             return """
             import hashlib, hmac, socket, struct
             from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
             MODE = "\(mode)"
-            PREFIX = \(mode == "myudp-secure-mux" ? "b''" : "b'python:'")
+            PREFIX = \(mode == "myudp-secure-mux" || mode == "myudp-secure-mux-stream" ? "b''" : "b'python:'")
             s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
             def recv():
                 while True:
@@ -1193,6 +1193,9 @@ final class PythonOverlayPeer {
                 first_plain=b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello' if MODE.endswith('mux-duplex') else b'python-first'
                 first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),first_plain,first),3,peer)
                 app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,3); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),b'python:'+plain,response),4,peer)
+            elif MODE == 'myudp-secure-mux-stream':
+                app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),plain,response),counter,peer)
+                app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(3).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,3); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),plain,response),counter,peer)
             else:
                 app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),PREFIX+plain,response),counter,peer)
             if MODE not in ('myudp-securelink-close-after-ack', 'myudp-securelink-silent'):

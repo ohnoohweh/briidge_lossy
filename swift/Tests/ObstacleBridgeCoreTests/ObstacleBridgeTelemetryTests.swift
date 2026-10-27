@@ -3,6 +3,11 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeTelemetryTests {
+    @Test func adminServiceConnectionRolesFollowThePortableCatalogContract() {
+        #expect(ObstacleBridgeAdminSnapshotSupport.serviceConnectionRole(catalog: "own_servers") == "server")
+        #expect(ObstacleBridgeAdminSnapshotSupport.serviceConnectionRole(catalog: "remote_servers") == "client")
+    }
+
     private func vectorEvent() throws -> ObstacleBridgeTelemetryEvent {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

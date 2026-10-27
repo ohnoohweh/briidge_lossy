@@ -1562,6 +1562,7 @@ def test_macos_swift_host_runner_routes_tun_and_local_accepts_through_active_ove
 
 def test_macos_host_runner_applies_core_catalog_listener_replacements() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    admin_snapshot_support = (CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
     for owner in (
         "ObstacleBridgeTcpOverlayTransportOwner",
         "ObstacleBridgeUdpOverlayTransportOwner",
@@ -1579,6 +1580,10 @@ def test_macos_host_runner_applies_core_catalog_listener_replacements() -> None:
     assert "startCatalogTCPService(native)" in source
     assert "startCatalogUDPService(native)" in source
     assert "serviceCatalogSink: { [weak self] install in" in source
+    assert "ObstacleBridgeRuntimeConfig.ownServiceCatalog" in source
+    assert "ObstacleBridgeRuntimeConfig.remoteServiceCatalog" in source
+    assert "ObstacleBridgeAdminSnapshotSupport.serviceConnectionRole(catalog: catalog)" in source
+    assert "func serviceConnectionRole(catalog: String) -> String" in admin_snapshot_support
 
 
 def test_macos_swift_host_runner_uses_shared_overlay_peer_endpoint_lookup() -> None:

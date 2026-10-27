@@ -804,6 +804,7 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         let connections = runtime.connectionsForAdmin()
         let listenerRow = try #require((connections["tcp"] as? [[String: Any]])?.first)
         #expect(listenerRow["state"] as? String == "listening")
+        #expect(listenerRow["role"] as? String == "server")
         #expect(listenerRow["service_name"] as? String == "echo")
         #expect(listenerRow["local_port"] as? Int == runtime.localServicePorts()[1])
         let fd = try connectTCP(port: try #require(runtime.localServicePorts()[1]))
@@ -823,6 +824,30 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         _ = close(fd)
         #expect(waitUntil { runtime.status().activeTCPChannels == 0 })
         runtime.stop()
+    }
+
+    @Test func liveRuntimeRoutesLocalTCPServiceFramesThroughAuthenticatedMyUDPPythonPeer() throws {
+        let peer = try PythonOverlayPeer(mode: "myudp-secure-mux-stream")
+        defer { peer.stop() }
+        let service = ObstacleBridgeLinuxServiceSpec(serviceID: 1, name: "echo", listenProtocol: .tcp, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: 7)
+        let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(
+            transport: .myudp, host: "127.0.0.1", port: peer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8), ownServices: [service]
+        ))
+        let connected = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { if $0.state == "connected" { connected.signal() } }
+        runtime.start()
+        defer { runtime.stop() }
+        #expect(connected.wait(timeout: .now() + 3) == .success)
+
+        let fd = try connectTCP(port: try #require(runtime.localServicePorts()[1]))
+        defer { _ = close(fd) }
+        let payload = Data("mux-through-myudp-python".utf8)
+        #expect(payload.withUnsafeBytes { write(fd, $0.baseAddress, payload.count) } == payload.count)
+        var received = [UInt8](repeating: 0, count: payload.count)
+        #expect(read(fd, &received, received.count) == payload.count)
+        #expect(Data(received) == payload)
+        #expect(waitUntil { runtime.status().activeTCPChannels == 1 })
     }
 
     @Test func liveRuntimeRoutesLocalUdpServiceFramesThroughAuthenticatedPythonPeer() throws {

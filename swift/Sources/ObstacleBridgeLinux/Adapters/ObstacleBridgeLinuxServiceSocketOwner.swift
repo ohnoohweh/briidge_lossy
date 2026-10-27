@@ -174,7 +174,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 "peer_id": peerID,
                 "svc_id": Int(spec.serviceID),
                 "service_name": spec.name ?? "",
-                "role": "client",
+                "role": ObstacleBridgeAdminSnapshotSupport.serviceConnectionRole(catalog: catalog),
                 "source": spec.listenHost,
                 "local": ["host": spec.listenHost, "port": boundListenerPort],
                 "local_port": boundListenerPort,
