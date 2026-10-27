@@ -24,6 +24,8 @@ public struct ObstacleBridgeAdminPeerFacts: Sendable {
     public let rekeysCompletedTotal: UInt64
     public let connectedSinceUnixTS: TimeInterval?
     public let lastIncomingAgeSeconds: TimeInterval?
+    public let observedPublicIP: String
+    public let observedPublicPort: Int?
     public let compression: ObstacleBridgeMuxCompressionSnapshot
     public let secureLinkMode: String
     public let endpointHost: String?
@@ -44,6 +46,7 @@ public struct ObstacleBridgeAdminPeerFacts: Sendable {
         protectedFramesReceivedTotal: UInt64,
         authenticatedGenerationsTotal: UInt64, rekeysCompletedTotal: UInt64,
         connectedSinceUnixTS: TimeInterval?, lastIncomingAgeSeconds: TimeInterval?,
+        observedPublicIP: String = "", observedPublicPort: Int? = nil,
         compression: ObstacleBridgeMuxCompressionSnapshot, secureLinkMode: String,
         endpointHost: String?, endpointPort: Int, configuredCandidates: [String],
         activeTCPChannels: Int, activeUDPChannels: Int, failureReason: String?,
@@ -59,6 +62,7 @@ public struct ObstacleBridgeAdminPeerFacts: Sendable {
         self.protectedFramesReceivedTotal = protectedFramesReceivedTotal
         self.authenticatedGenerationsTotal = authenticatedGenerationsTotal; self.rekeysCompletedTotal = rekeysCompletedTotal
         self.connectedSinceUnixTS = connectedSinceUnixTS; self.lastIncomingAgeSeconds = lastIncomingAgeSeconds
+        self.observedPublicIP = observedPublicIP; self.observedPublicPort = observedPublicPort
         self.compression = compression; self.secureLinkMode = secureLinkMode
         self.endpointHost = endpointHost; self.endpointPort = endpointPort
         self.configuredCandidates = configuredCandidates; self.activeTCPChannels = activeTCPChannels
@@ -305,6 +309,8 @@ public enum ObstacleBridgeAdminSnapshotSupport {
             "active_host": facts.endpointHost ?? NSNull(),
             "port": facts.endpointPort,
             "failure_reason": facts.failureReason ?? NSNull(),
+            "observed_public_ip": facts.observedPublicIP,
+            "observed_public_port": facts.observedPublicPort ?? NSNull(),
         ]
         if facts.transport == "myudp" {
             extra["myudp"] = facts.myudpStats

@@ -57,6 +57,8 @@ REQ-OVL-002:
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_large_payload_is_chunked_and_backpressured_by_inflight_window
     - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_tcp_inbound_channels_are_scoped_to_authenticated_peer
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebSocketOverlayRuntimeTests.swift::clientLayerAdapterRequestsAndProjectsObservedPublicEndpoint
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebSocketOverlayRuntimeTests.swift::udpPeerRuntimeEmitsAndDeliversPortableRecordEffects
 
 REQ-OVL-003:
   integration_tests:

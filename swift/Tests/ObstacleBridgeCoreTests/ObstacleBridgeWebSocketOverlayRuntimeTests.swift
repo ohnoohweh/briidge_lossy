@@ -34,6 +34,34 @@ struct ObstacleBridgeWebSocketOverlayRuntimeTests {
         #expect(client.protocolState?.sessionID == 91)
     }
 
+    @Test func clientLayerAdapterRequestsAndProjectsObservedPublicEndpoint() throws {
+        let client = ObstacleBridgeOverlayLayerTransportAdapter(clientPSK: "adapter-psk")
+        let started = try client.handleTransportConnected(
+            sessionID: 93,
+            clientNonce: Data(repeating: 9, count: 32)
+        )
+        #expect(started.emittedFrames.count == 1)
+        let serverSecureLink = ObstacleBridgeSecureLinkPskRuntime(clientMode: false, psk: "adapter-psk")
+        let serverHello = serverSecureLink.handleInboundFrame(started.emittedFrames[0])
+        let clientProof = client.handleInboundFrame(serverHello.emittedFrames[0])
+        let serverAcknowledgement = serverSecureLink.handleInboundFrame(clientProof.emittedFrames[0])
+        let authenticated = client.handleInboundFrame(serverAcknowledgement.emittedFrames[0])
+        let request = try #require(authenticated.emittedFrames.first)
+        #expect(request.prefix(4) == Data([0x4f, 0x42, 0x50, 0x41]))
+
+        let serverAddress = ObstacleBridgePeerAddressProtocolRuntime(clientMode: false)
+        let reply = serverAddress.handleInboundFrame(
+            request,
+            observedPeerHost: "2001:db8::47",
+            observedPeerPort: 44321
+        )
+        #expect(reply.emittedFrames.count == 1)
+        _ = client.handleInboundFrame(reply.emittedFrames[0])
+
+        #expect(client.observedPublicIPSnapshot() == "2001:db8::47")
+        #expect(client.observedPublicPortSnapshot() == 44321)
+    }
+
     @Test func secureLinkBacklogDrainsOneFIFOMessagePerTurn() throws {
         let client = ObstacleBridgeSecureLinkPskTransportAdapter(clientPSK: "adapter-psk")
         let server = ObstacleBridgeSecureLinkPskRuntime(clientMode: false, psk: "adapter-psk")
@@ -79,6 +107,7 @@ struct ObstacleBridgeWebSocketOverlayRuntimeTests {
         let receiver = ObstacleBridgeUdpOverlayPeerRuntime()
         let inbound = try receiver.receiveWire(outbound.frames[0], nowNS: 20)
         #expect(inbound.deliveredPayloads == [Data("udp-core".utf8)])
+        #expect((receiver.protocolStatsSnapshot()["last_rx_wall_ns"] as? UInt64 ?? 0) > 0)
     }
 
     @Test func quicRuntimeProducesThePortableApplicationEnvelope() throws {

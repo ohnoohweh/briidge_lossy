@@ -1,9 +1,9 @@
 import Foundation
 
-final class ObstacleBridgePeerAddressProtocolRuntime {
-    struct InboundSnapshot {
-        var consumed: Bool
-        var emittedFrames: [Data]
+public final class ObstacleBridgePeerAddressProtocolRuntime {
+    public struct InboundSnapshot {
+        public let consumed: Bool
+        public let emittedFrames: [Data]
     }
 
     private static let magic = Data([0x4f, 0x42, 0x50, 0x41]) // OBPA
@@ -17,23 +17,23 @@ final class ObstacleBridgePeerAddressProtocolRuntime {
     private(set) var observedPublicPort: Int?
     private var requestSent = false
 
-    init(clientMode: Bool) {
+    public init(clientMode: Bool) {
         self.clientMode = clientMode
     }
 
-    func handleTransportConnected() -> [Data] {
+    public func handleTransportConnected() -> [Data] {
         guard clientMode, !requestSent else { return [] }
         requestSent = true
         return [Self.header(type: Self.typeRequest, family: 0)]
     }
 
-    func handleTransportDisconnected() {
+    public func handleTransportDisconnected() {
         requestSent = false
         observedPublicIP = ""
         observedPublicPort = nil
     }
 
-    func handleInboundFrame(
+    public func handleInboundFrame(
         _ payload: Data,
         observedPeerHost: String? = nil,
         observedPeerPort: Int? = nil

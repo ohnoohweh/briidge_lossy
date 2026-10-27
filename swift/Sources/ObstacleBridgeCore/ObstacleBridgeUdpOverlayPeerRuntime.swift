@@ -458,6 +458,10 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
             "stream_decode_errors": streamDecodeErrors,
             "frames_to_securelink": framesToSecureLink,
             "frames_from_securelink": framesFromSecureLink,
+            // This monotonic timestamp advances for every accepted myUDP
+            // record, including CONTROL/IDLE traffic that has no application
+            // payload.  Admin "Last incoming" is a transport metric.
+            "last_rx_wall_ns": lastRxWallNS,
             "rtt_est_ms": rttEstMS,
             "transmit_delay_est_ms": transmitDelayEstMS,
         ]

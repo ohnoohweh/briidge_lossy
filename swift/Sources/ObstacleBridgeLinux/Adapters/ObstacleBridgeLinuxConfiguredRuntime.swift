@@ -28,6 +28,8 @@ public struct ObstacleBridgeLinuxPeerSnapshot: Codable, Equatable, Sendable {
     public let rekeysCompletedTotal: UInt64
     public let connectedSinceUnixTS: TimeInterval?
     public let lastIncomingAgeSeconds: TimeInterval?
+    public let observedPublicIP: String
+    public let observedPublicPort: Int?
     public let myudpStats: [String: UInt64]
     public let compression: ObstacleBridgeMuxCompressionSnapshot
 }
@@ -291,6 +293,8 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         overlayAdapter?.secureLinkProtocolState() ?? secureLink?.state ?? secureLinkServer?.state
     }
     public var transportProtocolStats: [String: UInt64] { lowerSession.protocolStatsSnapshot }
+    public var observedPublicIP: String { overlayAdapter?.observedPublicIPSnapshot() ?? "" }
+    public var observedPublicPort: Int? { overlayAdapter?.observedPublicPortSnapshot() }
 
     public func close() {
         overlayAdapter?.handleTransportDisconnected()
@@ -655,11 +659,22 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 authenticatedGenerationsTotal: coreState?.authenticatedGenerationsTotal ?? 0,
                 rekeysCompletedTotal: coreState?.rekeysCompletedTotal ?? 0,
                 connectedSinceUnixTS: admission.connectedSinceUnixTS,
-                lastIncomingAgeSeconds: nil,
+                lastIncomingAgeSeconds: lastIncomingAgeSeconds(
+                    admission.activeSession?.transportProtocolStats["last_rx_wall_ns"]
+                ),
+                observedPublicIP: admission.activeSession?.observedPublicIP ?? "",
+                observedPublicPort: admission.activeSession?.observedPublicPort,
                 myudpStats: admission.activeSession?.transportProtocolStats ?? [:],
                 compression: compressionTelemetry.snapshot()
             )
         )
+    }
+
+    private func lastIncomingAgeSeconds(_ lastRxWallNS: UInt64?) -> TimeInterval? {
+        guard let lastRxWallNS, lastRxWallNS > 0 else { return nil }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now >= lastRxWallNS else { return nil }
+        return TimeInterval(now - lastRxWallNS) / 1_000_000_000.0
     }
 
     /// Sends one payload with bounded fresh-epoch retries. This is a small

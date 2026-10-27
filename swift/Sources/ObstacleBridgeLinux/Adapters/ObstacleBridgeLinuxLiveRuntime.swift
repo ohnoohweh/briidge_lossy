@@ -285,7 +285,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 authenticatedGenerationsTotal: base.peer.authenticatedGenerationsTotal,
                 rekeysCompletedTotal: base.peer.rekeysCompletedTotal,
                 connectedSinceUnixTS: base.peer.connectedSinceUnixTS,
-                lastIncomingAgeSeconds: receive?.lastReceivedUnixTS.map { max(0, Date().timeIntervalSince1970 - $0) },
+                // A receive-worker timestamp only advances for an application
+                // payload. Prefer the lower transport's accepted-record time,
+                // which also covers myUDP CONTROL/IDLE liveness traffic.
+                lastIncomingAgeSeconds: base.peer.lastIncomingAgeSeconds
+                    ?? receive?.lastReceivedUnixTS.map { max(0, Date().timeIntervalSince1970 - $0) },
+                observedPublicIP: base.peer.observedPublicIP,
+                observedPublicPort: base.peer.observedPublicPort,
                 myudpStats: base.peer.myudpStats,
                 // Compression telemetry changes on the live ChannelMux data
                 // path, so do not reuse the connection-start status cache.

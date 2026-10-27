@@ -44,6 +44,7 @@ struct ObstacleBridgeTelemetryTests {
             protectedTxCounter: 12, protectedRxCounter: 13, protectedFramesSentTotal: 14,
             protectedFramesReceivedTotal: 15, authenticatedGenerationsTotal: 2,
             rekeysCompletedTotal: 1, connectedSinceUnixTS: 20, lastIncomingAgeSeconds: 1,
+            observedPublicIP: "2001:db8::47", observedPublicPort: 44321,
             compression: compression.snapshot(), secureLinkMode: "psk",
             endpointHost: "198.51.100.7", endpointPort: 443,
             configuredCandidates: ["198.51.100.7"], activeTCPChannels: 3,
@@ -57,6 +58,8 @@ struct ObstacleBridgeTelemetryTests {
         #expect(compressionLayer["decompress_fail_total"] as? UInt64 == 1)
         #expect((peer["connection_layers"] as? [[String: Any]])?.count == 3)
         #expect(peer["rtt_est_ms"] as? UInt64 == 7)
+        #expect(peer["observed_public_ip"] as? String == "2001:db8::47")
+        #expect(peer["observed_public_port"] as? Int == 44321)
         #expect(JSONSerialization.isValidJSONObject(peer))
     }
 

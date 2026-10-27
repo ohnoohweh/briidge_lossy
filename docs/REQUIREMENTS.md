@@ -71,6 +71,11 @@ same bidirectional transferred-byte contract at both process boundaries.
 Linux and Python Admin peer consumers use the common `/api/peers` wrapper
 object, whose `peers` member contains the peer rows.
 
+Implementation note: `last_incoming_age_seconds` measures the age of the last
+accepted transport record, including myUDP CONTROL/IDLE traffic that is not an
+application payload. Peer-client rows also expose the server-observed public
+source IP and port once the common peer-address protocol reply arrives.
+
 Implementation note: ChannelMux channel identifiers are wire identifiers scoped
 to an authenticated peer session. A Python listener that serves multiple peers
 shall keep TCP socket ownership keyed by both peer and wire channel while
