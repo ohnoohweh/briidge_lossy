@@ -700,6 +700,41 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let status = statusProvider()
         return peersProvider().map { row in
             var peer = peerPayload(row.snapshot, identity: row.identity)
+            let transportConnected = row.snapshot.lifecycleState == "connected"
+            let secureLinkEnabled = status.secureLinkMode != "off"
+            let secureLinkConnected = secureLinkEnabled ? row.snapshot.authenticated : transportConnected
+            let endpointHost = status.activeHost ?? status.configuredCandidates.first
+            let peerHost: Any = endpointHost ?? NSNull()
+            let connectionLayers: [[String: Any]] = [
+                [
+                    "layer": "transport",
+                    "transport": row.snapshot.transport,
+                    "state": row.snapshot.lifecycleState,
+                    "epoch": row.snapshot.connectionEpoch,
+                    "connected": transportConnected,
+                    "app_ready": row.snapshot.ready,
+                ],
+                [
+                    "layer": "secure_link",
+                    "transport": row.snapshot.transport,
+                    "state": row.snapshot.secureLinkState,
+                    "epoch": row.snapshot.connectionEpoch,
+                    "connected": secureLinkConnected,
+                    "app_ready": row.snapshot.ready,
+                ],
+            ]
+            peer["id"] = row.identity
+            peer["connected"] = transportConnected
+            peer["peer"] = ["host": peerHost, "port": status.port]
+            peer["connection_layers"] = connectionLayers
+            if var secureLink = peer["secure_link"] as? [String: Any] {
+                secureLink["enabled"] = secureLinkEnabled
+                secureLink["mode"] = status.secureLinkMode
+                peer["secure_link"] = secureLink
+            }
+            // The shared WebAdmin page reads `compress_layer`; retain the
+            // original Linux spelling for existing API consumers as well.
+            peer["compress_layer"] = peer["compression_layer"]
             peer["configured_candidates"] = status.configuredCandidates
             peer["active_host"] = status.activeHost as Any
             peer["port"] = status.port
