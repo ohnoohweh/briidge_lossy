@@ -187,6 +187,40 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(samples[0] >= 0)
     }
 
+    @Test func myudpSecureLinkBoundaryCountersCoverHandshakeAndPeerAddressDiscovery() throws {
+        let psk = Data("linux-swift-psk".utf8)
+        let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
+        let peerAddressServer = ObstacleBridgePeerAddressProtocolRuntime(clientMode: false)
+        var boundaryDirections: [String] = []
+        let lower = ObstacleBridgeLinuxOverlayTransportSession(
+            exchange: { wire in
+                if wire.prefix(4) == Data([0x4f, 0x42, 0x50, 0x41]) {
+                    let response = peerAddressServer.handleInboundFrame(
+                        wire, observedPeerHost: "203.0.113.47", observedPeerPort: 44321
+                    )
+                    return try #require(response.emittedFrames.first)
+                }
+                if server.state.sessionID == 0 {
+                    return try server.handleClientHello(wire, serverNonce: Data(repeating: 7, count: 32))
+                }
+                return try server.handleClientProof(wire)
+            },
+            secureLinkBoundary: { boundaryDirections.append($0) },
+            close: {}
+        )
+        let adapter = ObstacleBridgeOverlayLayerTransportAdapter(clientPSK: String(decoding: psk, as: UTF8.self))
+        let session = ObstacleBridgeLinuxConfiguredSession(
+            lowerSession: lower, overlayAdapter: adapter, transport: .myudp
+        )
+
+        try session.completeClientHandshake(sessionID: 77, clientNonce: Data(repeating: 9, count: 32))
+
+        #expect(boundaryDirections.filter { $0 == "from_securelink" }.count == 3)
+        #expect(boundaryDirections.filter { $0 == "to_securelink" }.count == 3)
+        #expect(session.observedPublicIP == "203.0.113.47")
+        #expect(session.observedPublicPort == 44321)
+    }
+
     @Test func configuredSessionForwardsPeriodicLowerLivenessProbe() throws {
         var probes = 0
         let lower = ObstacleBridgeLinuxOverlayTransportSession(

@@ -193,6 +193,15 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         }
     }
 
+    /// Counts the frame at the myUDP/SecureLink boundary, rather than at an
+    /// application worker. This includes handshake, rekey, and protected
+    /// application frames just as the Apple transport owner does.
+    func recordSecureLinkBoundaryFrame(direction: String) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        peerRuntime.recordSecureLinkBoundaryFrame(direction: direction)
+    }
+
     private func sendWire(_ wire: Data) throws {
         // The POSIX owner sends only records accepted by the portable facade.
         // The peer engine remains the state owner; this boundary prevents a

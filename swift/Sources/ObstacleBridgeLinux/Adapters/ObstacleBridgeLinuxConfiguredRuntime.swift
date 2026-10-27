@@ -125,6 +125,18 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         }
     }
 
+    init(lowerSession: ObstacleBridgeLinuxOverlayTransportSession, overlayAdapter: ObstacleBridgeOverlayLayerTransportAdapter, transport: ObstacleBridgeLinuxTransport) {
+        self.lower = nil
+        self.lowerSession = lowerSession
+        self.secureLink = nil
+        self.overlayAdapter = overlayAdapter
+        self.secureLinkServer = nil
+        self.snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
+        lowerSession.onLivenessSample = { [weak self] delayMilliseconds in
+            self?.onTransportLivenessSample?(delayMilliseconds)
+        }
+    }
+
     public func send(_ payload: Data) throws -> Data {
         do {
             requestLock.lock()
@@ -157,7 +169,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         do {
             debug("secure_link.outbound", ["protected": isProtected ? "true" : "false", "application_bytes": String(payload.count)])
             if let overlayAdapter {
-                for wire in try overlayAdapter.handleOutboundPayload(payload).emittedFrames { try lowerSession.send(wire) }
+                for wire in try overlayAdapter.handleOutboundPayload(payload).emittedFrames {
+                    try sendSecureLinkBoundaryFrame(wire)
+                }
             }
             else if let secureLink { try lowerSession.send(secureLink.protect(payload)) }
             else if let secureLinkServer { try lowerSession.send(secureLinkServer.protect(payload)) }
@@ -173,8 +187,8 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         do {
             let wire = try lowerSession.receive()
             if let overlayAdapter {
-                let inbound = overlayAdapter.handleInboundFrame(wire)
-                for reply in inbound.emittedFrames { try lowerSession.send(reply) }
+                let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
+                for reply in inbound.emittedFrames { try sendSecureLinkBoundaryFrame(reply) }
                 guard let payload = inbound.deliveredPayloads.first else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
                 return payload
             }
@@ -217,7 +231,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         do {
             let outbound = try overlayAdapter.requestSecureLinkRekey(sessionID: sessionID, clientNonce: clientNonce).emittedFrames
             debug("secure_link.rekey.owner_started", ["frames": String(outbound.count)])
-            for frame in outbound { try lowerSession.send(frame) }
+            for frame in outbound { try sendSecureLinkBoundaryFrame(frame) }
             return outbound.count
         } catch {
             debug("secure_link.rekey.owner_failed", ["reason": error.localizedDescription])
@@ -235,8 +249,8 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
                 let wire = try lowerSession.receive()
                 let payload: Data?
                 if let overlayAdapter {
-                    let inbound = overlayAdapter.handleInboundFrame(wire)
-                    for reply in inbound.emittedFrames { try lowerSession.send(reply) }
+                    let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
+                    for reply in inbound.emittedFrames { try sendSecureLinkBoundaryFrame(reply) }
                     payload = inbound.deliveredPayloads.first
                 } else if let secureLink {
                     payload = try secureLink.unprotect(wire)
@@ -324,11 +338,26 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         var delivered: [Data] = []
         while !pending.isEmpty {
             let outbound = pending.removeFirst()
-            let inbound = overlayAdapter.handleInboundFrame(try lowerSession.exchange(outbound))
+            lowerSession.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+            let wire = try lowerSession.exchange(outbound)
+            let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
             pending.append(contentsOf: inbound.emittedFrames)
             delivered.append(contentsOf: inbound.deliveredPayloads)
         }
         return delivered
+    }
+
+    private func sendSecureLinkBoundaryFrame(_ frame: Data) throws {
+        lowerSession.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+        try lowerSession.send(frame)
+    }
+
+    private func handleSecureLinkBoundaryFrame(
+        _ wire: Data,
+        adapter: ObstacleBridgeOverlayLayerTransportAdapter
+    ) -> ObstacleBridgeOverlayLayerTransportAdapter.InboundSnapshot {
+        lowerSession.recordSecureLinkBoundaryFrame(direction: "to_securelink")
+        return adapter.handleInboundFrame(wire)
     }
 
     private func recordTransportLiveness(since startedAt: TimeInterval) {

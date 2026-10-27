@@ -232,6 +232,9 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     receive: { try datagram.receive().payload },
                     probeLiveness: { try datagram.serviceTimers() },
                     protocolStats: { datagram.protocolStatsSnapshot() },
+                    secureLinkBoundary: { direction in
+                        datagram.recordSecureLinkBoundaryFrame(direction: direction)
+                    },
                     close: { datagram.close() }
                 )
             }
@@ -536,18 +539,20 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
     private let receiveImpl: (() throws -> Data)?
     private let probeLivenessImpl: (() throws -> Void)?
     private let protocolStatsImpl: (() -> [String: UInt64])?
+    private let secureLinkBoundaryImpl: ((String) -> Void)?
     private let closeImpl: () -> Void
     private let lock = NSLock()
     private var closed = false
 
     public var onLivenessSample: ((Double) -> Void)?
 
-    init(exchange: @escaping (Data) throws -> Data, send: ((Data) throws -> Void)? = nil, receive: (() throws -> Data)? = nil, probeLiveness: (() throws -> Void)? = nil, protocolStats: (() -> [String: UInt64])? = nil, close: @escaping () -> Void) {
+    init(exchange: @escaping (Data) throws -> Data, send: ((Data) throws -> Void)? = nil, receive: (() throws -> Data)? = nil, probeLiveness: (() throws -> Void)? = nil, protocolStats: (() -> [String: UInt64])? = nil, secureLinkBoundary: ((String) -> Void)? = nil, close: @escaping () -> Void) {
         self.exchangeImpl = exchange
         self.sendImpl = send
         self.receiveImpl = receive
         self.probeLivenessImpl = probeLiveness
         self.protocolStatsImpl = protocolStats
+        self.secureLinkBoundaryImpl = secureLinkBoundary
         self.closeImpl = close
     }
 
@@ -573,6 +578,12 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
 
     public var supportsLivenessProbes: Bool { probeLivenessImpl != nil }
     public var protocolStatsSnapshot: [String: UInt64] { protocolStatsImpl?() ?? [:] }
+
+    /// The myUDP owner supplies this optional Core-counter hook.  Other
+    /// transports intentionally have no myUDP boundary to report.
+    func recordSecureLinkBoundaryFrame(direction: String) {
+        secureLinkBoundaryImpl?(direction)
+    }
 
     public func probeLiveness() throws {
         lock.lock(); let isClosed = closed; lock.unlock()

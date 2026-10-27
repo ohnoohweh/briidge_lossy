@@ -467,7 +467,10 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
         ]
     }
 
-    func recordSecureLinkBoundaryFrame(direction: String) {
+    /// Records one frame crossing the myUDP/SecureLink boundary. Platform
+    /// transport owners call this at their shared framing boundary so the
+    /// Admin counter is independent of application payload delivery.
+    public func recordSecureLinkBoundaryFrame(direction: String) {
         if direction == "to_securelink" {
             framesToSecureLink &+= 1
         } else {
