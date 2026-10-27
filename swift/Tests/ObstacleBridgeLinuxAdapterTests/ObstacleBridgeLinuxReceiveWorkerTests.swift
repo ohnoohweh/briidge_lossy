@@ -22,6 +22,7 @@ struct ObstacleBridgeLinuxReceiveWorkerTests {
         #expect(values.all.count == 1)
         #expect(values.all.first?.0 == 7)
         #expect(values.all.first?.1 == Data("one".utf8))
+        #expect(worker.snapshot().lastReceivedUnixTS != nil)
         #expect(worker.snapshot().state == "stopped")
     }
 

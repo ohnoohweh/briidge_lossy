@@ -367,6 +367,8 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(compressed.compressOutputBytesTotal < 256)
         #expect(compressed.compressedInputBytesReceivedTotal > 0)
         #expect(compressed.compressedOutputBytesReceivedTotal == 256)
+        #expect(compressed.decompressOKTotal == 1)
+        #expect(compressed.decompressFailTotal == 1)
         #expect(compressed.rejectedFramesTotal == 1)
         #expect(compressed.rejectedBytesTotal == 4)
         // A malformed compressed record is rejected at the Core boundary;

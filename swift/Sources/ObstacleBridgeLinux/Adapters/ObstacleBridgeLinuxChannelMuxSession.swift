@@ -85,7 +85,7 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
             return decoded
         } catch {
             if encoded.messageType >= ObstacleBridgeMuxCompression.compressedFlag {
-                compressionTelemetry.recordRejectedInbound(bodyBytes: encoded.body.count)
+                compressionTelemetry.recordFailedDecompression(bodyBytes: encoded.body.count)
             }
             throw error
         }

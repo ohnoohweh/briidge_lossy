@@ -758,8 +758,8 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             // original Linux spelling for existing API consumers as well.
             peer["compress_layer"] = peer["compression_layer"]
             if var compression = peer["compress_layer"] as? [String: Any] {
-                compression["decompress_ok_total"] = 0
-                compression["decompress_fail_total"] = 0
+                compression["decompress_ok_total"] = row.snapshot.compression.decompressOKTotal
+                compression["decompress_fail_total"] = row.snapshot.compression.decompressFailTotal
                 peer["compress_layer"] = compression
             }
             if row.snapshot.transport == "myudp" {
@@ -827,6 +827,8 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                 "uncompressed_frames_received_total": peer.compression.uncompressedFramesReceivedTotal,
                 "uncompressed_bytes_sent_total": peer.compression.uncompressedBytesSentTotal,
                 "uncompressed_bytes_received_total": peer.compression.uncompressedBytesReceivedTotal,
+                "decompress_ok_total": peer.compression.decompressOKTotal,
+                "decompress_fail_total": peer.compression.decompressFailTotal,
                 "rejected_frames_total": peer.compression.rejectedFramesTotal,
                 "rejected_bytes_total": peer.compression.rejectedBytesTotal,
             ],

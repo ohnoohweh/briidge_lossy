@@ -403,7 +403,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 throw ObstacleBridgeLinuxLiveRuntimeError.notRunning
             }
             do {
-                return try session.send(payload)
+                let reply = try session.send(payload)
+                refreshStatusProjection()
+                return reply
             } catch {
                 if inboundOnly {
                     apply(coordinator.handle(.stop))

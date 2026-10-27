@@ -535,7 +535,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(secureLink["authenticated_generations_total"] as? UInt64 == 1)
         #expect(compression["enabled"] as? Bool == false)
         #expect(webCompression["enabled"] as? Bool == false)
-        #expect(webCompression["decompress_fail_total"] as? Int == 0)
+        #expect(webCompression["decompress_fail_total"] as? UInt64 == 0)
         #expect(compression["algorithm"] as? String == "zlib")
         #expect(compression["compressed_frames_sent_total"] as? UInt64 == 0)
         #expect(compression["compressed_output_bytes_sent_total"] as? UInt64 == 0)
@@ -567,7 +567,34 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(compression["compress_applied_total"] as? UInt64 == 1)
         #expect(compression["compressed_frames_sent_total"] as? UInt64 == 1)
         #expect(compression["compressed_frames_received_total"] as? UInt64 == 1)
+        #expect(compression["decompress_ok_total"] as? UInt64 == 1)
+        #expect(compression["decompress_fail_total"] as? UInt64 == 0)
         #expect((compression["compressed_output_bytes_sent_total"] as? UInt64 ?? 256) < 256)
+    }
+
+    @Test func myudpPeerProjectionExposesLiveTransportTelemetry() async throws {
+        let peer = try PythonOverlayPeer(mode: "myudp-securelink")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .myudp, host: "127.0.0.1", port: peer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8)
+        ))
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime)
+        try server.start()
+        defer { server.stop(); runtime.disconnect() }
+
+        let session = try runtime.connect(sessionID: 79, clientNonce: Data(repeating: 9, count: 32))
+        #expect(try session.send(Data("telemetry".utf8)) == Data("python:telemetry".utf8))
+        let peersDocument = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [String: Any])
+        let peers = try #require(peersDocument["peers"] as? [[String: Any]])
+        let row = try #require(peers.first)
+        let myudp = try #require(row["myudp"] as? [String: Any])
+
+        #expect(row["connected_since_unix_ts"] as? TimeInterval != nil)
+        #expect(myudp["batch_datagrams_sent"] as? UInt64 ?? 0 > 0)
+        #expect(myudp["batch_datagrams_received"] as? UInt64 ?? 0 > 0)
+        #expect(row["rtt_est_ms"] as? UInt64 != nil)
+        #expect(row["transmit_delay_est_ms"] as? UInt64 != nil)
     }
 
     @Test func myudpListenerAdminProjectsEachAuthenticatedPeerWithoutPSK() async throws {
