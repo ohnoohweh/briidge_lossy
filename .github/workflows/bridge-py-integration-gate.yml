@@ -137,10 +137,14 @@ jobs:
           rm -rf "$GITHUB_WORKSPACE/build/linux/.swift-build"
           OBSTACLEBRIDGE_LINUX_SWIFT_JOBS=1 ./scripts/build_linux_app.sh
 
-      - name: Run Linux Swift live-runtime closure tests
+      - name: Qualify Linux common-IPC lifecycle matrix
         run: |
           OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
           swift test --filter ObstacleBridgeLinuxRuntimeConfigurationTests
+          # The shared Desktop target carries the stale-reply retirement rule
+          # used by the native Admin child.  Keep it in the Linux host-local
+          # qualification lane with the packaged Admin and helper probes.
+          swift test --filter ObstacleBridgeWorkerIPCTests
           swift test --filter ObstacleBridgeLinuxTunHelperAdapterTests
           swift test --filter ObstacleBridgeLinuxTunDeviceTests
 
