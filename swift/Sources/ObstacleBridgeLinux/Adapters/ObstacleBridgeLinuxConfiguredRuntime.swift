@@ -268,8 +268,6 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// replies are consumed here, so an older diagnostic caller cannot create
     /// a second descriptor reader beside ChannelMux dispatch.
     public func receiveForOwner() throws -> Data? {
-        let started = DispatchTime.now().uptimeNanoseconds
-        defer { ObstacleBridgeRuntimeMetrics.shared.record(.overlayReceive, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         do {
             while true {
                 if let payload = takeHandshakeDeliveredPayload() { return payload }

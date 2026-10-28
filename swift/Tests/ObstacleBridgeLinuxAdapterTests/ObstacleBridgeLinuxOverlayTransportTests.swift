@@ -61,6 +61,20 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try session.receive() == Data("python:swift-second".utf8))
     }
 
+    @Test func tcpDuplexSessionUsesReadinessCallbacksAfterBootstrap() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-duplex")
+        defer { peer.stop() }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .tcp)
+        let session = try client.openSession(); defer { session.close() }
+        let received = DispatchSemaphore(value: 0)
+        let value = LockedData()
+        session.startAsyncReceive { result in
+            if case .success(let payload) = result { value.store(payload); received.signal() }
+        }
+        #expect(received.wait(timeout: .now() + 2) == .success)
+        #expect(value.load() == Data("python-first".utf8))
+    }
+
     @Test func webSocketDuplexSessionReceivesPeerFrameBeforeLocalSend() throws {
         let peer = try PythonOverlayPeer(mode: "ws-duplex")
         defer { peer.stop() }

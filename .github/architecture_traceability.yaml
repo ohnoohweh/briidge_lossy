@@ -877,7 +877,10 @@ ARC-CMP-005:
   # The shared live-status contract retains bounded runtime metrics on Python
   # and every Swift host, so a live update cannot clear Runtime Analysis rows.
   # Linux-native myUDP uses nonblocking read readiness and a separately
-  # scheduled Core timer after bootstrap; idle socket waits are not receive work.
+  # scheduled Core timer after bootstrap; idle socket waits are not receive work,
+  # while Core decode/dispatch is measured per DATA, CONTROL, or IDLE datagram.
+  # Plain Linux TCP uses the same post-bootstrap readiness ownership with an
+  # incremental frame buffer; partial stream records never invoke a blocking read.
   unit_tests:
     # Build identity is re-probed by each supervised Python child, including
     # elevated restarts against a developer-owned source checkout.

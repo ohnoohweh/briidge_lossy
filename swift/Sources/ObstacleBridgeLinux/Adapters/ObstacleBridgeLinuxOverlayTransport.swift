@@ -1,4 +1,5 @@
 import Crypto
+import Dispatch
 import Foundation
 import ObstacleBridgeCore
 #if os(Linux)
@@ -325,7 +326,41 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 case .myudp, .quic: throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
                 }
             }
-            let result = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, probeLiveness: { [weak self] in
+            // TCP has a POSIX descriptor, so the live owner can receive complete
+            // framed records from a readiness source.  WebSocket remains on its
+            // wrapper-owned reader until that wrapper exposes an equivalent
+            // incremental frame parser.
+            let tcpDecoder = transport == .tcp ? POSIXTCPFrameDecoder() : nil
+            let asyncReceive: ((@escaping (Result<Data, Error>) -> Void) -> Void)? = transport == .tcp ? { [weak self, weak connection] handler in
+                guard let self, let connection, let tcpDecoder else {
+                    handler(.failure(ObstacleBridgeLinuxOverlayTransportError.cancelled))
+                    return
+                }
+                connection.startAsyncRead { result in
+                    do {
+                        switch result {
+                        case .success(let bytes):
+                            for wire in try tcpDecoder.append(bytes) {
+                                let frame = try ObstacleBridgeOverlayFrameCodec.decodeTCP(wire)
+                                switch try ObstacleBridgeOverlayEnvelope.consume(frame) {
+                                case .application:
+                                    guard let admitted = self.tcpOverlayRuntime.receiveApplicationBytes(wire).first else {
+                                        throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+                                    }
+                                    handler(.success(admitted))
+                                case .reply(let reply):
+                                    try connection.write(try ObstacleBridgeOverlayEnvelope.encodeTCP(reply))
+                                case .ignore:
+                                    if frame.kind == .pong { liveness.receivePong(echoTimestampNS: try ObstacleBridgeOverlayFrameCodec.pongEchoTimestamp(frame)) }
+                                }
+                            }
+                        case .failure(let error):
+                            handler(.failure(error))
+                        }
+                    } catch { handler(.failure(error)) }
+                }
+            } : nil
+            let result = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, asyncReceive: asyncReceive, probeLiveness: { [weak self] in
                 guard let self, let timestampNS = liveness.beginProbe() else { return }
                 let frame = ObstacleBridgeOverlayFrame(kind: .ping, payload: ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: timestampNS, echoNS: 0))
                 switch self.transport {
@@ -619,6 +654,8 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
 private final class POSIXStreamConnection: ObstacleBridgeLinuxWebSocketByteConnection {
     private var fd: Int32
     private let descriptorLock = NSLock()
+    private let readinessQueue = DispatchQueue(label: "org.obstaclebridge.linux.posix-stream-readiness")
+    private var readSource: DispatchSourceRead?
 
     init(host: String, port: Int, timeoutMilliseconds: Int = 5_000) throws {
         var hints = addrinfo()
@@ -659,7 +696,10 @@ private final class POSIXStreamConnection: ObstacleBridgeLinuxWebSocketByteConne
         descriptorLock.lock()
         let descriptor = fd
         fd = -1
+        let source = readSource
+        readSource = nil
         descriptorLock.unlock()
+        source?.cancel()
         guard descriptor >= 0 else { return }
         _ = shutdown(descriptor, Int32(SHUT_RDWR))
         _ = Glibc.close(descriptor)
@@ -707,6 +747,38 @@ private final class POSIXStreamConnection: ObstacleBridgeLinuxWebSocketByteConne
         throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
     }
 
+    /// Reads only after the kernel reports readability.  `MSG_DONTWAIT` keeps
+    /// the source handler from blocking when a partial stream record arrives;
+    /// framing is owned by the caller's incremental decoder.
+    func startAsyncRead(_ handler: @escaping (Result<Data, Error>) -> Void) {
+        descriptorLock.lock()
+        let descriptor = fd
+        guard descriptor >= 0 else { descriptorLock.unlock(); handler(.failure(ObstacleBridgeLinuxOverlayTransportError.cancelled)); return }
+        guard readSource == nil else { descriptorLock.unlock(); return }
+        let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: readinessQueue)
+        readSource = source
+        descriptorLock.unlock()
+        source.setEventHandler { [weak self] in self?.drainReadyBytes(handler) }
+        source.resume()
+    }
+
+    private func drainReadyBytes(_ handler: @escaping (Result<Data, Error>) -> Void) {
+        let descriptor: Int32
+        descriptorLock.lock(); descriptor = fd; descriptorLock.unlock()
+        guard descriptor >= 0 else { return }
+        while true {
+            var bytes = [UInt8](repeating: 0, count: 16_384)
+            let received = Glibc.recv(descriptor, &bytes, bytes.count, Int32(MSG_DONTWAIT))
+            if received > 0 { handler(.success(Data(bytes.prefix(Int(received))))); continue }
+            if received == 0 { handler(.failure(ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF)); return }
+            let code = errno
+            if code == EAGAIN || code == EWOULDBLOCK { return }
+            if code == EINTR { continue }
+            handler(.failure(ObstacleBridgeLinuxOverlayTransportError.ioFailure(code)))
+            return
+        }
+    }
+
     private static func configureTimeouts(_ fd: Int32, timeoutMilliseconds: Int) {
         let bounded = max(1, timeoutMilliseconds)
         var timeout = timeval(tv_sec: bounded / 1_000, tv_usec: (bounded % 1_000) * 1_000)
@@ -724,5 +796,30 @@ private final class POSIXStreamConnection: ObstacleBridgeLinuxWebSocketByteConne
         descriptorLock.unlock()
         guard descriptor >= 0 else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
         return descriptor
+    }
+}
+
+/// Incremental TCP envelope decoder used only after a POSIX connection has
+/// moved to readiness-driven ownership.  It never asks the socket for a
+/// missing header/body byte, so a partial record cannot turn into a blocking
+/// read on the readiness queue.
+private final class POSIXTCPFrameDecoder {
+    private var buffered = Data()
+
+    func append(_ bytes: Data) throws -> [Data] {
+        buffered.append(bytes)
+        var frames: [Data] = []
+        while buffered.count >= 4 {
+            var reader = ObstacleBridgeBinaryReader(Data(buffered.prefix(4)))
+            let bodyLength = try reader.readUInt32()
+            guard bodyLength > 0, bodyLength <= ObstacleBridgeOverlayFrameCodec.maximumBodyLength else {
+                throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+            }
+            let total = 4 + Int(bodyLength)
+            guard buffered.count >= total else { break }
+            frames.append(Data(buffered.prefix(total)))
+            buffered.removeFirst(total)
+        }
+        return frames
     }
 }

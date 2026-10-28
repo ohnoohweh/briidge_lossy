@@ -1,6 +1,7 @@
 import unittest
 import asyncio
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 from obstacle_bridge.bridge import Runner
@@ -291,3 +292,23 @@ def test_linux_local_runtime_metrics_smoke_lifecycle():
         assert runner._runtime_metrics_task is None
 
     asyncio.run(exercise())
+
+
+def test_linux_native_receive_metric_excludes_lower_transport_wait_and_measures_core_wire_work():
+    """Keep socket readiness/waits outside the native Runtime Analysis scope."""
+    root = Path(__file__).resolve().parents[2]
+    configured = (root / "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxConfiguredRuntime.swift").read_text()
+    owner_body = configured.split("public func receiveForOwner() throws -> Data? {", 1)[1].split("private func handleReceivedWire", 1)[0]
+    assert "ObstacleBridgeRuntimeMetrics.shared.record(.overlayReceive" not in owner_body
+
+    peer_engine = (root / "swift/Sources/ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift").read_text()
+    receive_body = peer_engine.split("public func receiveWire(_ wire: Data, nowNanoseconds: UInt64, transportWritable: Bool = true) throws -> Effect {", 1)[1].split("private func retransmissionWindow", 1)[0]
+    assert "let started = DispatchTime.now().uptimeNanoseconds" in receive_body
+    assert "category = .overlayReceiveData" in receive_body
+    assert "category = .overlayReceiveControl" in receive_body
+    assert "category = .overlayReceiveIdle" in receive_body
+
+    stream = (root / "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxOverlayTransport.swift").read_text()
+    assert "let tcpDecoder = transport == .tcp ? POSIXTCPFrameDecoder() : nil" in stream
+    assert "func startAsyncRead(_ handler:" in stream
+    assert "Int32(MSG_DONTWAIT)" in stream

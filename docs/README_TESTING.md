@@ -997,7 +997,9 @@ Unit tests usually do not prove full black-box behavior on their own. Their main
 
 The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.md). The `Architectural component` column below uses the stable component IDs defined there so the traceability stays durable even if section titles are reworded later.
 
-Runtime-metric source guards exclude inclusive queue, transaction, payload-batch, payload-delivery, TCP-message-dispatch, and TUN-payload wrappers, so Runtime Analysis can select only an actionable uninterrupted scope.
+Runtime-metric source guards exclude inclusive queue, transaction, payload-batch, payload-delivery, TCP-message-dispatch, TUN-payload, and lower-transport socket-wait wrappers, so Runtime Analysis can select only an actionable uninterrupted scope. Linux myUDP measures Core processing of a datagram after readiness, ending before transport output; it does not measure the wait for socket readiness.
+
+Linux plain TCP live receive is also readiness-driven after bootstrap: a test sends a peer-first record through the callback path, while its incremental decoder retains partial frame bytes and never completes a record with a blocking read.
 
 ### First traceability mapping for the unit suite
 

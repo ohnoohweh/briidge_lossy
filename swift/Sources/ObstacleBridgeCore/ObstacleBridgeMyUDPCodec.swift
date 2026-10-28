@@ -994,15 +994,29 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
     }
 
     public func receiveWire(_ wire: Data, nowNanoseconds: UInt64, transportWritable: Bool = true) throws -> Effect {
+        // This scope deliberately starts before parsing and ends before any
+        // transport write.  It is therefore one uninterrupted, CPU-only
+        // myUDP receive operation: readiness/recv waiting and outbound I/O
+        // are outside it.
+        let started = DispatchTime.now().uptimeNanoseconds
+        var category: ObstacleBridgeRuntimeMetrics.Category = .overlayReceive
+        defer {
+            ObstacleBridgeRuntimeMetrics.shared.record(
+                category,
+                durationNS: DispatchTime.now().uptimeNanoseconds &- started
+            )
+        }
         let frame = try ObstacleBridgeMyUDPCodec.decodeWire(wire)
         switch frame.type {
         case ObstacleBridgeMyUDPCodec.dataType:
+            category = .overlayReceiveData
             let data = try ObstacleBridgeMyUDPCodec.decodeDataChunks(wire)
             guard let inbound = receiver.processData(chunks: data.chunks, nowNanoseconds: nowNanoseconds, transmittedNanoseconds: data.transmittedNanoseconds, echoedNanoseconds: data.echoedNanoseconds, transportWritable: transportWritable) else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
             pendingDeliveredRecords.append(contentsOf: inbound.completedRecords)
             let control = inbound.controlReasons.isEmpty ? [] : [try receiver.buildControlDatagram(nowNanoseconds: nowNanoseconds)]
             return .init(outboundDatagrams: control, outboundDataCounters: [], deliveredRecords: inbound.completedRecords, nextControlDeadlineNanoseconds: nil)
         case ObstacleBridgeMyUDPCodec.controlType:
+            category = .overlayReceiveControl
             let control = try ObstacleBridgeMyUDPCodec.decodeControl(wire)
             receiver.updateHeartbeat(nowNanoseconds: nowNanoseconds, transmittedNanoseconds: control.transmittedNanoseconds, echoedNanoseconds: control.echoedNanoseconds, fromIdle: false)
             let feedback = sender.applyControl(lastInOrder: control.lastInOrder, highestReceived: control.highestReceived, missing: control.missing, nowNanoseconds: nowNanoseconds, rttEstimateMilliseconds: receiver.heartbeat.rttEstimateMilliseconds)
@@ -1013,6 +1027,7 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
             let queued = try flush(nowNanoseconds: nowNanoseconds)
             return .init(outboundDatagrams: retransmission + queued.outboundDatagrams, outboundDataCounters: chunks.map(\.counter) + queued.outboundDataCounters, deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
         case ObstacleBridgeMyUDPCodec.idleType:
+            category = .overlayReceiveIdle
             let idle = receiver.processIdle(nowNanoseconds: nowNanoseconds, transmittedNanoseconds: frame.transmittedNanoseconds, echoedNanoseconds: frame.echoedNanoseconds, transportWritable: transportWritable)
             let reply = idle.shouldReflect ? [try ObstacleBridgeMyUDPCodec.encodeWire(type: ObstacleBridgeMyUDPCodec.idleType, payload: Data(), transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: frame.transmittedNanoseconds)] : []
             return .init(outboundDatagrams: reply, outboundDataCounters: [], deliveredRecords: [], nextControlDeadlineNanoseconds: nil)

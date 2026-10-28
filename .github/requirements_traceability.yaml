@@ -1702,6 +1702,8 @@ REQ-ADM-001:
   # Linux-native myUDP moves post-authenticated receive to nonblocking socket
   # readiness plus a separately scheduled Core timer, so idle `recv` waits do
   # not remain in the runtime receive owner or its work metrics.
+  # Plain TCP likewise uses post-bootstrap readiness plus incremental framing,
+  # retaining partial stream records instead of blocking for missing bytes.
   # an update-bound password-confirmed configuration write and
   # refreshed redacted snapshot plus secret-free live onboarding connection
   # profiles and Core-owned invitation generation/PSK-masked preview plus
