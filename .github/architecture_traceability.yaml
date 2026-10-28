@@ -1237,6 +1237,8 @@ ARC-CMP-007:
 
 ARC-CMP-008:
   # Peer-address framing covers the server-observed source address and port.
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_linux_swift_proxy_logs_follow_collector
   unit_tests:
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv4_without_delivering_control_frames
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv6_without_delivering_control_frames

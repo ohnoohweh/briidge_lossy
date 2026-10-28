@@ -480,6 +480,12 @@ class LinuxSwiftSecureLinkPeer:
             raise RuntimeError('Linux Swift SecureLink client proof mismatch')
         acknowledgement = self._header(4, session_id, 1)
         send(acknowledgement + ChaCha20Poly1305(server_to_client).encrypt(b'\0' * 4 + (1).to_bytes(8, 'big'), b'', acknowledgement))
+        # Peer-address discovery is a lower-transport control exchange. It
+        # completes after SecureLink authentication and is not application data.
+        address_request = receive()
+        if address_request != b'OBPA\x02\x01\x00':
+            raise RuntimeError('Linux Swift peer-address request mismatch')
+        send(b'OBPA\x02\x02\x04\x7f\x00\x00\x01' + (443).to_bytes(2, 'big'))
         if self.keep_open and not self.mux_echo:
             while not self._closing.is_set():
                 try:

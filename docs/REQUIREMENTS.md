@@ -75,6 +75,8 @@ Implementation note: `last_incoming_age_seconds` measures the age of the last
 accepted transport record, including myUDP CONTROL/IDLE traffic that is not an
 application payload. Peer-client rows also expose the server-observed public
 source IP and port once the common peer-address protocol reply arrives.
+Mixed Python/native reference peers shall consume and answer that lower-layer
+control exchange before treating later records as SecureLink application data.
 
 Implementation note: ChannelMux channel identifiers are wire identifiers scoped
 to an authenticated peer session. A Python listener that serves multiple peers
