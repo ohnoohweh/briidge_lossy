@@ -240,15 +240,37 @@ public enum ObstacleBridgeAdminSnapshotSupport {
         runtime: [String: Any] = [:],
         extra: [String: Any] = [:]
     ) -> [String: Any] {
-        let normalizedSecureLink: [String: Any] = [
+        var normalizedSecureLink: [String: Any] = [
             "state": "disconnected", "authenticated": false,
             "enabled": false, "mode": "off",
             "rekey_in_progress": false,
+            "last_event": "bootstrap",
+            "last_event_unix_ts": NSNull(),
+            "last_authenticated_unix_ts": NSNull(),
+            "authenticated_sessions_total": 0,
+            "last_rekey_trigger": "none",
             "frames_from_client_passed_total": 0,
             "frames_from_client_dropped_total": 0,
             "frames_to_client_passed_total": 0,
             "connected_since_unix_ts": NSNull(),
         ].merging(secureLink, uniquingKeysWith: { _, supplied in supplied })
+        // Older and platform-specific producers historically supplied only
+        // the Core generation counter.  Preserve that as the API's durable
+        // session-total spelling and derive lifecycle timestamps from the
+        // authenticated epoch when a more specific protocol event is absent.
+        if secureLink["authenticated_sessions_total"] == nil {
+            normalizedSecureLink["authenticated_sessions_total"] = secureLink["authenticated_generations_total"] ?? 0
+        }
+        let secureLinkAuthenticated = normalizedSecureLink["authenticated"] as? Bool ?? false
+        if secureLink["last_event"] == nil {
+            normalizedSecureLink["last_event"] = secureLinkAuthenticated ? "authenticated" : (normalizedSecureLink["state"] ?? "bootstrap")
+        }
+        if secureLink["last_event_unix_ts"] == nil, secureLinkAuthenticated {
+            normalizedSecureLink["last_event_unix_ts"] = connectedSinceUnixTS
+        }
+        if secureLink["last_authenticated_unix_ts"] == nil, secureLinkAuthenticated {
+            normalizedSecureLink["last_authenticated_unix_ts"] = connectedSinceUnixTS
+        }
         let normalizedCompression: [String: Any] = [
             "enabled": false, "algorithm": "",
             "compress_attempts_total": 0, "compress_applied_total": 0,
@@ -340,6 +362,8 @@ public enum ObstacleBridgeAdminSnapshotSupport {
         if facts.transport == "myudp" {
             extra["myudp"] = facts.myudpStats
         }
+        let authenticatedTimestamp: Any = facts.authenticated && facts.connectedSinceUnixTS != nil
+            ? facts.connectedSinceUnixTS! : NSNull()
         return peerEnvelope(
             id: facts.identity, peerID: facts.identity, transport: facts.transport,
             state: facts.lifecycleState, connected: transportConnected, appReady: facts.ready,
@@ -364,9 +388,14 @@ public enum ObstacleBridgeAdminSnapshotSupport {
                 "protected_frames_sent_total": facts.protectedFramesSentTotal,
                 "protected_frames_received_total": facts.protectedFramesReceivedTotal,
                 "authenticated_generations_total": facts.authenticatedGenerationsTotal,
+                "authenticated_sessions_total": facts.authenticatedGenerationsTotal,
                 "rekeys_completed_total": facts.rekeysCompletedTotal,
                 "enabled": secureLinkEnabled, "mode": facts.secureLinkMode,
                 "rekey_in_progress": facts.pendingRekeySessionID != nil,
+                "last_event": facts.authenticated ? "authenticated" : facts.secureLinkState,
+                "last_event_unix_ts": authenticatedTimestamp,
+                "last_authenticated_unix_ts": authenticatedTimestamp,
+                "last_rekey_trigger": facts.rekeysCompletedTotal > 0 ? "completed" : "none",
                 "frames_from_client_passed_total": facts.protectedFramesSentTotal,
                 "frames_from_client_dropped_total": 0,
                 "frames_to_client_passed_total": facts.protectedFramesReceivedTotal,
