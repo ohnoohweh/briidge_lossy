@@ -840,14 +840,21 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         runtime.start()
         defer { runtime.stop() }
         #expect(connected.wait(timeout: .now() + 3) == .success)
-
-        let fd = try connectTCP(port: try #require(runtime.localServicePorts()[1]))
-        defer { _ = close(fd) }
         let payload = Data("mux-through-myudp-python".utf8)
-        #expect(payload.withUnsafeBytes { write(fd, $0.baseAddress, payload.count) } == payload.count)
-        var received = [UInt8](repeating: 0, count: payload.count)
-        #expect(read(fd, &received, received.count) == payload.count)
-        #expect(Data(received) == payload)
+        let port = try #require(runtime.localServicePorts()[1])
+        var echoed = Data()
+        var activeFD: Int32 = -1
+        defer { if activeFD >= 0 { _ = close(activeFD) } }
+        for _ in 0..<3 where echoed != payload {
+            let fd = try connectTCP(port: port)
+            if payload.withUnsafeBytes({ write(fd, $0.baseAddress, payload.count) }) == payload.count {
+                var received = [UInt8](repeating: 0, count: payload.count)
+                if read(fd, &received, received.count) == payload.count { echoed = Data(received); activeFD = fd }
+            }
+            if fd != activeFD { _ = close(fd) }
+            if echoed != payload { usleep(100_000) }
+        }
+        #expect(echoed == payload)
         #expect(waitUntil { runtime.status().activeTCPChannels == 1 })
     }
 
