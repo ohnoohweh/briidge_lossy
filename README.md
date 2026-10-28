@@ -1101,7 +1101,7 @@ The Configuration tab normally keeps `secure_link_psk` write-only. When admin au
 
 The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) explains the applied auth, session, live-update, and secret-redaction concepts in more detail.
 
-An open WebAdmin page receives status and peer updates through the shared `/api/live` WebSocket subscription; if a browser cannot keep that subscription, the page falls back to bounded HTTP polling.
+An open WebAdmin page receives status and peer updates through the shared `/api/live` WebSocket subscription; if a browser cannot keep that subscription, the page falls back to bounded HTTP polling. The bounded Runtime Analysis metrics are retained in live status updates on Python and every Swift host, so the detailed runtime list remains populated after the first browser snapshot.
 
 Python, Linux, macOS, and iOS products show their build identity in the WebAdmin headline and Runtime Metadata view. A Python source checkout reports its live Git revision and working-tree state; Git-less deployments report the build stamp generated immediately before deployment. The commit is always the standard first eight characters of the Git revision, with build timestamp and taint state.
 

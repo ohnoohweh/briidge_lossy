@@ -436,6 +436,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect((connections["udp"] as? [[String: Any]])?.isEmpty == true)
         let live = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/live?topic=status") as? [String: Any])
         #expect(live["overlay_transport"] as? String == "tcp")
+        #expect(live["runtime_metrics"] as? [String: Any] != nil)
         #expect(ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(" PeErS ") == "peers")
         #expect(ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic("unknown") == nil)
         // The shared browser opens `/api/live` without a query string, then

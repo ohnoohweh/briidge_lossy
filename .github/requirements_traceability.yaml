@@ -1697,6 +1697,8 @@ REQ-ADM-001:
   # status/config-schema/log/connection/peer
   # reads plus a legacy live-topic fallback and query-scoped version-13 WebSocket
   # with Python-default status/connection/peer/meta snapshots and bounded TUN on request,
+  # including the bounded runtime-metrics projection in every live status
+  # envelope so the shared Runtime Analysis page does not clear on Swift hosts.
   # an update-bound password-confirmed configuration write and
   # refreshed redacted snapshot plus secret-free live onboarding connection
   # profiles and Core-owned invitation generation/PSK-masked preview plus
@@ -1755,6 +1757,7 @@ REQ-ADM-001:
     - tests/unit/test_peer_stack_worker.py::test_peer_worker_inherits_stderr_without_managed_collector
     - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates
     - tests/unit/test_admin_worker.py::test_python_admin_worker_updates_runner_and_serves_concurrent_requests
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_status_frame_contains_payload
     - tests/unit/test_admin_worker.py::test_admin_worker_exits_on_owner_loss_and_reports_child_loss
     - tests/unit/test_admin_worker.py::test_supervised_admin_recovers_at_same_port_with_authentication
     - tests/unit/test_admin_worker.py::test_supervised_admin_retries_failed_bind_and_stops_without_orphans
@@ -1766,6 +1769,7 @@ REQ-ADM-001:
     - tests/unit/test_admin_worker.py::test_runner_selects_and_stops_admin_worker
     - tests/unit/test_admin_worker.py::test_admin_child_queries_python_logging_child
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::adminStatusEnvelopeOwnsSharedDashboardFields
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::adminWebConfigurationAndLifecycleControlsMatchThePythonClientContract
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::metaAndOnboardingRoutesMatchTheShippedAdminWebContract
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::observabilityWritesForegroundLifecycleToConfiguredLogAndBoundedTelemetrySpool

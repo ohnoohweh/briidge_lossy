@@ -102,7 +102,7 @@ struct ObstacleBridgeTelemetryTests {
             "runtime_health_recent_records": [["state": "connected"]],
         ], uniquingKeysWith: { _, supplied in supplied }))
         #expect(live["overlay_transport"] as? String == "myudp")
-        #expect(live["runtime_metrics"] == nil)
+        #expect((live["runtime_metrics"] as? [String: Any])?["history"] as? [Int] == Array(repeating: 1, count: 32))
         #expect(live["runtime_health_recent_records"] == nil)
     }
 

@@ -405,13 +405,16 @@ public enum ObstacleBridgeAdminSnapshotSupport {
         )
     }
 
-    /// The live socket is a high-frequency rendering channel, not a transport
-    /// for diagnostic histories. Keep its status schema identical for
-    /// dashboard fields while leaving bounded-but-large diagnostics on the
-    /// full `/api/status` document.
+    /// The live socket is a high-frequency rendering channel. Runtime metrics
+    /// are a bounded, current projection used by the Runtime Analysis tab, so
+    /// they belong to every status frame just as they do in Python's Admin
+    /// API. Keep only diagnostic history on the full `/api/status` document.
+    ///
+    /// Do not remove a field that the shared page renders here: a later live
+    /// frame otherwise replaces the initial full snapshot and makes that page
+    /// look empty on Swift hosts.
     public static func liveStatusEnvelope(_ status: [String: Any]) -> [String: Any] {
         var live = status
-        live.removeValue(forKey: "runtime_metrics")
         live.removeValue(forKey: "runtime_health_recent_records")
         return live
     }

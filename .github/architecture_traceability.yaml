@@ -874,6 +874,8 @@ ARC-CMP-005:
   # macOS private-worker producer evidence includes the shared threshold
   # vocabulary and payload-free host operational events.
   # The private Admin-worker boundary returns that same envelope.
+  # The shared live-status contract retains bounded runtime metrics on Python
+  # and every Swift host, so a live update cannot clear Runtime Analysis rows.
   unit_tests:
     # Build identity is re-probed by each supervised Python child, including
     # elevated restarts against a developer-owned source checkout.
@@ -888,6 +890,7 @@ ARC-CMP-005:
     - tests/unit/test_peer_stack_worker.py::test_peer_worker_inherits_stderr_without_managed_collector
     - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates
     - tests/unit/test_admin_worker.py::test_python_admin_worker_updates_runner_and_serves_concurrent_requests
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_status_frame_contains_payload
     - tests/unit/test_admin_worker.py::test_admin_worker_exits_on_owner_loss_and_reports_child_loss
     - tests/unit/test_admin_worker.py::test_supervised_admin_recovers_at_same_port_with_authentication
     - tests/unit/test_admin_worker.py::test_supervised_admin_retries_failed_bind_and_stops_without_orphans
@@ -910,6 +913,7 @@ ARC-CMP-005:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::ringIsBoundedAndClassifiesOnlyTheLastLifecycleMarker
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::persistenceKeepsOnlyCompleteRedactedRing
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::canonicalVectorRoundTripsThroughThePortableContract
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::adminStatusEnvelopeOwnsSharedDashboardFields
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::rejectsNonAllowlistedAndMalformedEvents
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::enforcesEventAndBatchBounds
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::concurrentEmissionStaysBoundedAndNeverThrows
@@ -924,6 +928,7 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::compressionSnapshotCountsCompressedUncompressedAndRejectedFrames
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::peersSerializesNonzeroCompressionTelemetry
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::enabledCompressionCarriesProtectedRequestAndResponseAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::disabledAndPassiveCompressionPoliciesInteroperateAgainstPythonPeer
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_overlay_stack_default_compress_client_matches_python
