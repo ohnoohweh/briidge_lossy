@@ -694,6 +694,10 @@ public struct ObstacleBridgeMyUDPInboundIdleResult: Equatable, Sendable {
 /// RTT/liveness, and CONTROL pacing. Socket owners submit decoded chunks and
 /// execute the resulting delivery and outbound-control effects.
 public final class ObstacleBridgeMyUDPReceiverEngine: @unchecked Sendable {
+    // Receiver state is shared by foreground sends/timer ticks and the Linux
+    // readiness callback.  Keep the portable engine safe even when an adapter
+    // accidentally reaches it from more than one owner queue.
+    private let stateLock = NSRecursiveLock()
     public private(set) var receiveState = ObstacleBridgeMyUDPStreamReceiveState()
     public private(set) var heartbeat: ObstacleBridgeMyUDPHeartbeatSnapshot
     public private(set) var lastSentLastInOrder: UInt16
@@ -731,6 +735,7 @@ public final class ObstacleBridgeMyUDPReceiverEngine: @unchecked Sendable {
         echoedNanoseconds: UInt64,
         transportWritable: Bool
     ) -> ObstacleBridgeMyUDPInboundDataResult? {
+        stateLock.lock(); defer { stateLock.unlock() }
         heartbeat = ObstacleBridgeMyUDPHeartbeatPolicy.update(
             nowNanoseconds: nowNanoseconds, transmittedNanoseconds: transmittedNanoseconds,
             echoedNanoseconds: echoedNanoseconds, fromIdle: false, prior: heartbeat
@@ -768,6 +773,7 @@ public final class ObstacleBridgeMyUDPReceiverEngine: @unchecked Sendable {
         echoedNanoseconds: UInt64,
         transportWritable: Bool
     ) -> ObstacleBridgeMyUDPInboundIdleResult {
+        stateLock.lock(); defer { stateLock.unlock() }
         heartbeat = ObstacleBridgeMyUDPHeartbeatPolicy.update(
             nowNanoseconds: nowNanoseconds, transmittedNanoseconds: transmittedNanoseconds,
             echoedNanoseconds: echoedNanoseconds, fromIdle: true, prior: heartbeat
@@ -786,6 +792,7 @@ public final class ObstacleBridgeMyUDPReceiverEngine: @unchecked Sendable {
         echoedNanoseconds: UInt64,
         fromIdle: Bool
     ) {
+        stateLock.lock(); defer { stateLock.unlock() }
         heartbeat = ObstacleBridgeMyUDPHeartbeatPolicy.update(
             nowNanoseconds: nowNanoseconds, transmittedNanoseconds: transmittedNanoseconds,
             echoedNanoseconds: echoedNanoseconds, fromIdle: fromIdle, prior: heartbeat
@@ -793,10 +800,12 @@ public final class ObstacleBridgeMyUDPReceiverEngine: @unchecked Sendable {
     }
 
     public func replaceHeartbeat(_ heartbeat: ObstacleBridgeMyUDPHeartbeatSnapshot) {
+        stateLock.lock(); defer { stateLock.unlock() }
         self.heartbeat = heartbeat
     }
 
     public func controlTimer(nowNanoseconds: UInt64, transportWritable: Bool) -> ObstacleBridgeMyUDPControlPolicyDecision {
+        stateLock.lock(); defer { stateLock.unlock() }
         let decision = ObstacleBridgeMyUDPControlPolicy.timer(
             nowNanoseconds: nowNanoseconds, expectedCounter: receiveState.expected,
             missingCount: receiveState.missing.count, lastSentLastInOrder: lastSentLastInOrder,
@@ -809,16 +818,19 @@ public final class ObstacleBridgeMyUDPReceiverEngine: @unchecked Sendable {
     }
 
     public func noteControlSent(nowNanoseconds: UInt64) {
+        stateLock.lock(); defer { stateLock.unlock() }
         lastControlSentNanoseconds = nowNanoseconds
         lastSentLastInOrder = receiveState.expected == 1 ? 0 : receiveState.expected &- 1
     }
 
     public func updateControlTracking(lastSentLastInOrder: UInt16, lastControlSentNanoseconds: UInt64) {
+        stateLock.lock(); defer { stateLock.unlock() }
         self.lastSentLastInOrder = lastSentLastInOrder
         self.lastControlSentNanoseconds = lastControlSentNanoseconds
     }
 
     public func buildControlDatagram(nowNanoseconds: UInt64) throws -> Data {
+        stateLock.lock(); defer { stateLock.unlock() }
         let acknowledgement = receiveState.acknowledgement
         defer { noteControlSent(nowNanoseconds: nowNanoseconds) }
         return try ObstacleBridgeMyUDPCodec.encodeControl(
