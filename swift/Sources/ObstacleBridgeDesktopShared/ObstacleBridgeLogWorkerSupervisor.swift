@@ -111,7 +111,10 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
 
     private func receive(_ fd: Int32, generation: UInt64) -> (kind: ObstacleBridgeWorkerIPC.Kind, payload: [String: Any])? {
         var bytes = [UInt8](repeating: 0, count: Self.maxDatagram + ObstacleBridgeWorkerIPC.headerBytes + 1)
-        let count = recv(fd, &bytes, bytes.count, 0)
+        // Readiness can become stale when shutdown or another drain wins the
+        // datagram race.  This supervisor must never block a lifecycle path
+        // after `poll` has reported the descriptor readable.
+        let count = recv(fd, &bytes, bytes.count, Int32(MSG_DONTWAIT))
         guard count > 0, count <= Self.maxDatagram + ObstacleBridgeWorkerIPC.headerBytes,
               let decoded = try? ObstacleBridgeWorkerIPC.decode(Data(bytes.prefix(count))), let frame = decoded.0,
               decoded.1.isEmpty, frame.generation == generation,
