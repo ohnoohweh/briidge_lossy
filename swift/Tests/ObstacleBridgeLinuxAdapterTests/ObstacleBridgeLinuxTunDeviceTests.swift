@@ -95,7 +95,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 7,
         ]), to: control.0)
         #expect(try readControl(from: control.0)["kind"] as? String == "worker.hello")
-        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_username": "admin", "admin_web_password": "secret", "admin_web_token": "control", "admin_web_name": "native-test", "overlay_transport": "tcp", "dashboard": true, "telemetry_spool_directory": "/tmp/obstaclebridge-telemetry"], "log_root_level": 0]), to: control.0)
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_username": "admin", "admin_web_password": "secret", "admin_web_token": "control", "admin_web_name": "native-test", "admin_web_dir": testAdminWebDirectory(), "overlay_transport": "tcp", "dashboard": true, "telemetry_spool_directory": "/tmp/obstaclebridge-telemetry"], "log_root_level": 0]), to: control.0)
         let request = try readControl(from: control.0)
         #expect(request["kind"] as? String == "admin.call")
         #expect(request["id"] as? String == "bootstrap-status")
@@ -511,6 +511,50 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(stopped.wait(timeout: .now() + 1) == .success)
     }
 
+    @Test func nativeAdminChildReassemblesFragmentedHTTPRequestWithoutBlockingReceive() throws {
+        let control = try makeSocketPair()
+        let lifetime = try makeSocketPair()
+        let childControl = dup(control.1)
+        let childLifetime = dup(lifetime.1)
+        guard childControl >= 0, childLifetime >= 0 else { throw POSIXError(.EMFILE) }
+        close(control.1); close(lifetime.1)
+        defer { close(control.0); close(lifetime.0) }
+        let stopped = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            defer { stopped.signal() }
+            try? ObstacleBridgeNativeAdminWorker.run(
+                controlFD: childControl,
+                lifetimeFD: childLifetime,
+                generation: 17,
+                serviceFactory: { arguments, parentRPC in
+                    let service = try ObstacleBridgeNativeAdminLinuxService(arguments: arguments, parentRPC: parentRPC)
+                    return .init(port: service.port, stop: { service.stop() })
+                }
+            )
+        }
+
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .hello, generation: 17, value: [
+            "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 17,
+        ]), to: control.0)
+        #expect(try readControl(from: control.0)["kind"] as? String == "worker.hello")
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 17, value: [
+            "v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_name": "native-test", "admin_web_dir": testAdminWebDirectory()], "log_root_level": 0,
+        ]), to: control.0)
+        let bootstrap = try readControl(from: control.0)
+        #expect(bootstrap["method"] as? String == "get_status_snapshot")
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 17, value: [
+            "v": 1, "kind": "admin.reply", "id": "bootstrap-status", "ok": true, "result": [String: Any](),
+        ]), to: control.0)
+        let ready = try readControl(from: control.0)
+        let port = (ready["port"] as? NSNumber)?.intValue ?? 0
+        #expect(port > 0)
+        let index = try fragmentedNativeAdminHTTPRequest(port: port)
+        #expect(String(data: index, encoding: .utf8)?.contains("HTTP/1.1 200 OK") == true)
+        #expect(String(data: index, encoding: .utf8)?.contains("<!doctype html>") == true)
+        close(lifetime.0)
+        #expect(stopped.wait(timeout: .now() + 1) == .success)
+    }
+
     @Test func nativeAdminChildBoundsBootstrapStatusReplyWait() throws {
         let control = try makeSocketPair()
         let lifetime = try makeSocketPair()
@@ -583,6 +627,45 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         guard connected == 0 else { throw POSIXError(.ECONNREFUSED) }
         let extraHeaders = headers.map { "\($0.key): \($0.value)\r\n" }.joined()
         try writeAll(Data("\(method) \(path) HTTP/1.1\r\nHost: localhost\r\nContent-Length: \(body.count)\r\n\(extraHeaders)Connection: close\r\n\r\n".utf8) + body, to: client)
+        var result = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = read(client, &buffer, buffer.count)
+            guard count >= 0 else { throw POSIXError(.EIO) }
+            if count == 0 { return result }
+            result.append(buffer, count: Int(count))
+        }
+    }
+
+    private func testAdminWebDirectory() -> String {
+        var directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        for _ in 0..<6 {
+            let candidate = directory.appendingPathComponent("admin_web", isDirectory: true)
+            if FileManager.default.fileExists(atPath: candidate.appendingPathComponent("index.html").path) {
+                return candidate.path
+            }
+            directory.deleteLastPathComponent()
+        }
+        return "./admin_web"
+    }
+
+    private func fragmentedNativeAdminHTTPRequest(port: Int) throws -> Data {
+        let client = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        guard client >= 0 else { throw POSIXError(.EMFILE) }
+        defer { close(client) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(UInt16(port).bigEndian)
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard connected == 0 else { throw POSIXError(.ECONNREFUSED) }
+        let request = Data("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".utf8)
+        let split = request.count / 2
+        try writeAll(request.prefix(split), to: client)
+        usleep(20_000)
+        try writeAll(request.suffix(from: split), to: client)
         var result = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
         while true {

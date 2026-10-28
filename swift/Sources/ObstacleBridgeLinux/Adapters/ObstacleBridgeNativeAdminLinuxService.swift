@@ -32,6 +32,8 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.native-admin")
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
+    private var clientSources: [Int32: DispatchSourceRead] = [:]
+    private var clientRequests: [Int32: Data] = [:]
     public private(set) var port: Int = 0
 
     public init(arguments: [String: Any], parentRPC: ObstacleBridgeNativeAdminWorker.ParentRPC) throws {
@@ -62,6 +64,9 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     public func stop() {
         source?.cancel()
         source = nil
+        let clients = clientSources
+        clientSources.removeAll(); clientRequests.removeAll()
+        for source in clients.values { source.cancel() }
         listener = -1
         port = 0
     }
@@ -80,6 +85,10 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         }
         guard bound == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxAdminServerError.bindFailure(code) }
         guard listen(fd, 8) == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxAdminServerError.listenFailure(code) }
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            let code = errno; _ = close(fd); throw ObstacleBridgeLinuxAdminServerError.socketFailure(code)
+        }
         var actual = sockaddr_in()
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         _ = withUnsafeMutablePointer(to: &actual) { pointer in
@@ -96,17 +105,68 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
 
     private func acceptClient() {
         guard listener >= 0 else { return }
-        let client = accept(listener, nil, nil)
-        guard client >= 0 else { return }
-        DispatchQueue.global().async { [weak self] in self?.serve(client) }
+        while true {
+            let client = accept(listener, nil, nil)
+            guard client >= 0 else { return }
+            let flags = fcntl(client, F_GETFL)
+            guard flags >= 0, fcntl(client, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                _ = close(client)
+                continue
+            }
+            let source = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
+            clientSources[client] = source
+            source.setEventHandler { [weak self] in self?.readClientRequest(client) }
+            source.setCancelHandler { _ = close(client) }
+            source.resume()
+            // A loopback client can finish its write before Dispatch installs
+            // the first event delivery. This is still a nonblocking probe;
+            // incomplete requests remain owned by the source above.
+            readClientRequest(client)
+        }
     }
 
-    private func serve(_ client: Int32) {
+    /// A browser may send an HTTP request in multiple TCP segments.  Keep the
+    /// partial request under the descriptor's readiness owner and never leave
+    /// a global worker blocked waiting for its remaining header/body bytes.
+    private func readClientRequest(_ client: Int32) {
+        while true {
+            var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+            let received = recv(client, &buffer, buffer.count, Int32(MSG_DONTWAIT))
+            if received > 0 {
+                clientRequests[client, default: Data()].append(buffer, count: Int(received))
+                guard let request = clientRequests[client], request.count <= 65_536 else { closeClientRequest(client); return }
+                guard let headerRange = request.range(of: Data("\r\n\r\n".utf8)) else { continue }
+                let header = String(data: request[..<headerRange.lowerBound], encoding: .utf8) ?? ""
+                let contentLength = header.split(separator: "\r\n").dropFirst().compactMap { line -> Int? in
+                    let pair = line.split(separator: ":", maxSplits: 1)
+                    return pair.count == 2 && pair[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length" ? Int(pair[1].trimmingCharacters(in: .whitespaces)) : nil
+                }.first ?? 0
+                guard (0...65_536).contains(contentLength), request.count >= headerRange.upperBound + contentLength else { continue }
+                // Dispatch owns a source descriptor until its cancellation.
+                // Hand the response worker a duplicate so source teardown
+                // cannot close the socket underneath an in-flight response.
+                let responseClient = dup(client)
+                guard responseClient >= 0 else { closeClientRequest(client); return }
+                clientSources.removeValue(forKey: client)?.cancel()
+                clientRequests.removeValue(forKey: client)
+                DispatchQueue.global().async { [weak self] in self?.serve(responseClient, requestData: request) }
+                return
+            }
+            if received < 0, (errno == EAGAIN || errno == EWOULDBLOCK) { return }
+            if received < 0, errno == EINTR { continue }
+            closeClientRequest(client)
+            return
+        }
+    }
+
+    private func closeClientRequest(_ client: Int32) {
+        clientSources.removeValue(forKey: client)?.cancel()
+        clientRequests.removeValue(forKey: client)
+    }
+
+    private func serve(_ client: Int32, requestData: Data) {
         defer { _ = close(client) }
-        var buffer = [UInt8](repeating: 0, count: 16 * 1024)
-        let received = read(client, &buffer, buffer.count)
-        guard received > 0,
-              let request = String(bytes: buffer.prefix(Int(received)), encoding: .utf8),
+        guard let request = String(data: requestData, encoding: .utf8),
               let line = request.split(separator: "\r\n", maxSplits: 1).first
         else { return }
         let components = line.split(separator: " ")
