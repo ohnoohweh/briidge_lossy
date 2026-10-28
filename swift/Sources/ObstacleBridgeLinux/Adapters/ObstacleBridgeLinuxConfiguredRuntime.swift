@@ -180,7 +180,13 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
             guard let self else { return }
             do {
                 switch result {
-                case .success(let wire): handler(.success(try self.handleReceivedWire(wire)))
+                case .success(let wire):
+                    // The readiness source is the receive owner just as the
+                    // legacy blocking loop was.  In particular, compatibility
+                    // `send()` calls wait for their reply through this owner;
+                    // do not publish a received reply directly to ChannelMux
+                    // and leave that waiter stranded.
+                    handler(.success(self.deliverToReceiveOwner(try self.handleReceivedWire(wire))))
                 case .failure(let error): handler(.failure(error))
                 }
             } catch { handler(.failure(error)) }
@@ -276,15 +282,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
                 // are fully handled by Core above and must not retire a live
                 // receive epoch merely because ChannelMux has nothing to read.
                 guard let payload else { continue }
-                requestLock.lock()
-                if let pending = pendingCompatibilityReply {
-                    pendingCompatibilityReply?.value = payload
-                    pending.signal.signal()
-                    requestLock.unlock()
-                    return nil
-                }
-                requestLock.unlock()
-                return payload
+                return deliverToReceiveOwner(payload)
             }
         } catch {
             debug("secure_link.owner_receive_failed", ["reason": error.localizedDescription])
@@ -308,6 +306,24 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         }
         onSecureLinkStateChange?()
         debug("secure_link.inbound", ["wire_bytes": String(wire.count), "delivered_application": payload == nil ? "false" : "true"])
+        return payload
+    }
+
+    /// Delivers a decoded application payload to the single receive owner.
+    /// A synchronous compatibility caller may be waiting for exactly one
+    /// response; it must win over ChannelMux dispatch regardless of whether
+    /// the lower transport reached us through a blocking read or a readiness
+    /// callback.
+    private func deliverToReceiveOwner(_ payload: Data?) -> Data? {
+        guard let payload else { return nil }
+        requestLock.lock()
+        if let pending = pendingCompatibilityReply {
+            pendingCompatibilityReply?.value = payload
+            pending.signal.signal()
+            requestLock.unlock()
+            return nil
+        }
+        requestLock.unlock()
         return payload
     }
 
