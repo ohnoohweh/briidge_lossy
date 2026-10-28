@@ -56,6 +56,8 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let startedAt = Date()
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
+    private var clientSources: [Int32: DispatchSourceRead] = [:]
+    private var clientRequests: [Int32: Data] = [:]
     public private(set) var port: Int = 0
 
     public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil, connectionsProvider: @escaping () -> [String: Any] = { ["tcp": [], "udp": [], "tun": []] }, tunRoutingProvider: @escaping () -> [String: Any] = { ["ok": true, "configured": false, "enabled": false] }, tunRoutingControlHandler: ((Bool) -> [String: Any])? = nil, tunHelperRepairHandler: (() -> [String: Any])? = nil, logWorker: ObstacleBridgeLogWorkerSupervisor? = nil) {
@@ -185,6 +187,9 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     public func stop() {
         source?.cancel()
         source = nil
+        let clients = clientSources
+        clientSources.removeAll(); clientRequests.removeAll()
+        for source in clients.values { source.cancel() }
         listener = -1
         port = 0
     }
@@ -193,25 +198,67 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         guard listener >= 0 else { return }
         let client = accept(listener, nil, nil)
         guard client >= 0 else { return }
-        // The listener is non-blocking so Dispatch can keep accepting, but a
-        // per-client handler runs on its own worker and must deliver complete
-        // HTTP/WebSocket snapshots rather than abandoning a partial write on
-        // EAGAIN.
         let flags = fcntl(client, F_GETFL)
-        if flags >= 0 { _ = fcntl(client, F_SETFL, flags & ~O_NONBLOCK) }
-        DispatchQueue.global().async { [weak self] in self?.serve(client) }
+        guard flags >= 0, fcntl(client, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            _ = close(client)
+            return
+        }
+        let source = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
+        clientSources[client] = source
+        source.setEventHandler { [weak self] in self?.readClientRequest(client) }
+        source.setCancelHandler { _ = close(client) }
+        source.resume()
+        readClientRequest(client)
     }
 
-    private func serve(_ client: Int32) {
-        defer { _ = close(client) }
-        var request = Data()
-        var buffer = [UInt8](repeating: 0, count: 1024)
-        while request.count < 16 * 1024 {
-            let received = read(client, &buffer, buffer.count)
-            guard received > 0 else { return }
-            request.append(buffer, count: Int(received))
-            if request.range(of: Data("\r\n\r\n".utf8)) != nil { break }
+    /// Keeps partial HTTP frames under the accepted descriptor's readiness
+    /// owner.  A response worker receives a duplicate only once its bounded
+    /// request is complete, so it cannot be stranded in a receive call.
+    private func readClientRequest(_ client: Int32) {
+        while true {
+            var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+            let received = recv(client, &buffer, buffer.count, Int32(MSG_DONTWAIT))
+            if received > 0 {
+                clientRequests[client, default: Data()].append(buffer, count: Int(received))
+                guard let request = clientRequests[client], request.count <= 65_536 else { closeClientRequest(client); return }
+                guard let headerEnd = request.range(of: Data("\r\n\r\n".utf8)) else { continue }
+                let headerData = request[..<headerEnd.lowerBound]
+                let headerText = String(data: headerData, encoding: .utf8) ?? ""
+                let headers = headerText.split(separator: "\r\n").dropFirst().reduce(into: [String: String]()) { headers, line in
+                    let parts = line.split(separator: ":", maxSplits: 1)
+                    guard parts.count == 2 else { return }
+                    headers[parts[0].trimmingCharacters(in: .whitespaces).lowercased()] = parts[1].trimmingCharacters(in: .whitespaces)
+                }
+                let contentLength = headers["content-length"].flatMap(Int.init) ?? 0
+                guard (0...65_536).contains(contentLength), request.count >= headerEnd.upperBound + contentLength else { continue }
+                let responseClient = dup(client)
+                guard responseClient >= 0 else { closeClientRequest(client); return }
+                let responseFlags = fcntl(responseClient, F_GETFL)
+                guard responseFlags >= 0, fcntl(responseClient, F_SETFL, responseFlags & ~O_NONBLOCK) == 0 else {
+                    _ = close(responseClient)
+                    closeClientRequest(client)
+                    return
+                }
+                clientSources.removeValue(forKey: client)?.cancel()
+                clientRequests.removeValue(forKey: client)
+                DispatchQueue.global().async { [weak self] in self?.serve(responseClient, requestData: request) }
+                return
+            }
+            if received < 0, (errno == EAGAIN || errno == EWOULDBLOCK) { return }
+            if received < 0, errno == EINTR { continue }
+            closeClientRequest(client)
+            return
         }
+    }
+
+    private func closeClientRequest(_ client: Int32) {
+        clientSources.removeValue(forKey: client)?.cancel()
+        clientRequests.removeValue(forKey: client)
+    }
+
+    private func serve(_ client: Int32, requestData: Data) {
+        defer { _ = close(client) }
+        let request = requestData
         guard let headerEnd = request.range(of: Data("\r\n\r\n".utf8)) else { return }
         let headerData = request[..<headerEnd.lowerBound]
         let headerText = String(data: headerData, encoding: .utf8) ?? ""
@@ -223,9 +270,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let contentLength = headers["content-length"].flatMap(Int.init) ?? 0
         guard (0...65_536).contains(contentLength) else { return }
         let bodyStart = headerEnd.upperBound
-        while request.count - bodyStart < contentLength {
-            let received = read(client, &buffer, buffer.count); guard received > 0 else { return }; request.append(buffer, count: Int(received))
-        }
+        guard request.count - bodyStart >= contentLength else { return }
         let body = Data(request[bodyStart..<(bodyStart + contentLength)])
         let requestLine = headerText.split(separator: "\r\n", maxSplits: 1).first ?? ""
         let parts = requestLine.split(separator: " ")

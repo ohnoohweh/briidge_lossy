@@ -147,6 +147,12 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
                 // cannot close the socket underneath an in-flight response.
                 let responseClient = dup(client)
                 guard responseClient >= 0 else { closeClientRequest(client); return }
+                let responseFlags = fcntl(responseClient, F_GETFL)
+                guard responseFlags >= 0, fcntl(responseClient, F_SETFL, responseFlags & ~O_NONBLOCK) == 0 else {
+                    _ = close(responseClient)
+                    closeClientRequest(client)
+                    return
+                }
                 clientSources.removeValue(forKey: client)?.cancel()
                 clientRequests.removeValue(forKey: client)
                 DispatchQueue.global().async { [weak self] in self?.serve(responseClient, requestData: request) }

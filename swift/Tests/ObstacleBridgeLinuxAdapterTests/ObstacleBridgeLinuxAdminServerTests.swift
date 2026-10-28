@@ -35,7 +35,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
         try server.start(); defer { server.stop() }
         let payload = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/logs?limit=1") as? [String: Any])
         #expect(payload["ok"] as? Bool == true)
-        #expect(payload["logger_available"] as? Bool == true)
+        #expect(payload["available"] as? Bool == true)
         #expect(payload["lines"] as? [String] == ["failed reason=timeout"])
     }
 
