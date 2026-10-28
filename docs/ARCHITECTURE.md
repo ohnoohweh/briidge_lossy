@@ -17,6 +17,11 @@ The current runtime can be understood in eight layers:
 
 The peer-address protocol is a delivered transport-adjacent layer. It obtains the address observed by the connected peer before optional SecureLink processing, and does not change connection readiness. SecureLink remains a delivered runtime slice above it and below the compression/reliability path.
 
+The cross-product Swift receive-ownership inventory and the remaining
+readiness conversions are maintained in [Swift Asynchronous I/O Boundary
+Plan](SWIFT_ASYNC_IO_DESIGN.md). Long-lived receivers use a callback/readiness
+owner; a bounded bootstrap read is not a substitute for one.
+
 ## Desktop process isolation and exchangeability
 
 ### Status at a glance
