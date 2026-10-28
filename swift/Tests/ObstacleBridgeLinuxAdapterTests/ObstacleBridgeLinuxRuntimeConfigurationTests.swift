@@ -51,7 +51,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             elevated: true
         )
         #expect(elevated.path == "/usr/bin/sudo")
-        #expect(elevated.arguments == ["-n", "--", "/opt/obstaclebridge/ObstacleBridgeLinux", "--tun-helper-server", "/tmp/helper.sock", "test-token", "--idle-sec", "30"])
+        #expect(elevated.arguments == ["-n", "--", "/opt/obstaclebridge/ObstacleBridgeLinux", "--tun-helper-server", "/tmp/helper.sock", "test-token", "--idle-sec", "0"])
 
         let direct = ObstacleBridgeLinuxManagedTunHelper.launchCommand(
             executable: "/opt/obstaclebridge/ObstacleBridgeLinux",

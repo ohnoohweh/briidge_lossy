@@ -57,8 +57,8 @@ enum ObstacleBridgeLinuxMain {
         case let values where values.count == 3 && values[0] == "--tun-helper-server":
             runTunHelperServer(socketPath: values[1], sessionToken: values[2], idleTimeout: 5)
         case let values where values.count == 5 && values[0] == "--tun-helper-server" && values[3] == "--idle-sec":
-            guard let idleTimeout = TimeInterval(values[4]), idleTimeout > 0 else {
-                writeError("ObstacleBridgeLinux: --idle-sec requires a positive number of seconds")
+            guard let idleTimeout = TimeInterval(values[4]), idleTimeout >= 0 else {
+                writeError("ObstacleBridgeLinux: --idle-sec requires a non-negative number of seconds")
                 exit(2)
             }
             runTunHelperServer(socketPath: values[1], sessionToken: values[2], idleTimeout: idleTimeout)

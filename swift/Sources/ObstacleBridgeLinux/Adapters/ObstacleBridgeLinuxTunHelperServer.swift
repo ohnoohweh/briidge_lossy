@@ -60,7 +60,8 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         }
         self.socketPath = socketPath
         self.sessionToken = sessionToken
-        self.authenticatedClientIdleTimeout = max(authenticatedClientIdleTimeout, 0.5)
+        // Zero explicitly disables expiry for a foreground-managed helper.
+        self.authenticatedClientIdleTimeout = max(authenticatedClientIdleTimeout, 0)
         self.unauthenticatedClientIdleTimeout = max(unauthenticatedClientIdleTimeout, 0.1)
         self.backend = backend
         self.onStop = onStop
@@ -85,10 +86,12 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         guard bound == 0, listen(fd, 16) == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxTunHelperAdapterError.connectFailed(code) }
         applySocketOwnership()
         listener = fd; running = true; lastAuthenticatedActivityNanoseconds = DispatchTime.now().uptimeNanoseconds
-        let watchdog = DispatchSource.makeTimerSource(queue: watchdogQueue)
-        watchdog.schedule(deadline: .now() + authenticatedClientIdleTimeout, repeating: min(authenticatedClientIdleTimeout, 1))
-        watchdog.setEventHandler { [weak self] in self?.expireIdleHelperIfNeeded() }
-        self.watchdog = watchdog; watchdog.resume()
+        if authenticatedClientIdleTimeout > 0 {
+            let watchdog = DispatchSource.makeTimerSource(queue: watchdogQueue)
+            watchdog.schedule(deadline: .now() + authenticatedClientIdleTimeout, repeating: min(authenticatedClientIdleTimeout, 1))
+            watchdog.setEventHandler { [weak self] in self?.expireIdleHelperIfNeeded() }
+            self.watchdog = watchdog; watchdog.resume()
+        }
         queue.async { [weak self] in self?.acceptLoop() }
     }
 
@@ -200,6 +203,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         lock.lock(); lastAuthenticatedActivityNanoseconds = DispatchTime.now().uptimeNanoseconds; lock.unlock()
     }
     private func expireIdleHelperIfNeeded() {
+        guard authenticatedClientIdleTimeout > 0 else { return }
         lock.lock()
         let timeoutNanoseconds = UInt64(authenticatedClientIdleTimeout * 1_000_000_000)
         let elapsedNanoseconds = DispatchTime.now().uptimeNanoseconds &- lastAuthenticatedActivityNanoseconds

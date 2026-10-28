@@ -515,14 +515,19 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             proxy["listeners"] = workerStatus["listeners"]
             proxy["last_error"] = workerStatus["last_error"]
         }
+        let managedHelperRunning = managedTunHelper?.isRunning ?? false
+        // An auto-managed helper owns the device and policy. Do not present a
+        // configured foreground as active after that child has exited.
+        let packetTunnelActive = current.appReady && configured.packetTunnelEnabled &&
+            (!configured.launchSwiftTunHelper || managedHelperRunning)
         return [
             "packet_tunnel": [
                 "configured": configured.packetTunnelEnabled,
                 "helper_configured": configured.tunHelperSocketPath != nil,
                 "managed_helper": configured.launchSwiftTunHelper,
-                "managed_helper_running": current.appReady && configured.launchSwiftTunHelper,
-                "device_open": current.appReady && configured.packetTunnelEnabled,
-                "network_policy_applied": current.appReady && configured.packetTunnelEnabled,
+                "managed_helper_running": configured.launchSwiftTunHelper ? managedHelperRunning : false,
+                "device_open": packetTunnelActive,
+                "network_policy_applied": packetTunnelActive,
             ],
             "service_sockets": [
                 "configured_local": configured.ownServices.count,
