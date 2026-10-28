@@ -78,6 +78,21 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try session.receive() == Data("python-first".utf8))
     }
 
+    @Test func myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap() throws {
+        let peer = try PythonOverlayPeer(mode: "myudp-duplex")
+        defer { peer.stop() }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .myudp)
+        let session = try client.openSession(); defer { session.close() }
+        let received = DispatchSemaphore(value: 0)
+        let value = LockedData()
+        session.startAsyncReceive { result in
+            if case .success(let payload) = result { value.store(payload); received.signal() }
+        }
+        try session.send(Data("register".utf8))
+        #expect(received.wait(timeout: .now() + 2) == .success)
+        #expect(value.load() == Data("python-first".utf8))
+    }
+
     @Test func webSocketUpgradeAndBinaryFrameRoundTripAgainstPythonPeer() throws {
         let peer = try PythonOverlayPeer(mode: "ws")
         defer { peer.stop() }
@@ -1464,3 +1479,10 @@ final class PythonOverlayPeer {
 }
 
 private enum OverlayTestError: Error { case peerDidNotStart }
+
+private final class LockedData: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Data?
+    func store(_ value: Data) { lock.lock(); self.value = value; lock.unlock() }
+    func load() -> Data? { lock.lock(); defer { lock.unlock() }; return value }
+}

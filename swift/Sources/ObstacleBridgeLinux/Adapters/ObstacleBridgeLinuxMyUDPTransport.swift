@@ -30,6 +30,9 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private var deliveredPayloads: [Data] = []
     private let stateLock = NSLock()
     private let receiveLock = NSLock()
+    private let readinessQueue = DispatchQueue(label: "org.obstaclebridge.linux.myudp.readiness")
+    private var readSource: DispatchSourceRead?
+    private var timerSource: DispatchSourceTimer?
 
     /// `nextDataCounter` is an injectable Core seed for deterministic
     /// rollover qualification; normal runtime construction uses `1`.
@@ -165,7 +168,69 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         }
     }
 
+    /// Switches the established session from bootstrap reads to readiness-driven
+    /// operation. The source and timer share one queue, preserving datagram and
+    /// timer-effect order without leaving a thread blocked in `recv`.
+    public func startAsyncReceive(_ handler: @escaping (Result<Data, Error>) -> Void) throws {
+        receiveLock.lock()
+        defer { receiveLock.unlock() }
+        guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
+        guard readSource == nil else { return }
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno)
+        }
+        let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: readinessQueue)
+        source.setEventHandler { [weak self] in self?.drainReadyDatagrams(handler) }
+        let timer = DispatchSource.makeTimerSource(queue: readinessQueue)
+        timer.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100), leeway: .milliseconds(10))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            do { try self.serviceTimers() }
+            catch { handler(.failure(error)) }
+        }
+        readSource = source; timerSource = timer
+        source.resume(); timer.resume()
+    }
+
+    private func drainReadyDatagrams(_ handler: @escaping (Result<Data, Error>) -> Void) {
+        while true {
+            var buffer = [UInt8](repeating: 0, count: 1_452)
+            let received = recv(descriptor, &buffer, buffer.count, 0)
+            if received <= 0 {
+                let code = errno
+                if code == EAGAIN || code == EWOULDBLOCK { return }
+                handler(.failure(ObstacleBridgeLinuxMyUDPError.ioFailure(code)))
+                return
+            }
+            do {
+                for payload in try acceptInboundWire(Data(buffer.prefix(Int(received)))) {
+                    handler(.success(payload))
+                }
+            } catch {
+                handler(.failure(error))
+                return
+            }
+        }
+    }
+
+    private func acceptInboundWire(_ wire: Data) throws -> [Data] {
+        stateLock.lock()
+        let now = DispatchTime.now().uptimeNanoseconds
+        let effect: ObstacleBridgeUdpOverlayPeerRuntime.InboundWireSnapshot
+        do { effect = try peerRuntime.receiveWire(wire, nowNS: now) }
+        catch { stateLock.unlock(); throw ObstacleBridgeLinuxMyUDPError.invalidReply }
+        deliveredPayloads.append(contentsOf: effect.deliveredPayloads)
+        let payloads = deliveredPayloads
+        deliveredPayloads.removeAll(keepingCapacity: true)
+        stateLock.unlock()
+        try execute(effect.emittedFrames)
+        return payloads
+    }
+
     public func close() {
+        readSource?.cancel(); readSource = nil
+        timerSource?.cancel(); timerSource = nil
         if descriptor >= 0 {
             let active = descriptor
             descriptor = -1

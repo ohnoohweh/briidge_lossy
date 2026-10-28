@@ -1019,6 +1019,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                     if let payload = try session.receiveForOwner() { return payload }
                 }
             },
+            asyncReceive: session.supportsAsyncReceive ? { completion in
+                session.startAsyncReceiveOwner(completion)
+            } : nil,
             cancelReceive: { session.cancelReceive() },
             sink: { [weak self] workerEpoch, payload in
                 guard let self, self.configuredRuntime.connectionEpoch == workerEpoch else { return }

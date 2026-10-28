@@ -11,12 +11,13 @@ public struct ObstacleBridgeLinuxReceiveWorkerSnapshot: Equatable, Sendable {
     public let failureReason: String?
 }
 
-/// One blocking reader for one lower-transport epoch. The worker never invokes
-/// its sink on the reader queue: a bounded handoff queue keeps descriptor reads
-/// isolated from ChannelMux processing and cancellation is epoch-scoped.
+/// One receive owner for one lower-transport epoch. POSIX stream transports
+/// use its reader queue; readiness-driven transports supply callbacks. In both
+/// cases a bounded handoff queue keeps ChannelMux processing isolated.
 public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
     private let epoch: UInt64
     private let receive: () throws -> Data
+    private let asyncReceive: ((@escaping (Result<Data?, Error>) -> Void) -> Void)?
     private let cancelReceive: () -> Void
     private let sink: (UInt64, Data) -> Void
     private let onFailure: (UInt64, String) -> Void
@@ -32,13 +33,17 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
     private var failure: String?
     private var lastReceivedUnixTS: TimeInterval?
 
-    public init(epoch: UInt64, capacity: Int = 128, receive: @escaping () throws -> Data, cancelReceive: @escaping () -> Void, sink: @escaping (UInt64, Data) -> Void, onFailure: @escaping (UInt64, String) -> Void = { _, _ in }) {
-        self.epoch = epoch; self.capacity = max(1, capacity); self.receive = receive; self.cancelReceive = cancelReceive; self.sink = sink; self.onFailure = onFailure
+    public init(epoch: UInt64, capacity: Int = 128, receive: @escaping () throws -> Data, asyncReceive: ((@escaping (Result<Data?, Error>) -> Void) -> Void)? = nil, cancelReceive: @escaping () -> Void, sink: @escaping (UInt64, Data) -> Void, onFailure: @escaping (UInt64, String) -> Void = { _, _ in }) {
+        self.epoch = epoch; self.capacity = max(1, capacity); self.receive = receive; self.asyncReceive = asyncReceive; self.cancelReceive = cancelReceive; self.sink = sink; self.onFailure = onFailure
     }
 
     public func start() {
         lock.lock(); guard stopped else { lock.unlock(); return }; stopped = false; lock.unlock()
-        reader.async { [weak self] in self?.readLoop() }
+        if let asyncReceive {
+            asyncReceive { [weak self] result in self?.receiveAsyncResult(result) }
+        } else {
+            reader.async { [weak self] in self?.readLoop() }
+        }
     }
 
     public func stop() {
@@ -64,6 +69,19 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
                 if reportFailure { onFailure(epoch, reason) }
                 return
             }
+        }
+    }
+
+    private func receiveAsyncResult(_ result: Result<Data?, Error>) {
+        lock.lock(); let isStopped = stopped; lock.unlock()
+        guard !isStopped else { return }
+        switch result {
+        case .success(let data):
+            if let data { enqueue(data) }
+        case .failure(let error):
+            let reason = error.localizedDescription
+            lock.lock(); let reportFailure = !stopped; if reportFailure { failure = reason }; lock.unlock()
+            if reportFailure { onFailure(epoch, reason) }
         }
     }
 

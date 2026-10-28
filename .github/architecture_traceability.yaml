@@ -876,6 +876,8 @@ ARC-CMP-005:
   # The private Admin-worker boundary returns that same envelope.
   # The shared live-status contract retains bounded runtime metrics on Python
   # and every Swift host, so a live update cannot clear Runtime Analysis rows.
+  # Linux-native myUDP uses nonblocking read readiness and a separately
+  # scheduled Core timer after bootstrap; idle socket waits are not receive work.
   unit_tests:
     # Build identity is re-probed by each supervised Python child, including
     # elevated restarts against a developer-owned source checkout.
@@ -891,6 +893,7 @@ ARC-CMP-005:
     - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates
     - tests/unit/test_admin_worker.py::test_python_admin_worker_updates_runner_and_serves_concurrent_requests
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_status_frame_contains_payload
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap
     - tests/unit/test_admin_worker.py::test_admin_worker_exits_on_owner_loss_and_reports_child_loss
     - tests/unit/test_admin_worker.py::test_supervised_admin_recovers_at_same_port_with_authentication
     - tests/unit/test_admin_worker.py::test_supervised_admin_retries_failed_bind_and_stops_without_orphans

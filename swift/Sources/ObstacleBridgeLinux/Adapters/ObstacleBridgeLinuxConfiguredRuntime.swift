@@ -170,6 +170,22 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// directional counters, so the receive worker never observes ciphertext
     /// outside this boundary.
     public var supportsDuplexReceive: Bool { true }
+    public var supportsAsyncReceive: Bool { lowerSession.supportsAsyncReceive }
+
+    /// Installs a readiness-driven lower receive source after the synchronous
+    /// bootstrap handshake. SecureLink remains the sole owner of protected
+    /// records; only socket waiting moves out of the receive worker.
+    public func startAsyncReceiveOwner(_ handler: @escaping (Result<Data?, Error>) -> Void) {
+        lowerSession.startAsyncReceive { [weak self] result in
+            guard let self else { return }
+            do {
+                switch result {
+                case .success(let wire): handler(.success(try self.handleReceivedWire(wire)))
+                case .failure(let error): handler(.failure(error))
+                }
+            } catch { handler(.failure(error)) }
+        }
+    }
     public func sendOneWay(_ payload: Data) throws {
         let started = DispatchTime.now().uptimeNanoseconds
         defer { ObstacleBridgeRuntimeMetrics.shared.record(.overlaySend, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
@@ -257,21 +273,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         do {
             while true {
                 if let payload = takeHandshakeDeliveredPayload() { return payload }
-                let wire = try lowerSession.receive()
-                let payload: Data?
-                if let overlayAdapter {
-                    let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
-                    for reply in inbound.emittedFrames { try sendSecureLinkBoundaryFrame(reply) }
-                    payload = inbound.deliveredPayloads.first
-                } else if let secureLink {
-                    payload = try secureLink.unprotect(wire)
-                } else if let secureLinkServer {
-                    payload = try secureLinkServer.unprotect(wire)
-                } else {
-                    payload = wire
-                }
-                onSecureLinkStateChange?()
-                debug("secure_link.inbound", ["wire_bytes": String(wire.count), "delivered_application": payload == nil ? "false" : "true"])
+                let payload = try handleReceivedWire(lowerSession.receive())
                 // SecureLink rekey controls have no application payload. They
                 // are fully handled by Core above and must not retire a live
                 // receive epoch merely because ChannelMux has nothing to read.
@@ -291,6 +293,24 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
             fail(error)
             throw error
         }
+    }
+
+    private func handleReceivedWire(_ wire: Data) throws -> Data? {
+        let payload: Data?
+        if let overlayAdapter {
+            let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
+            for reply in inbound.emittedFrames { try sendSecureLinkBoundaryFrame(reply) }
+            payload = inbound.deliveredPayloads.first
+        } else if let secureLink {
+            payload = try secureLink.unprotect(wire)
+        } else if let secureLinkServer {
+            payload = try secureLinkServer.unprotect(wire)
+        } else {
+            payload = wire
+        }
+        onSecureLinkStateChange?()
+        debug("secure_link.inbound", ["wire_bytes": String(wire.count), "delivered_application": payload == nil ? "false" : "true"])
+        return payload
     }
 
     public func activateReceiveOwner() {

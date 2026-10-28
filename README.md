@@ -1103,6 +1103,8 @@ The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) 
 
 An open WebAdmin page receives status and peer updates through the shared `/api/live` WebSocket subscription; if a browser cannot keep that subscription, the page falls back to bounded HTTP polling. The bounded Runtime Analysis metrics are retained in live status updates on Python and every Swift host, so the detailed runtime list remains populated after the first browser snapshot.
 
+On Linux native myUDP, authenticated receive uses nonblocking socket readiness and a separate protocol-timer source; it does not hold a receive thread in a timed `recv` wait while idle.
+
 Python, Linux, macOS, and iOS products show their build identity in the WebAdmin headline and Runtime Metadata view. A Python source checkout reports its live Git revision and working-tree state; Git-less deployments report the build stamp generated immediately before deployment. The commit is always the standard first eight characters of the Git revision, with build timestamp and taint state.
 
 After a complete in-place update of a source checkout, the running launcher can

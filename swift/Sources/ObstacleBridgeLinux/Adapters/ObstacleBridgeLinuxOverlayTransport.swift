@@ -230,6 +230,10 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     exchange: { payload in try datagram.exchange(payload) },
                     send: { payload in _ = try datagram.send(payload) },
                     receive: { try datagram.receive().payload },
+                    asyncReceive: { handler in
+                        do { try datagram.startAsyncReceive(handler) }
+                        catch { handler(.failure(error)) }
+                    },
                     probeLiveness: { try datagram.serviceTimers() },
                     protocolStats: { datagram.protocolStatsSnapshot() },
                     secureLinkBoundary: { direction in
@@ -537,6 +541,7 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
     private let exchangeImpl: (Data) throws -> Data
     private let sendImpl: ((Data) throws -> Void)?
     private let receiveImpl: (() throws -> Data)?
+    private let asyncReceiveImpl: ((@escaping (Result<Data, Error>) -> Void) -> Void)?
     private let probeLivenessImpl: (() throws -> Void)?
     private let protocolStatsImpl: (() -> [String: UInt64])?
     private let secureLinkBoundaryImpl: ((String) -> Void)?
@@ -546,10 +551,11 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
 
     public var onLivenessSample: ((Double) -> Void)?
 
-    init(exchange: @escaping (Data) throws -> Data, send: ((Data) throws -> Void)? = nil, receive: (() throws -> Data)? = nil, probeLiveness: (() throws -> Void)? = nil, protocolStats: (() -> [String: UInt64])? = nil, secureLinkBoundary: ((String) -> Void)? = nil, close: @escaping () -> Void) {
+    init(exchange: @escaping (Data) throws -> Data, send: ((Data) throws -> Void)? = nil, receive: (() throws -> Data)? = nil, asyncReceive: ((@escaping (Result<Data, Error>) -> Void) -> Void)? = nil, probeLiveness: (() throws -> Void)? = nil, protocolStats: (() -> [String: UInt64])? = nil, secureLinkBoundary: ((String) -> Void)? = nil, close: @escaping () -> Void) {
         self.exchangeImpl = exchange
         self.sendImpl = send
         self.receiveImpl = receive
+        self.asyncReceiveImpl = asyncReceive
         self.probeLivenessImpl = probeLiveness
         self.protocolStatsImpl = protocolStats
         self.secureLinkBoundaryImpl = secureLinkBoundary
@@ -574,6 +580,12 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
         lock.lock(); let isClosed = closed; lock.unlock()
         guard !isClosed, let receiveImpl else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
         return try receiveImpl()
+    }
+
+    public var supportsAsyncReceive: Bool { asyncReceiveImpl != nil }
+
+    public func startAsyncReceive(_ handler: @escaping (Result<Data, Error>) -> Void) {
+        asyncReceiveImpl?(handler)
     }
 
     public var supportsLivenessProbes: Bool { probeLivenessImpl != nil }
