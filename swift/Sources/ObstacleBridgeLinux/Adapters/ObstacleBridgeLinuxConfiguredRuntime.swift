@@ -77,6 +77,11 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     private let requestLock = NSLock()
     private var receiveOwnerActive = false
     private var pendingCompatibilityReply: (signal: DispatchSemaphore, value: Data?)?
+    /// A peer can publish its first authenticated ChannelMux control frame
+    /// while the client is still completing the lower peer-address exchange.
+    /// Keep that frame until the single receive owner is active rather than
+    /// treating it as handshake-only traffic.
+    private var handshakeDeliveredPayloads: [Data] = []
     /// The resource owner supplies measured request/reply latency. The Core
     /// lifecycle decides whether sustained delay retires the epoch.
     public var onTransportLivenessSample: ((Double) -> Void)?
@@ -187,6 +192,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
 
     public func receiveInbound() throws -> Data {
         do {
+            if let payload = takeHandshakeDeliveredPayload() { return payload }
             let wire = try lowerSession.receive()
             if let overlayAdapter {
                 let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
@@ -250,6 +256,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         defer { ObstacleBridgeRuntimeMetrics.shared.record(.overlayReceive, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         do {
             while true {
+                if let payload = takeHandshakeDeliveredPayload() { return payload }
                 let wire = try lowerSession.receive()
                 let payload: Data?
                 if let overlayAdapter {
@@ -330,10 +337,22 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
 
     func completeClientHandshake(sessionID: UInt64, clientNonce: Data) throws {
         guard let overlayAdapter else { return }
-        _ = try exchangeAdapterFrames(try overlayAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce).emittedFrames)
+        let delivered = try exchangeAdapterFrames(try overlayAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce).emittedFrames)
+        if !delivered.isEmpty {
+            requestLock.lock()
+            handshakeDeliveredPayloads.append(contentsOf: delivered)
+            requestLock.unlock()
+        }
         guard overlayAdapter.secureLinkProtocolState()?.authenticated == true else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
         }
+    }
+
+    private func takeHandshakeDeliveredPayload() -> Data? {
+        requestLock.lock()
+        defer { requestLock.unlock() }
+        guard !handshakeDeliveredPayloads.isEmpty else { return nil }
+        return handshakeDeliveredPayloads.removeFirst()
     }
 
     private func exchangeAdapterFrames(_ initialFrames: [Data]) throws -> [Data] {

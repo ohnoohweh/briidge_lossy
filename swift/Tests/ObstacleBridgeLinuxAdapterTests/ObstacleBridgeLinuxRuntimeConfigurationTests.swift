@@ -221,6 +221,47 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(session.observedPublicPort == 44321)
     }
 
+    @Test func clientHandshakePreservesCatalogReceivedBeforePeerAddressReply() throws {
+        let psk = Data("linux-swift-early-catalog-psk".utf8)
+        let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
+        let peerAddressServer = ObstacleBridgePeerAddressProtocolRuntime(clientMode: false)
+        let catalog = Data("early-remote-services-catalog".utf8)
+        var lowerReceiveCalls = 0
+        let lower = ObstacleBridgeLinuxOverlayTransportSession(
+            exchange: { wire in
+                if server.isAuthenticated {
+                    let response = peerAddressServer.handleInboundFrame(
+                        wire, observedPeerHost: "203.0.113.47", observedPeerPort: 44321
+                    )
+                    #expect(response.consumed)
+                    // A Python listener can publish its catalog immediately
+                    // after authentication, before its peer-address reply is
+                    // read by the native client.
+                    return try server.protect(catalog)
+                }
+                if server.state.sessionID == 0 {
+                    return try server.handleClientHello(wire, serverNonce: Data(repeating: 7, count: 32))
+                }
+                return try server.handleClientProof(wire)
+            },
+            receive: {
+                lowerReceiveCalls += 1
+                throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF
+            },
+            close: {}
+        )
+        let adapter = ObstacleBridgeOverlayLayerTransportAdapter(clientPSK: String(decoding: psk, as: UTF8.self))
+        let session = ObstacleBridgeLinuxConfiguredSession(
+            lowerSession: lower, overlayAdapter: adapter, transport: .tcp
+        )
+
+        try session.completeClientHandshake(sessionID: 77, clientNonce: Data(repeating: 9, count: 32))
+        session.activateReceiveOwner()
+
+        #expect(try session.receiveForOwner() == catalog)
+        #expect(lowerReceiveCalls == 0)
+    }
+
     @Test func configuredSessionForwardsPeriodicLowerLivenessProbe() throws {
         var probes = 0
         let lower = ObstacleBridgeLinuxOverlayTransportSession(

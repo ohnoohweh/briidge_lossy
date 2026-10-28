@@ -4602,24 +4602,43 @@ def test_macos_host_proxy_logs_follow_collector(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     artifact = build_macos_swift_artifact()
-    status_port = _unused_tcp_port()
-    proxy_port = _unused_tcp_port()
-    while proxy_port == status_port:
-        proxy_port = _unused_tcp_port()
     config_path = tmp_path / "runtime.json"
-    config_path.write_text(json.dumps({
-        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+    config: dict[str, object] = {
+        "admin_web": True, "admin_web_bind": "127.0.0.1",
         "debug_logging": {"log_worker": log_implementation, "log_worker_python_executable": sys.executable},
         "proxy_provider": {
-            "enabled": True, "bind": "127.0.0.1", "http_port": proxy_port,
+            "enabled": True, "bind": "127.0.0.1",
             "socks5_port": 0, "protocols": ["http-connect"], "worker": proxy_implementation,
             "worker_python_executable": sys.executable,
             "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
             "egress": {"mode": "direct"},
             "policy": {"allow_private_destinations": True, "blocked_host_patterns": []},
         },
-    }), encoding="utf-8")
-    process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    }
+    process = None
+    status_port = proxy_port = 0
+    # The hosted macOS image can briefly retain a just-released loopback port
+    # from a preceding worker test.  A host runner which cannot bind its Admin
+    # endpoint exits before it can expose the useful startup error, so retry
+    # only that address-in-use race with a fresh, distinct pair.
+    for attempt in range(3):
+        status_port, proxy_port = _unused_tcp_ports(2)
+        config["admin_web_port"] = status_port
+        proxy_config = config["proxy_provider"]
+        assert isinstance(proxy_config, dict)
+        proxy_config["http_port"] = proxy_port
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            _wait_http_condition(f"http://127.0.0.1:{status_port}/api/status", lambda _item: True, timeout_sec=2)
+            break
+        except AssertionError:
+            if process.poll() is None:
+                raise
+            _stdout, stderr = process.communicate(timeout=2)
+            if attempt == 2 or "address already in use" not in stderr.lower():
+                raise AssertionError(f"macOS host runner exited before Admin startup: {stderr.strip()}")
+    assert process is not None
     try:
         url = f"http://127.0.0.1:{status_port}/api/status"
         logs_url = f"http://127.0.0.1:{status_port}/api/logs?limit=100"
