@@ -34,6 +34,12 @@ must be converted rather than retained indefinitely.
 | Linux and desktop logging collector/supervisor query | blocking poll/receive request paths | descriptor readiness handling and callback completion for bounded queries |
 | macOS XPC helper control | semaphore wait around XPC reply | async XPC command completion propagated to the caller's lifecycle owner |
 
+No remaining row above is a permitted synchronous fallback: each boundary owns a
+descriptor or framework callback that can expose readiness/completion.  The
+only allowed bounded synchronous operation is bootstrap validation before an
+event-loop owner exists, with a deadline and generation fence; it must not be
+used for a long-lived receiver.
+
 ## Narrow bootstrap exception
 
 A process may perform a bounded synchronous read only before it owns an event
