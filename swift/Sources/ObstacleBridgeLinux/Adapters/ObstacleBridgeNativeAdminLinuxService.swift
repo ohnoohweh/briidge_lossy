@@ -785,7 +785,9 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             guard ready >= 0 else { return }
             guard ready > 0 else { continue }
             var buffer = [UInt8](repeating: 0, count: 16 * 1024)
-            let count = read(client, &buffer, buffer.count)
+            let count = recv(client, &buffer, buffer.count, Int32(MSG_DONTWAIT))
+            if count < 0, (errno == EAGAIN || errno == EWOULDBLOCK) { continue }
+            if count < 0, errno == EINTR { continue }
             guard count > 0 else { return }
             receiveBuffer.append(buffer, count: Int(count))
             while let frame = parseWebSocketFrame(receiveBuffer) {
