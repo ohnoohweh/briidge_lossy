@@ -346,9 +346,23 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
     private func readExactly(_ count: Int, from fd: Int32) throws -> Data {
         var output = Data(); output.reserveCapacity(count)
         var buffer = [UInt8](repeating: 0, count: min(8192, max(1, count)))
+        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(timeoutMilliseconds) * 1_000_000
         while output.count < count {
-            let received = read(fd, &buffer, min(buffer.count, count - output.count))
-            guard received > 0 else { if errno == EAGAIN || errno == EWOULDBLOCK { throw ObstacleBridgeLinuxTunHelperAdapterError.timeout }; throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected }
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now < deadline else { throw ObstacleBridgeLinuxTunHelperAdapterError.timeout }
+            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let remaining = Int32(min(UInt64(Int32.max), max(1, (deadline - now) / 1_000_000)))
+            let ready = poll(&descriptor, 1, remaining)
+            if ready < 0, errno == EINTR { continue }
+            guard ready > 0, descriptor.revents & Int16(POLLIN) != 0 else {
+                if ready == 0 { throw ObstacleBridgeLinuxTunHelperAdapterError.timeout }
+                throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected
+            }
+            // A readiness event may be stale after a helper teardown.  Never
+            // enter a blocking stream read on the control-exchange thread.
+            let received = recv(fd, &buffer, min(buffer.count, count - output.count), Int32(MSG_DONTWAIT))
+            if received < 0, errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
+            guard received > 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected }
             output.append(buffer, count: Int(received))
         }
         return output
