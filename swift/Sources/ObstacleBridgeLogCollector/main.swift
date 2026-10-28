@@ -103,7 +103,10 @@ if privateMode {
         fail("logging worker startup timed out")
     }
     var helloBuffer = [UInt8](repeating: 0, count: maxDatagram + ObstacleBridgeWorkerIPC.headerBytes + 1)
-    let helloCount = recv(data, &helloBuffer, helloBuffer.count, 0)
+    // The startup poll only grants a bounded opportunity to authenticate the
+    // inherited datagram; it must not turn into a blocking read if readiness
+    // was consumed while the worker was scheduled.
+    let helloCount = recv(data, &helloBuffer, helloBuffer.count, Int32(MSG_DONTWAIT))
     guard helloCount > 0, helloCount <= maxDatagram + ObstacleBridgeWorkerIPC.headerBytes,
           let decoded = try? ObstacleBridgeWorkerIPC.decode(Data(helloBuffer.prefix(helloCount))),
           let hello = decoded.0, decoded.1.isEmpty, hello.kind == .hello, hello.generation == generation,
@@ -162,11 +165,13 @@ while true {
     var peerLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
     let count = withUnsafeMutablePointer(to: &peer) { address in
         address.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-            recvfrom(socketFD, &buffer, buffer.count, 0, $0, &peerLength)
+            // Poll readiness is advisory. A stale notification must return to
+            // the collector loop instead of pinning the worker in recvfrom.
+            recvfrom(socketFD, &buffer, buffer.count, Int32(MSG_DONTWAIT), $0, &peerLength)
         }
     }
     if count < 0 {
-        if errno == EINTR { continue }
+        if errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
         fail("collector socket receive failed")
     }
     guard count <= (privateMode ? maxReplyDatagram + ObstacleBridgeWorkerIPC.headerBytes : maxDatagram) else { continue }
