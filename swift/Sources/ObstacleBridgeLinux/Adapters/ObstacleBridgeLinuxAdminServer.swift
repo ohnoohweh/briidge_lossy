@@ -34,6 +34,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let statusProvider: () -> ObstacleBridgeLinuxRuntimeStatus
     private let peersProvider: () -> [(identity: String, snapshot: ObstacleBridgeLinuxPeerSnapshot)]
     private let connectionsProvider: () -> [String: Any]
+    private let peerTrafficProvider: () -> [String: UInt64]
     private let runtimeHealthProvider: () -> (count: Int, previousClean: Bool?)
     private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
     private let resourceHealthProvider: () -> [String: Any]
@@ -62,6 +63,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
         self.connectionsProvider = connectionsProvider
+        self.peerTrafficProvider = { .init() }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
@@ -84,6 +86,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.statusProvider = { liveRuntime.status() }
         self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
         self.connectionsProvider = { liveRuntime.connectionsForAdmin() }
+        self.peerTrafficProvider = { liveRuntime.peerTrafficForAdmin() }
         self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
         self.runtimeHealthRecordsProvider = { liveRuntime.runtimeHealthRecentRecordsForAdmin() }
         self.resourceHealthProvider = { liveRuntime.resourceHealthForAdmin() }
@@ -108,6 +111,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             myudpListenerRuntime.peers().map { ($0.identity, $0.snapshot) }
         }
         self.connectionsProvider = { ["tcp": [], "udp": [], "tun": []] }
+        self.peerTrafficProvider = { .init() }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
@@ -773,17 +777,18 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
 
     private func peersPayload() -> [[String: Any]] {
         let status = statusProvider()
+        let traffic = peerTrafficProvider()
         return ObstacleBridgeAdminSnapshotSupport.peersSnapshotForAPI(peersProvider().map { row in
             let endpointHost = status.activeHost ?? status.configuredCandidates.first
             return ObstacleBridgeAdminSnapshotSupport.peerEnvelope(facts: peerFacts(
-                row.snapshot, identity: row.identity, endpointHost: endpointHost, status: status
+                row.snapshot, identity: row.identity, endpointHost: endpointHost, status: status, traffic: traffic
             ))
         })
     }
 
     /// Convert Linux-owned runtime state into portable facts. Core owns every
     /// `/api/peers` key and nested object derived from those facts.
-    private func peerFacts(_ peer: ObstacleBridgeLinuxPeerSnapshot, identity: String, endpointHost: String?, status: ObstacleBridgeLinuxRuntimeStatus) -> ObstacleBridgeAdminPeerFacts {
+    private func peerFacts(_ peer: ObstacleBridgeLinuxPeerSnapshot, identity: String, endpointHost: String?, status: ObstacleBridgeLinuxRuntimeStatus, traffic: [String: UInt64] = [:]) -> ObstacleBridgeAdminPeerFacts {
         .init(
             identity: identity, transport: peer.transport, lifecycleState: peer.lifecycleState,
             secureLinkState: peer.secureLinkState, connectionEpoch: peer.connectionEpoch,
@@ -802,7 +807,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             secureLinkMode: status.secureLinkMode, endpointHost: endpointHost, endpointPort: status.port,
             configuredCandidates: status.configuredCandidates, activeTCPChannels: status.activeTCPChannels,
             activeUDPChannels: status.activeUDPChannels, failureReason: status.failureReason,
-            myudpStats: peer.myudpStats
+            traffic: traffic, myudpStats: peer.myudpStats
         )
     }
 

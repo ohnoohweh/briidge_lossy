@@ -2100,6 +2100,15 @@ function renderRuntimeMetrics(status) {
     const maximum = fmtInteger(level?.max_queued_messages_since_start ?? 0);
     return [`FIFO — ${name.replaceAll('_', ' ')}`, `${queued} queued · high-water ${maximum}`];
   });
+  const categoryRows = (Array.isArray(metrics.categories) ? metrics.categories : [])
+    .filter((item) => Number(item?.count || 0) > 0)
+    .map((item) => {
+      const name = String(item.category || 'unknown').replaceAll('_', ' ');
+      const count = fmtInteger(item.count);
+      const total = Number(item.total_ms || 0).toFixed(1);
+      const maximum = Number(item.max_ms || 0).toFixed(1);
+      return [`Activity — ${name}`, `${count} callbacks · ${total} ms total · ${maximum} ms max`];
+    });
   const cpuContributor = (item) => item?.category ? ` · ${item.category} ${(Number(item.observed_cores) * 100).toFixed(1)}% occupancy` : '';
   summary.textContent = 'Peak values since start and over the trailing two seconds.';
   rows.innerHTML = [
@@ -2107,6 +2116,7 @@ function renderRuntimeMetrics(status) {
     ['Longest uninterrupted — last 2 s', slice.last_2_seconds == null ? '—' : `${Number(slice.last_2_seconds).toFixed(1)} ms · ${metrics.longest_uninterrupted_last_2_seconds_category || 'unknown source'}`],
     ['Max CPU load — since start', cpu.overall == null ? '—' : `${(Number(cpu.overall) * 100).toFixed(1)}% of one core${cpuContributor(cpu.overall_contributor)}`],
     ['Max CPU load — last 2 s', cpu.last_2_seconds == null ? '—' : `${(Number(cpu.last_2_seconds) * 100).toFixed(1)}% of one core${cpuContributor(cpu.last_2_seconds_contributor)}`],
+    ...categoryRows,
     ...fifoRows
   ].map(([label, value]) => `<div class="kv-row"><span>${label}</span><strong>${value}</strong></div>`).join('');
 }

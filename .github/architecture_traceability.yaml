@@ -34,6 +34,7 @@ ARC-CMP-001:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebSocketOverlayRuntimeTests.swift::clientLayerAdapterRequestsAndProjectsObservedPublicEndpoint
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebSocketOverlayRuntimeTests.swift::udpPeerRuntimeEmitsAndDeliversPortableRecordEffects
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::myudpSecureLinkBoundaryCountersCoverHandshakeAndPeerAddressDiscovery
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::peerTrafficAggregationUsesOwnedConnectionRows
     - tests/unit/test_connection_lifecycle.py::test_event_snapshot_round_trip_preserves_state_epoch_and_reason
     - tests/unit/test_connection_lifecycle.py::test_event_normalizes_legacy_connected_snapshot
     - tests/unit/test_connection_lifecycle.py::test_event_rejects_negative_epoch

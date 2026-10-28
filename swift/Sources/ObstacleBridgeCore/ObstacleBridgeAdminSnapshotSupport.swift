@@ -34,6 +34,7 @@ public struct ObstacleBridgeAdminPeerFacts: Sendable {
     public let activeTCPChannels: Int
     public let activeUDPChannels: Int
     public let failureReason: String?
+    public let traffic: [String: UInt64]
     public let myudpStats: [String: UInt64]
 
     public init(
@@ -50,7 +51,7 @@ public struct ObstacleBridgeAdminPeerFacts: Sendable {
         compression: ObstacleBridgeMuxCompressionSnapshot, secureLinkMode: String,
         endpointHost: String?, endpointPort: Int, configuredCandidates: [String],
         activeTCPChannels: Int, activeUDPChannels: Int, failureReason: String?,
-        myudpStats: [String: UInt64]
+        traffic: [String: UInt64] = [:], myudpStats: [String: UInt64]
     ) {
         self.identity = identity; self.transport = transport; self.lifecycleState = lifecycleState
         self.secureLinkState = secureLinkState; self.connectionEpoch = connectionEpoch
@@ -66,11 +67,35 @@ public struct ObstacleBridgeAdminPeerFacts: Sendable {
         self.compression = compression; self.secureLinkMode = secureLinkMode
         self.endpointHost = endpointHost; self.endpointPort = endpointPort
         self.configuredCandidates = configuredCandidates; self.activeTCPChannels = activeTCPChannels
-        self.activeUDPChannels = activeUDPChannels; self.failureReason = failureReason; self.myudpStats = myudpStats
+        self.activeUDPChannels = activeUDPChannels; self.failureReason = failureReason
+        self.traffic = traffic; self.myudpStats = myudpStats
     }
 }
 
 public enum ObstacleBridgeAdminSnapshotSupport {
+    /// Sums the common connection-table counters for the enclosing peer row.
+    /// Connection rows retain per-channel detail while the peer page presents
+    /// the complete authenticated ChannelMux traffic for that peer.
+    public static func aggregateConnectionTraffic(_ connections: [String: Any]) -> [String: UInt64] {
+        let keys = ["rx_bytes", "tx_bytes", "rx_msgs", "tx_msgs"]
+        var totals = Dictionary(uniqueKeysWithValues: keys.map { ($0, UInt64(0)) })
+        for protocolName in ["tcp", "udp", "tun"] {
+            guard let rows = connections[protocolName] as? [[String: Any]] else { continue }
+            for row in rows {
+                guard let stats = row["stats"] as? [String: Any] else { continue }
+                for key in keys {
+                    let value: UInt64
+                    if let number = stats[key] as? UInt64 { value = number }
+                    else if let number = stats[key] as? Int { value = UInt64(max(0, number)) }
+                    else if let number = stats[key] as? NSNumber { value = number.uint64Value }
+                    else { value = 0 }
+                    totals[key, default: 0] &+= value
+                }
+            }
+        }
+        return totals
+    }
+
     /// Maps the portable ChannelMux service catalog to the role shown by the
     /// Admin API. `own_servers` accepts local connections on this runtime;
     /// `remote_servers` represents a listener owned by the authenticated peer.
@@ -326,6 +351,7 @@ public enum ObstacleBridgeAdminSnapshotSupport {
             transmitDelayEstimateMS: facts.myudpStats["transmit_delay_est_ms"] ?? 0,
             decodeErrors: facts.myudpStats["stream_decode_errors"] ?? 0,
             inflight: facts.myudpStats["inflight"] ?? 0,
+            traffic: facts.traffic.reduce(into: [String: Any]()) { $0[$1.key] = $1.value },
             openConnections: ["tcp": facts.activeTCPChannels, "udp": facts.activeUDPChannels, "tun": 0],
             connectionLayers: layers,
             secureLink: [

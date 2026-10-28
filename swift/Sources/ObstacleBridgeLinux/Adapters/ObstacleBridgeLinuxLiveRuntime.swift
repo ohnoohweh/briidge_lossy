@@ -632,6 +632,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         }
     }
 
+    /// The peer page is a peer-scoped summary of the same ChannelMux service
+    /// rows exposed by `/api/connections`; do not substitute SecureLink frame
+    /// counts for locally observed service bytes.
+    public func peerTrafficForAdmin() -> [String: UInt64] {
+        ObstacleBridgeAdminSnapshotSupport.aggregateConnectionTraffic(connectionsForAdmin())
+    }
+
     private func openTransport(epoch: UInt64) {
         guard !stopped, coordinator.snapshot.epoch == epoch else { return }
         var phase = "transport"

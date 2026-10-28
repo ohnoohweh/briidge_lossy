@@ -10,6 +10,7 @@ import Glibc
 import ObstacleBridgeCore
 @testable import ObstacleBridgeLinuxAdapters
 
+@Suite(.serialized)
 struct ObstacleBridgeLinuxLiveRuntimeTests {
     @Test func nativeRuntimeOwnsEitherProxyWorkerAndReportsLoss() throws {
         let environment = ProcessInfo.processInfo.environment

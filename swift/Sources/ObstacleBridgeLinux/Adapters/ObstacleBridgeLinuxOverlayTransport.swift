@@ -658,7 +658,10 @@ private final class POSIXStreamConnection: ObstacleBridgeLinuxWebSocketByteConne
         var offset = 0
         while offset < data.count {
             let sent = data.withUnsafeBytes { bytes in
-                Glibc.send(descriptor, bytes.baseAddress!.advanced(by: offset), data.count - offset, 0)
+                // A peer can close between the liveness check and this send.
+                // Convert that race into EPIPE for the reconnect owner instead
+                // of allowing SIGPIPE to terminate the native process.
+                Glibc.send(descriptor, bytes.baseAddress!.advanced(by: offset), data.count - offset, Int32(MSG_NOSIGNAL))
             }
             if sent > 0 { offset += sent; continue }
             if sent == 0 { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }

@@ -793,10 +793,9 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
 }
 
 final class PythonOverlayPeer {
-    // Swift Testing schedules this suite concurrently. Eight peer processes
-    // stay below Foundation's pipe pressure while allowing short-lived
-    // transport tests to start within their lifecycle deadlines instead of
-    // waiting behind unrelated Python peers.
+    // Other transport suites can run concurrently. Eight peer processes stay
+    // below Foundation's pipe pressure while allowing short-lived tests to
+    // start within their lifecycle deadlines.
     private static let launchSlots = DispatchSemaphore(value: 8)
     let process: Process
     let port: Int
@@ -1170,6 +1169,9 @@ final class PythonOverlayPeer {
             proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); send(header(2,sid,0)+sn+b'\\x01'+proof,counter,peer)
             salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
             client_proof,counter,peer=recv(); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); send(ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack),counter,peer)
+            # The portable peer-address protocol is lower than SecureLink.
+            # Consume it before any protected application/rekey fixture data.
+            address_request,counter,peer=recv(); assert address_request==b'OBPA\\x02\\x01\\x00'; send(b'OBPA\\x02\\x02\\x04\\x7f\\x00\\x00\\x01'+(443).to_bytes(2,'big'),counter,peer)
             if MODE == 'myudp-securelink-malformed':
                 send(header(4,sid+1,2)+bytes(16),counter+1,peer)
             elif MODE == 'myudp-securelink-replay':
@@ -1281,6 +1283,7 @@ final class PythonOverlayPeer {
                 proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); write(c,header(2,sid,0)+sn+b'\\x01'+proof)
                 salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
                 client_proof=read(c); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); write(c,ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack))
+                address_request=read(c); assert address_request==b'OBPA\\x02\\x01\\x00'; write(c,b'OBPA\\x02\\x02\\x04\\x7f\\x00\\x00\\x01'+(443).to_bytes(2,'big'))
                 if epoch == 0:
                     stale_header=header(4,sid,2); stale=stale_header+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'retired',stale_header)
                 if SILENT and epoch == 0:
@@ -1375,6 +1378,9 @@ final class PythonOverlayPeer {
             material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
             client_proof=read_payload(); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''
             ack=header(4,sid,1); write_payload(ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack))
+            # Peer-address discovery crosses the lower transport after the
+            # protected handshake, before the fixture's application controls.
+            address_request=read_payload(); assert address_request==b'OBPA\\x02\\x01\\x00'; write_payload(b'OBPA\\x02\\x02\\x04\\x7f\\x00\\x00\\x01'+(443).to_bytes(2,'big'))
             if MODE.endswith('malformed'):
                 write_payload(header(4,sid+1,2)+bytes(16))
             elif MODE.endswith('replay'):

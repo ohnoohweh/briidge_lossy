@@ -49,6 +49,7 @@ struct ObstacleBridgeTelemetryTests {
             endpointHost: "198.51.100.7", endpointPort: 443,
             configuredCandidates: ["198.51.100.7"], activeTCPChannels: 3,
             activeUDPChannels: 4, failureReason: nil,
+            traffic: ["rx_bytes": 321, "tx_bytes": 654, "rx_msgs": 3, "tx_msgs": 4],
             myudpStats: ["rtt_est_ms": 7, "inflight": 2]
         ))
         let secureLink = try! #require(peer["secure_link"] as? [String: Any])
@@ -60,7 +61,23 @@ struct ObstacleBridgeTelemetryTests {
         #expect(peer["rtt_est_ms"] as? UInt64 == 7)
         #expect(peer["observed_public_ip"] as? String == "2001:db8::47")
         #expect(peer["observed_public_port"] as? Int == 44321)
+        #expect((peer["traffic"] as? [String: Any])?["rx_bytes"] as? UInt64 == 321)
+        #expect((peer["traffic"] as? [String: Any])?["tx_bytes"] as? UInt64 == 654)
         #expect(JSONSerialization.isValidJSONObject(peer))
+    }
+
+    @Test func peerTrafficAggregationUsesOwnedConnectionRows() {
+        let totals = ObstacleBridgeAdminSnapshotSupport.aggregateConnectionTraffic([
+            "tcp": [
+                ["stats": ["rx_bytes": 100, "tx_bytes": 200, "rx_msgs": 1, "tx_msgs": 2]],
+                ["stats": ["rx_bytes": 50, "tx_bytes": 25, "rx_msgs": 3, "tx_msgs": 1]],
+            ],
+            "udp": [["stats": ["rx_bytes": 7, "tx_bytes": 9, "rx_msgs": 1, "tx_msgs": 1]]],
+        ])
+        #expect(totals["rx_bytes"] == 157)
+        #expect(totals["tx_bytes"] == 234)
+        #expect(totals["rx_msgs"] == 5)
+        #expect(totals["tx_msgs"] == 4)
     }
 
     @Test func adminStatusEnvelopeOwnsSharedDashboardFields() {

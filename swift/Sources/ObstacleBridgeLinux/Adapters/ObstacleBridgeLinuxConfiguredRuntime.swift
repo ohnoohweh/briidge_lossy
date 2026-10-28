@@ -166,6 +166,8 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// outside this boundary.
     public var supportsDuplexReceive: Bool { true }
     public func sendOneWay(_ payload: Data) throws {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.overlaySend, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         do {
             debug("secure_link.outbound", ["protected": isProtected ? "true" : "false", "application_bytes": String(payload.count)])
             if let overlayAdapter {
@@ -244,6 +246,8 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// replies are consumed here, so an older diagnostic caller cannot create
     /// a second descriptor reader beside ChannelMux dispatch.
     public func receiveForOwner() throws -> Data? {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.overlayReceive, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         do {
             while true {
                 let wire = try lowerSession.receive()

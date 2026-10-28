@@ -287,6 +287,7 @@ REQ-AUT-004:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::peerProjectionUsesCoreCountersAndNeverSerializesPSK
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::peerProjectionCoversConnectedReconnectingFailedAndStoppedStates
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::myudpSecureLinkBoundaryCountersCoverHandshakeAndPeerAddressDiscovery
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::peerTrafficAggregationUsesOwnedConnectionRows
 
 REQ-AUT-005:
   # Multi-peer SecureLink coverage waits for authenticated peer state before
