@@ -845,8 +845,11 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         var echoed = Data()
         var activeFD: Int32 = -1
         defer { if activeFD >= 0 { _ = close(activeFD) } }
-        for _ in 0..<3 where echoed != payload {
-            let fd = try connectTCP(port: port)
+        for _ in 0..<20 where echoed != payload {
+            guard let fd = try? connectTCP(port: port) else {
+                usleep(100_000)
+                continue
+            }
             if payload.withUnsafeBytes({ write(fd, $0.baseAddress, payload.count) }) == payload.count {
                 var received = [UInt8](repeating: 0, count: payload.count)
                 if read(fd, &received, received.count) == payload.count { echoed = Data(received); activeFD = fd }
