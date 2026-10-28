@@ -99,6 +99,33 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(try adapter.send(command: .applyNetwork, payload: [:])["applied"] as? Bool == true)
     }
 
+    @Test func packetDeviceReceivesHelperPacketAndEventThroughReadinessSource() throws {
+        let backend = SwiftHelperBackend()
+        let path = "/tmp/obstaclebridge-swift-helper-packet-device-\(UUID().uuidString).sock"
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend)
+        try server.start(); defer { server.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token", timeoutMilliseconds: 5_000)
+        let packetReceived = DispatchSemaphore(value: 0)
+        let eventReceived = DispatchSemaphore(value: 0)
+        var packets: [Data] = []
+        var events: [String] = []
+        let lock = NSLock()
+        let device = ObstacleBridgeLinuxTunHelperPacketDevice(adapter: adapter, packetSink: { packet in
+            lock.lock(); packets.append(packet); lock.unlock(); packetReceived.signal()
+        }, eventSink: { event in
+            lock.lock(); events.append(event); lock.unlock(); eventReceived.signal()
+        })
+        try device.start()
+        defer { device.stop() }
+        server.emitPacket(Data([0x45, 0x00, 0x12, 0x34]))
+        server.emitEvent("packet-ready")
+        #expect(packetReceived.wait(timeout: .now() + 1) == .success)
+        #expect(eventReceived.wait(timeout: .now() + 1) == .success)
+        lock.lock(); let receivedPackets = packets; let receivedEvents = events; lock.unlock()
+        #expect(receivedPackets == [Data([0x45, 0x00, 0x12, 0x34])])
+        #expect(receivedEvents == ["packet-ready"])
+    }
+
     @Test func swiftHelperServerStopsAfterAuthenticatedClientIdleWindow() throws {
         let backend = SwiftHelperBackend()
         let path = "/tmp/obstaclebridge-swift-helper-idle-\(UUID().uuidString).sock"
