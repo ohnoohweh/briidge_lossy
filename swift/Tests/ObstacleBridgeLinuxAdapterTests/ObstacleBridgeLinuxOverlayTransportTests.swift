@@ -83,6 +83,20 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try session.receive() == Data("python-first".utf8))
     }
 
+    @Test func webSocketDuplexSessionUsesReadinessCallbacksAfterBootstrap() throws {
+        let peer = try PythonOverlayPeer(mode: "ws-duplex")
+        defer { peer.stop() }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .ws, wsPath: "/overlay")
+        let session = try client.openSession(); defer { session.close() }
+        let received = DispatchSemaphore(value: 0)
+        let value = LockedData()
+        session.startAsyncReceive { result in
+            if case .success(let payload) = result { value.store(payload); received.signal() }
+        }
+        #expect(received.wait(timeout: .now() + 2) == .success)
+        #expect(value.load() == Data("python-first".utf8))
+    }
+
     @Test func myudpDuplexSessionReceivesPeerFrameAfterAddressRegistration() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-duplex")
         defer { peer.stop() }
@@ -133,6 +147,22 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(client.snapshot.state == "connected")
     }
 
+    @Test func tlsWebSocketSessionUsesNIOCallbacksAfterBootstrap() throws {
+        let peer = try PythonOverlayPeer(mode: "wss")
+        defer { peer.stop() }
+        guard let trustRootsPath = peer.trustRootsPath else { throw OverlayTestError.peerDidNotStart }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "localhost", port: peer.port, transport: .ws, wsPath: "/overlay", wsTLS: true, wsTrustRootsPath: trustRootsPath, wsProxy: .init(mode: .off))
+        let session = try client.openSession(); defer { session.close() }
+        let received = DispatchSemaphore(value: 0)
+        let value = LockedData()
+        session.startAsyncReceive { result in
+            if case .success(let payload) = result { value.store(payload); received.signal() }
+        }
+        try session.send(Data("swift-linux-wss-async".utf8))
+        #expect(received.wait(timeout: .now() + 3) == .success)
+        #expect(value.load() == Data("swift-linux-wss-async".utf8))
+    }
+
     @Test func tlsWebSocketRejectsUntrustedPythonPeer() throws {
         let peer = try PythonOverlayPeer(mode: "wss")
         defer { peer.stop() }
@@ -177,6 +207,21 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         )
         #expect(try client.roundTrip(Data("swift-linux-quic".utf8)) == Data("python:swift-linux-quic".utf8))
         #expect(client.snapshot.state == "connected")
+    }
+
+    @Test func quicReliableStreamUsesNIOCallbacksAfterBootstrap() throws {
+        let peer = try PythonOverlayPeer(mode: "quic")
+        defer { peer.stop() }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .quic, quicALPN: "hq-29", quicInsecure: true)
+        let session = try client.openSession(); defer { session.close() }
+        let received = DispatchSemaphore(value: 0)
+        let value = LockedData()
+        session.startAsyncReceive { result in
+            if case .success(let payload) = result { value.store(payload); received.signal() }
+        }
+        try session.send(Data("swift-linux-quic-async".utf8))
+        #expect(received.wait(timeout: .now() + 5) == .success)
+        #expect(value.load() == Data("python:swift-linux-quic-async".utf8))
     }
 
     @Test func myudpDataFrameRoundTripsAgainstPythonPeer() throws {

@@ -18,23 +18,28 @@ final class ObstacleBridgeLinuxQUICSession: @unchecked Sendable {
         private let condition = NSCondition()
         private var bytes = Data()
         private var inactive = false
+        private var asyncHandler: ((Result<Data, Error>) -> Void)?
 
         func channelRead(context: ChannelHandlerContext, data: NIOAny) {
             var buffer = unwrapInboundIn(data)
             if let received = buffer.readBytes(length: buffer.readableBytes), !received.isEmpty {
                 let data = Data(received)
                 condition.lock()
-                bytes.append(data)
+                let handler = asyncHandler
+                if handler == nil { bytes.append(data) }
                 condition.broadcast()
                 condition.unlock()
+                handler?(.success(data))
             }
         }
 
         func channelInactive(context: ChannelHandlerContext) {
             condition.lock()
             inactive = true
+            let handler = asyncHandler
             condition.broadcast()
             condition.unlock()
+            handler?(.failure(ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF))
             context.fireChannelInactive()
         }
 
@@ -60,6 +65,17 @@ final class ObstacleBridgeLinuxQUICSession: @unchecked Sendable {
             let result = bytes.prefix(count)
             bytes.removeFirst(count)
             return result
+        }
+        func startAsyncRead(_ handler: @escaping (Result<Data, Error>) -> Void) {
+            condition.lock()
+            guard asyncHandler == nil else { condition.unlock(); return }
+            asyncHandler = handler
+            let pending = Data(bytes)
+            bytes = Data()
+            let terminal = inactive
+            condition.unlock()
+            if !pending.isEmpty { handler(.success(pending)) }
+            if terminal { handler(.failure(ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF)) }
         }
     }
 
@@ -125,6 +141,7 @@ final class ObstacleBridgeLinuxQUICSession: @unchecked Sendable {
     func readExactly(_ count: Int) throws -> Data {
         try inbound.readExactly(count, timeoutMilliseconds: receiveTimeoutMilliseconds)
     }
+    func startAsyncRead(_ handler: @escaping (Result<Data, Error>) -> Void) { inbound.startAsyncRead(handler) }
 
     func close() {
         lock.lock()

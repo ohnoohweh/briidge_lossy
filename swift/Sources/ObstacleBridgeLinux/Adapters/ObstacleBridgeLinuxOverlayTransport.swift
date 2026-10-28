@@ -258,7 +258,29 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
                     return try self.readTCPApplicationFrame(quic, onPong: liveness.receivePong)
                 }
-                let result = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, probeLiveness: {
+                let decoder = POSIXTCPFrameDecoder()
+                let result = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, asyncReceive: { [weak self, weak quic] handler in
+                    guard let self, let quic else { handler(.failure(ObstacleBridgeLinuxOverlayTransportError.cancelled)); return }
+                    quic.startAsyncRead { result in
+                        do {
+                            switch result {
+                            case .success(let bytes):
+                                for wire in try decoder.append(bytes) {
+                                    let frame = try ObstacleBridgeOverlayFrameCodec.decodeTCP(wire)
+                                    switch try ObstacleBridgeOverlayEnvelope.consume(frame) {
+                                    case .application:
+                                        guard let admitted = self.quicOverlayRuntime.receiveApplicationBytes(wire).first else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+                                        handler(.success(admitted))
+                                    case .reply(let reply): try quic.write(try ObstacleBridgeOverlayEnvelope.encodeTCP(reply))
+                                    case .ignore:
+                                        if frame.kind == .pong { liveness.receivePong(echoTimestampNS: try ObstacleBridgeOverlayFrameCodec.pongEchoTimestamp(frame)) }
+                                    }
+                                }
+                            case .failure(let error): handler(.failure(error))
+                            }
+                        } catch { handler(.failure(error)) }
+                    }
+                }, probeLiveness: {
                     guard let timestampNS = liveness.beginProbe() else { return }
                     try quic.write(try ObstacleBridgeOverlayEnvelope.encodeTCP(.init(kind: .ping, payload: ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: timestampNS, echoNS: 0))))
                 }, close: {
@@ -282,7 +304,18 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
                     return try self.readWebSocketApplicationPayload(connection, onPong: liveness.receivePong)
                 }
-                let result = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, probeLiveness: {
+                let decoder = POSIXWebSocketFrameDecoder()
+                let result = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, asyncReceive: { [weak self, weak connection] handler in
+                    guard let self, let connection else { handler(.failure(ObstacleBridgeLinuxOverlayTransportError.cancelled)); return }
+                    connection.startAsyncRead { result in
+                        do {
+                            switch result {
+                            case .success(let bytes): try self.consumeAsyncWebSocketBytes(bytes, decoder: decoder, connection: connection, onPong: liveness.receivePong, handler: handler)
+                            case .failure(let error): handler(.failure(error))
+                            }
+                        } catch { handler(.failure(error)) }
+                    }
+                }, probeLiveness: {
                     guard let timestampNS = liveness.beginProbe() else { return }
                     let wire = try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .ping, payload: ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: timestampNS, echoNS: 0)))
                     switch try self.webSocketOverlayRuntime.encodeClientPayload(wire) {
@@ -330,36 +363,47 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             // framed records from a readiness source.  WebSocket remains on its
             // wrapper-owned reader until that wrapper exposes an equivalent
             // incremental frame parser.
-            let tcpDecoder = transport == .tcp ? POSIXTCPFrameDecoder() : nil
-            let asyncReceive: ((@escaping (Result<Data, Error>) -> Void) -> Void)? = transport == .tcp ? { [weak self, weak connection] handler in
-                guard let self, let connection, let tcpDecoder else {
-                    handler(.failure(ObstacleBridgeLinuxOverlayTransportError.cancelled))
-                    return
-                }
-                connection.startAsyncRead { result in
-                    do {
-                        switch result {
-                        case .success(let bytes):
-                            for wire in try tcpDecoder.append(bytes) {
-                                let frame = try ObstacleBridgeOverlayFrameCodec.decodeTCP(wire)
-                                switch try ObstacleBridgeOverlayEnvelope.consume(frame) {
-                                case .application:
-                                    guard let admitted = self.tcpOverlayRuntime.receiveApplicationBytes(wire).first else {
-                                        throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+            let asyncReceive: ((@escaping (Result<Data, Error>) -> Void) -> Void)?
+            if transport == .tcp {
+                let tcpDecoder = POSIXTCPFrameDecoder()
+                asyncReceive = { [weak self, weak connection] handler in
+                    guard let self, let connection else { handler(.failure(ObstacleBridgeLinuxOverlayTransportError.cancelled)); return }
+                    connection.startAsyncRead { result in
+                        do {
+                            switch result {
+                            case .success(let bytes):
+                                for wire in try tcpDecoder.append(bytes) {
+                                    let frame = try ObstacleBridgeOverlayFrameCodec.decodeTCP(wire)
+                                    switch try ObstacleBridgeOverlayEnvelope.consume(frame) {
+                                    case .application:
+                                        guard let admitted = self.tcpOverlayRuntime.receiveApplicationBytes(wire).first else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+                                        handler(.success(admitted))
+                                    case .reply(let reply): try connection.write(try ObstacleBridgeOverlayEnvelope.encodeTCP(reply))
+                                    case .ignore:
+                                        if frame.kind == .pong { liveness.receivePong(echoTimestampNS: try ObstacleBridgeOverlayFrameCodec.pongEchoTimestamp(frame)) }
                                     }
-                                    handler(.success(admitted))
-                                case .reply(let reply):
-                                    try connection.write(try ObstacleBridgeOverlayEnvelope.encodeTCP(reply))
-                                case .ignore:
-                                    if frame.kind == .pong { liveness.receivePong(echoTimestampNS: try ObstacleBridgeOverlayFrameCodec.pongEchoTimestamp(frame)) }
                                 }
+                            case .failure(let error): handler(.failure(error))
                             }
-                        case .failure(let error):
-                            handler(.failure(error))
-                        }
-                    } catch { handler(.failure(error)) }
+                        } catch { handler(.failure(error)) }
+                    }
                 }
-            } : nil
+            } else if transport == .ws {
+                let webSocketDecoder = POSIXWebSocketFrameDecoder()
+                asyncReceive = { [weak self, weak connection] handler in
+                    guard let self, let connection else { handler(.failure(ObstacleBridgeLinuxOverlayTransportError.cancelled)); return }
+                    connection.startAsyncRead { result in
+                        do {
+                            switch result {
+                            case .success(let bytes): try self.consumeAsyncWebSocketBytes(bytes, decoder: webSocketDecoder, connection: connection, onPong: liveness.receivePong, handler: handler)
+                            case .failure(let error): handler(.failure(error))
+                            }
+                        } catch { handler(.failure(error)) }
+                    }
+                }
+            } else {
+                asyncReceive = nil
+            }
             let result = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, asyncReceive: asyncReceive, probeLiveness: { [weak self] in
                 guard let self, let timestampNS = liveness.beginProbe() else { return }
                 let frame = ObstacleBridgeOverlayFrame(kind: .ping, payload: ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: timestampNS, echoNS: 0))
@@ -539,6 +583,33 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             case .livenessPong(let echoTxNS):
                 onPong(echoTxNS)
                 continue
+            }
+        }
+    }
+
+    private func consumeAsyncWebSocketBytes(
+        _ bytes: Data,
+        decoder: POSIXWebSocketFrameDecoder,
+        connection: some ObstacleBridgeLinuxWebSocketByteConnection,
+        onPong: (UInt64) -> Void,
+        handler: (Result<Data, Error>) -> Void
+    ) throws {
+        for frame in try decoder.append(bytes) {
+            if case .ping(let payload) = frame {
+                try connection.write(webSocketClientFrame(opcode: 0xA, payload: payload))
+                continue
+            }
+            guard case .payload(let payload) = frame else { continue }
+            switch try webSocketOverlayRuntime.receiveClientPayload(payload) {
+            case .application(let payload): handler(.success(payload))
+            case .pong(let txNS, _):
+                let pongWire = try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .pong, payload: ObstacleBridgeOverlayFrameCodec.pongPayload(echoTxNS: txNS)))
+                switch try webSocketOverlayRuntime.encodeClientPayload(pongWire) {
+                case .binary(let data): try connection.write(webSocketClientFrame(opcode: 0x2, payload: data))
+                case .text(let text): try connection.write(webSocketClientFrame(opcode: 0x1, payload: Data(text.utf8)))
+                }
+            case .ignore: continue
+            case .livenessPong(let echoTxNS): onPong(echoTxNS)
             }
         }
     }
@@ -819,6 +890,55 @@ private final class POSIXTCPFrameDecoder {
             guard buffered.count >= total else { break }
             frames.append(Data(buffered.prefix(total)))
             buffered.removeFirst(total)
+        }
+        return frames
+    }
+}
+
+/// Incremental server-to-client WebSocket decoder.  It mirrors the synchronous
+/// framing rules but retains incomplete input, allowing NIO/POSIX readiness
+/// callbacks to return immediately when a header or payload is partial.
+private final class POSIXWebSocketFrameDecoder {
+    private var buffered = Data()
+
+    enum Frame { case payload(ObstacleBridgeWebSocketPayload), ping(Data) }
+
+    func append(_ bytes: Data) throws -> [Frame] {
+        buffered.append(bytes)
+        var frames: [Frame] = []
+        while buffered.count >= 2 {
+            let first = buffered[buffered.startIndex]
+            let second = buffered[buffered.index(after: buffered.startIndex)]
+            guard first & 0x80 != 0, second & 0x80 == 0 else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketProtocolError }
+            let opcode = first & 0x0f
+            var headerLength = 2
+            var payloadLength = Int(second & 0x7f)
+            if payloadLength == 126 {
+                guard buffered.count >= 4 else { break }
+                var reader = ObstacleBridgeBinaryReader(Data(buffered.dropFirst(2).prefix(2)))
+                payloadLength = Int(try reader.readUInt16())
+                headerLength = 4
+            } else if payloadLength == 127 {
+                guard buffered.count >= 10 else { break }
+                var reader = ObstacleBridgeBinaryReader(Data(buffered.dropFirst(2).prefix(8)))
+                let length = try reader.readUInt64()
+                guard length <= 1_048_576 else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketProtocolError }
+                payloadLength = Int(length)
+                headerLength = 10
+            }
+            let total = headerLength + payloadLength
+            guard buffered.count >= total else { break }
+            let payload = Data(buffered.dropFirst(headerLength).prefix(payloadLength))
+            buffered.removeFirst(total)
+            switch opcode {
+            case 0x2: frames.append(.payload(.binary(payload)))
+            case 0x1:
+                guard let text = String(data: payload, encoding: .utf8) else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketProtocolError }
+                frames.append(.payload(.text(text)))
+            case 0x9: frames.append(.ping(payload))
+            case 0x8: throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF
+            default: throw ObstacleBridgeLinuxOverlayTransportError.webSocketProtocolError
+            }
         }
         return frames
     }

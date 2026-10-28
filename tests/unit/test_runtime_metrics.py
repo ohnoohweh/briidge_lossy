@@ -309,6 +309,9 @@ def test_linux_native_receive_metric_excludes_lower_transport_wait_and_measures_
     assert "category = .overlayReceiveIdle" in receive_body
 
     stream = (root / "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxOverlayTransport.swift").read_text()
-    assert "let tcpDecoder = transport == .tcp ? POSIXTCPFrameDecoder() : nil" in stream
+    assert "let tcpDecoder = POSIXTCPFrameDecoder()" in stream
     assert "func startAsyncRead(_ handler:" in stream
     assert "Int32(MSG_DONTWAIT)" in stream
+    assert "POSIXWebSocketFrameDecoder" in stream
+    assert "func startAsyncRead(_ handler:" in (root / "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTLSWebSocketConnection.swift").read_text()
+    assert "func startAsyncRead(_ handler:" in (root / "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxQUICSession.swift").read_text()
