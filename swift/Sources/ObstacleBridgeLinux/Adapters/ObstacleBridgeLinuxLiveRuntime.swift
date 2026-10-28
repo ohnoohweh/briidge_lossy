@@ -544,18 +544,42 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     }
 
     private func tunRoutingForAdminLocked() -> [String: Any] {
-            let configured = configuredRuntime.configuration
-            return [
-                "ok": true,
-                "configured": configured.packetTunnelEnabled,
-                "enabled": tunDevice != nil && tunNetworkApplied,
-                "startup_enabled": configured.packetTunnelPlan?.enabledOnStartup ?? false,
-                "helper_configured": configured.tunHelperSocketPath != nil,
-                "managed_helper": configured.launchSwiftTunHelper,
-                "managed_helper_running": managedTunHelper?.isRunning ?? false,
-                "device_open": tunDevice != nil,
-                "network_policy_applied": tunNetworkApplied,
-            ]
+        let configured = configuredRuntime.configuration
+        let plan = configured.packetTunnelPlan
+        // Core owns the table/summary envelope used by the shared Admin Web.
+        // Linux adds only its resource-owner facts and configured route plan.
+        var payload = ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: connectionsForAdminLocked())
+        let helperRunning = managedTunHelper?.isRunning ?? false
+        payload["ok"] = true
+        payload["configured"] = configured.packetTunnelEnabled
+        payload["device_open"] = tunDevice != nil
+        payload["network_policy_applied"] = tunNetworkApplied
+        payload["helper_configured"] = configured.tunHelperSocketPath != nil
+        payload["managed_helper"] = configured.launchSwiftTunHelper
+        payload["managed_helper_running"] = helperRunning
+        payload["included_routes"] = plan?.includedRoutes ?? []
+        payload["excluded_routes"] = plan?.excludedRoutes ?? []
+        payload["included_routes6"] = plan?.includedRoutes6 ?? []
+        payload["excluded_routes6"] = plan?.excludedRoutes6 ?? []
+        payload["tun_control"] = ObstacleBridgeAdminAPI.tunControlSnapshot(
+            enabled: tunDevice != nil && tunNetworkApplied,
+            startupEnabled: plan?.enabledOnStartup ?? false,
+            supported: configured.packetTunnelEnabled
+        )
+        payload["tun_helper"] = [
+            "enabled": configured.tunHelperSocketPath != nil,
+            "mode": configured.launchSwiftTunHelper ? "helper" : "inline",
+            "backend": "linux-swift-native",
+            "connected": tunDevice != nil,
+            "server_started": helperRunning,
+            "apply_network": tunNetworkApplied,
+            "runtime": [
+                "ifname": configured.tunInterfaceName,
+                "mtu": plan?.mtu ?? 0,
+                "network_applied": tunNetworkApplied,
+            ],
+        ]
+        return payload
     }
 
     /// Applies or removes only the selected configuration's helper-owned TUN
@@ -622,19 +646,23 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// is visible as a listening row even before a client opens a ChannelMux
     /// channel, which distinguishes a bound port from an absent service.
     public func connectionsForAdmin() -> [String: Any] {
-        queue.sync {
-            var tcp: [[String: Any]] = []
-            var udp: [[String: Any]] = []
-            for owner in serviceOwners {
-                let rows = owner.adminConnectionRows(peerID: "configured-peer")
-                if owner.specification.listenProtocol == .tcp { tcp.append(contentsOf: rows) } else { udp.append(contentsOf: rows) }
-            }
-            for owner in remoteServiceOwners {
-                let rows = owner.adminConnectionRows(peerID: "configured-peer", catalog: "remote_servers")
-                if owner.specification.listenProtocol == .tcp { tcp.append(contentsOf: rows) } else { udp.append(contentsOf: rows) }
-            }
-            return ["tcp": tcp, "udp": udp, "tun": []]
+        queue.sync { connectionsForAdminLocked() }
+    }
+
+    private func connectionsForAdminLocked() -> [String: Any] {
+        var tcp: [[String: Any]] = []
+        var udp: [[String: Any]] = []
+        for owner in serviceOwners {
+            let rows = owner.adminConnectionRows(peerID: "configured-peer")
+            if owner.specification.listenProtocol == .tcp { tcp.append(contentsOf: rows) } else { udp.append(contentsOf: rows) }
         }
+        for owner in remoteServiceOwners {
+            let rows = owner.adminConnectionRows(peerID: "configured-peer", catalog: "remote_servers")
+            if owner.specification.listenProtocol == .tcp { tcp.append(contentsOf: rows) } else { udp.append(contentsOf: rows) }
+        }
+        // ObstacleBridgeOverlayChannelAdapter delegates row construction to
+        // Core, the same source used by the Apple products.
+        return ["tcp": tcp, "udp": udp, "tun": tunChannelAdapter?.connectionRows() ?? []]
     }
 
     /// The peer page is a peer-scoped summary of the same ChannelMux service

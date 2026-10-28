@@ -147,7 +147,14 @@ enum ObstacleBridgeOverlayChannelCore {
         transportPrevWindowBytes: Int = 0,
         stalled: Bool = false
     ) -> [[String: Any]] {
-        if activeTunChanIDs.isEmpty, (tunStats["rx_bytes"] ?? 0) == 0, (tunStats["tx_bytes"] ?? 0) == 0 {
+        // A device which is open but has not yet seen a packet is still an
+        // operational TUN interface.  Keep a listening row for it so every
+        // product exposes the same Admin-Web contract instead of making an
+        // idle device indistinguishable from no device at all.
+        if activeTunChanIDs.isEmpty,
+           (tunStats["rx_bytes"] ?? 0) == 0,
+           (tunStats["tx_bytes"] ?? 0) == 0,
+           tunRuntime == nil {
             return []
         }
         let ifname = tunIfname ?? "tun"
@@ -171,12 +178,12 @@ enum ObstacleBridgeOverlayChannelCore {
             }
             return tunRuntime.directTunThrottleSnapshot(snapshot: backpressure, nowNS: nowNS)
         }()
-        return activeTunChanIDs.sorted().map { chanID in
+        func row(channelID: Int?, state: String) -> [String: Any] {
             var row = ObstacleBridgeNativeConnectionSnapshot.make(
                 proto: "tun",
                 role: "server",
-                state: "connected",
-                chanID: chanID,
+                state: state,
+                chanID: channelID ?? 0,
                 svcID: spec.svcID,
                 serviceName: (configuredServiceName?.isEmpty == false) ? configuredServiceName! : "TUN",
                 sourceHost: nil,
@@ -187,10 +194,16 @@ enum ObstacleBridgeOverlayChannelCore {
                 remotePort: spec.rPort,
                 stats: tunStats
             )
+            row["chan_id"] = channelID ?? NSNull()
+            row["local"] = ["host": ifname, "port": mtu, "ifname": ifname, "mtu": mtu]
             row["shared_tun_ownership"] = sharedOwnership ?? NSNull()
             row["throttle"] = throttle
             return row
         }
+        if activeTunChanIDs.isEmpty {
+            return [row(channelID: nil, state: "listening")]
+        }
+        return activeTunChanIDs.sorted().map { row(channelID: $0, state: "connected") }
     }
 
     static func tunConnectivityTestsAllowed(

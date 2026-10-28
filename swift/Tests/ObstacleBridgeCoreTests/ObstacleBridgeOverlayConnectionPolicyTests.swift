@@ -1,7 +1,26 @@
+import Foundation
 import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeOverlayConnectionPolicyTests {
+    @Test func exposesAnIdleOpenTunAsAListeningAdminRow() {
+        let runtime = ObstacleBridgeChannelMuxTunRuntime(instanceID: 1, connectionSeq: 1)
+        let rows = ObstacleBridgeOverlayChannelCore.tunRows(
+            activeTunChanIDs: [],
+            tunStats: ["rx_bytes": 0, "tx_bytes": 0],
+            tunRuntime: runtime,
+            tunServiceSpec: nil,
+            tunIfname: "obtun0",
+            tunMTU: 1600
+        )
+        #expect(rows.count == 1)
+        #expect(rows[0]["state"] as? String == "listening")
+        #expect(rows[0]["chan_id"] is NSNull)
+        let local = try! #require(rows[0]["local"] as? [String: Any])
+        #expect(local["ifname"] as? String == "obtun0")
+        #expect(local["mtu"] as? Int == 1600)
+    }
+
     @Test func projectsAndUpdatesConnectionState() {
         let spec = ObstacleBridgeChannelMuxCodec.ServiceSpec(
             svcID: 7, lProto: "tcp", lBind: "127.0.0.1", lPort: 0,

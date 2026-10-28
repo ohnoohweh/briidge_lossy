@@ -317,7 +317,8 @@ public enum ObstacleBridgeAdminAPI {
         guard let body = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return nil }
         return .init(statusCode: statusCode, body: body)
     }
-    static func tunControlSnapshot(enabled: Bool, startupEnabled: Bool, supported: Bool) -> [String: Any] {
+    /// Shared API contract for the Admin-Web TUN toggle across Linux and Apple.
+    public static func tunControlSnapshot(enabled: Bool, startupEnabled: Bool, supported: Bool) -> [String: Any] {
         [
             "enabled": enabled,
             "startup_enabled": startupEnabled,
@@ -517,7 +518,10 @@ public enum ObstacleBridgeAdminAPI {
         ]
     }
 
-    static func tunRoutingSnapshot(fromConnections snapshot: [String: Any]) -> [String: Any] {
+    /// Shared Admin-Web TUN/Routing document. Platform runtimes provide their
+    /// resource facts and connection rows; Core owns the stable table and
+    /// summary envelope consumed by the web client.
+    public static func tunRoutingSnapshot(fromConnections snapshot: [String: Any]) -> [String: Any] {
         let tunRows = snapshot["tun"] as? [[String: Any]] ?? []
         let sharedRows = deduplicatedSharedTunRows(from: tunRows)
         let interfaceRows = tunRows.filter { row in
