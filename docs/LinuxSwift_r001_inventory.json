@@ -364,7 +364,7 @@
       "python_tests": ["tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_uses_per_transport_ports"],
       "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::tcpListenerPublishesOpenAndDataFrames", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::ownsBidirectionalNonBlockingPacketIO", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::packetDeviceReceivesHelperPacketAndEventThroughReadinessSource"],
       "parity_tests": [],
-      "linux_swift": {"applicability": "required", "status": "partial", "reason": "Outbound overlay, local service sockets, inline TUN, long-lived helper packet IPC, and ordinary foreground/native-child Admin HTTP requests use readiness-driven receives. Listener admission, Admin live-WebSocket scheduling, worker/control IPC, and logging still require conversion; the cross-product inventory records those remaining boundaries."}
+      "linux_swift": {"applicability": "required", "status": "partial", "reason": "Outbound overlay, local service sockets, inline TUN, long-lived helper packet IPC, ordinary foreground/native-child Admin HTTP requests, and the logging collector datagram loop use readiness-driven receives. Listener admission, Admin live-WebSocket scheduling, and worker/control IPC still require conversion; the cross-product inventory records those remaining boundaries."}
     }
   ],
   "r005_psk_traceability": [

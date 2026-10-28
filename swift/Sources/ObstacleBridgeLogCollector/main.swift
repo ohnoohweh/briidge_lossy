@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 #if SWIFT_PACKAGE
 import ObstacleBridgeDesktopShared
 #endif
@@ -147,66 +148,83 @@ if privateMode {
 defer { close(socketFD) }
 defer { if lifetimeFD >= 0 { close(lifetimeFD) } }
 
-var lines: [String] = []
-var ringBytes = 0
-var buffer = [UInt8](repeating: 0, count: 65_535)
-while true {
-    if privateMode {
-        var descriptors = [pollfd(fd: socketFD, events: Int16(POLLIN), revents: 0), pollfd(fd: lifetimeFD, events: Int16(POLLIN), revents: 0)]
-        let observed = poll(&descriptors, nfds_t(descriptors.count), -1)
-        if observed < 0 {
-            if errno == EINTR { continue }
-            fail("collector poll failed")
+final class CollectorState {
+    private let socketFD: Int32
+    private let privateMode: Bool
+    private let generation: UInt64
+    private var lines: [String] = []
+    private var ringBytes = 0
+
+    init(socketFD: Int32, privateMode: Bool, generation: UInt64) {
+        self.socketFD = socketFD
+        self.privateMode = privateMode
+        self.generation = generation
+    }
+
+    func drainReadableDatagrams() {
+        while true {
+            var buffer = [UInt8](repeating: 0, count: 65_535)
+            var peer = sockaddr_storage()
+            var peerLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
+            let count = withUnsafeMutablePointer(to: &peer) { address in
+                address.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    recvfrom(socketFD, &buffer, buffer.count, Int32(MSG_DONTWAIT), $0, &peerLength)
+                }
+            }
+            if count < 0 {
+                if errno == EINTR { continue }
+                if errno == EAGAIN || errno == EWOULDBLOCK { return }
+                fail("collector socket receive failed")
+            }
+            guard count <= (privateMode ? maxReplyDatagram + ObstacleBridgeWorkerIPC.headerBytes : maxDatagram) else { continue }
+            handle(Data(buffer.prefix(count)), peer: peer, peerLength: peerLength)
         }
-        if descriptors[1].revents != 0 { break }
-        if descriptors[0].revents & Int16(POLLIN) == 0 { break }
     }
-    var peer = sockaddr_storage()
-    var peerLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
-    let count = withUnsafeMutablePointer(to: &peer) { address in
-        address.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-            // Poll readiness is advisory. A stale notification must return to
-            // the collector loop instead of pinning the worker in recvfrom.
-            recvfrom(socketFD, &buffer, buffer.count, Int32(MSG_DONTWAIT), $0, &peerLength)
-        }
-    }
-    if count < 0 {
-        if errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
-        fail("collector socket receive failed")
-    }
-    guard count <= (privateMode ? maxReplyDatagram + ObstacleBridgeWorkerIPC.headerBytes : maxDatagram) else { continue }
-    let wire = Data(buffer.prefix(count))
-    let payloadData: Data
-    if privateMode {
-        guard let decoded = try? ObstacleBridgeWorkerIPC.decode(wire), let frame = decoded.0,
-              decoded.1.isEmpty, frame.generation == privateGeneration,
-              frame.kind == .request || frame.kind == .data else { continue }
-        payloadData = frame.payload
-    } else {
-        payloadData = wire
-    }
-    guard let payload = (try? JSONSerialization.jsonObject(with: payloadData)) as? [String: Any],
-          let version = payload["v"] as? Int, version == 1 else { continue }
-    if payload["kind"] as? String == "logs.query" {
-        guard let data = reply(lines, limit: (payload["limit"] as? Int) ?? 400, requestID: payload["request_id"] as? String) else { continue }
+
+    private func handle(_ wire: Data, peer: sockaddr_storage, peerLength: socklen_t) {
+        let payloadData: Data
         if privateMode {
-            guard let framed = try? ObstacleBridgeWorkerIPC.encode(kind: .response, generation: privateGeneration, payload: data) else { continue }
-            _ = framed.withUnsafeBytes { send(socketFD, $0.baseAddress, $0.count, Int32(MSG_DONTWAIT)) }
-        } else {
-            _ = withUnsafePointer(to: &peer) { address in
-                address.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
-                    data.withUnsafeBytes { bytes in
-                        sendto(socketFD, bytes.baseAddress, bytes.count, 0, socketAddress, peerLength)
+            guard let decoded = try? ObstacleBridgeWorkerIPC.decode(wire), let frame = decoded.0,
+                  decoded.1.isEmpty, frame.generation == generation,
+                  frame.kind == .request || frame.kind == .data else { return }
+            payloadData = frame.payload
+        } else { payloadData = wire }
+        guard let payload = (try? JSONSerialization.jsonObject(with: payloadData)) as? [String: Any],
+              payload["v"] as? Int == 1 else { return }
+        if payload["kind"] as? String == "logs.query" {
+            guard let data = reply(lines, limit: (payload["limit"] as? Int) ?? 400, requestID: payload["request_id"] as? String) else { return }
+            if privateMode {
+                guard let framed = try? ObstacleBridgeWorkerIPC.encode(kind: .response, generation: generation, payload: data) else { return }
+                _ = framed.withUnsafeBytes { send(socketFD, $0.baseAddress, $0.count, Int32(MSG_DONTWAIT)) }
+            } else {
+                _ = withUnsafePointer(to: peer) { address in
+                    address.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+                        data.withUnsafeBytes { sendto(socketFD, $0.baseAddress, $0.count, Int32(MSG_DONTWAIT), socketAddress, peerLength) }
                     }
                 }
             }
+        } else if let line = render(payload) {
+            lines.append(line); ringBytes += line.utf8.count
+            while lines.count > ringLimit || ringBytes > ringByteLimit { ringBytes -= lines.removeFirst().utf8.count }
+            FileHandle.standardOutput.write(Data((line + "\n").utf8))
         }
-    } else if let line = render(payload) {
-        lines.append(line)
-        ringBytes += line.utf8.count
-        while lines.count > ringLimit || ringBytes > ringByteLimit {
-            ringBytes -= lines.removeFirst().utf8.count
-        }
-        FileHandle.standardOutput.write(Data((line + "\n").utf8))
     }
 }
+
+let flags = fcntl(socketFD, F_GETFL)
+guard flags >= 0, fcntl(socketFD, F_SETFL, flags | O_NONBLOCK) == 0 else { fail("unable to make collector socket nonblocking") }
+let collector = CollectorState(socketFD: socketFD, privateMode: privateMode, generation: privateGeneration)
+let collectorQueue = DispatchQueue(label: "org.obstaclebridge.log-collector")
+let dataSource = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: collectorQueue)
+dataSource.setEventHandler { collector.drainReadableDatagrams() }
+dataSource.setCancelHandler { close(socketFD) }
+dataSource.resume()
+let lifetimeSource: DispatchSourceRead?
+if lifetimeFD >= 0 {
+    let source = DispatchSource.makeReadSource(fileDescriptor: lifetimeFD, queue: collectorQueue)
+    source.setEventHandler { exit(0) }
+    source.setCancelHandler { close(lifetimeFD) }
+    source.resume()
+    lifetimeSource = source
+} else { lifetimeSource = nil }
+dispatchMain()

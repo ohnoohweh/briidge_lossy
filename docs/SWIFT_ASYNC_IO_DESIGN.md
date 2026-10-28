@@ -15,6 +15,7 @@ readiness source before its descriptor or channel is released.
 | Linux | local TCP/UDP service sockets | nonblocking listener plus `MSG_DONTWAIT` drain on the serial service owner | `ObstacleBridgeLinuxServiceSocketOwnerTests` |
 | Linux | inline TUN | `DispatchSourceRead` plus nonblocking TUN descriptor | `ObstacleBridgeLinuxTunDeviceTests` |
 | Linux | long-lived helper packet/event IPC | `DispatchSourceRead` plus incremental OBIP frame buffer | `packetDeviceReceivesHelperPacketAndEventThroughReadinessSource` |
+| Linux and desktop | logging collector datagrams | `DispatchSourceRead` plus nonblocking bounded datagram drain | collector UDP record/query probe |
 | macOS | Network.framework overlay, proxy, Admin, and service sockets | Network.framework receive completion | Apple host/simulator adapter tests |
 | macOS | `utun` packet device | `DispatchSourceRead` plus `O_NONBLOCK` descriptor | macOS adapter tests |
 | iOS | packet tunnel and Network.framework transport | `NEPacketTunnelFlow`/Network.framework callbacks | iOS extension tests and device qualification |
@@ -31,7 +32,7 @@ must be converted rather than retained indefinitely.
 | Linux foreground and native-child Admin web servers | live-WebSocket polling loops | ordinary HTTP requests use per-client readiness sources with bounded reassembly; replace live polling with a timer-driven live-topic scheduler |
 | Linux native peer/Admin worker IPC | `FileHandle` framed reads after bootstrap | descriptor readiness source with generation-fenced incremental OBIP decoder |
 | Linux TUN helper control IPC | synchronous request/reply reads | callback-based correlated control requests; preserve independent request deadline |
-| Linux and desktop logging collector/supervisor query | blocking poll/receive request paths | descriptor readiness handling and callback completion for bounded queries |
+| Desktop logging supervisor query | bounded poll/receive request path | descriptor readiness handling and callback completion for bounded queries |
 | macOS XPC helper control | semaphore wait around XPC reply | async XPC command completion propagated to the caller's lifecycle owner |
 
 No remaining row above is a permitted synchronous fallback: each boundary owns a
