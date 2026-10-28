@@ -712,13 +712,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 }
             }
             apply(coordinator.handle(.transportConnected(epoch: epoch)))
-            apply(coordinator.handle(.authenticated(epoch: epoch)))
-            // The initial Core receive effect is delivered after this
-            // synchronous `openTransport` call returns.  TUN helper elevation
-            // can legitimately pause here for an operator password, so start
-            // the already-admitted receiver before publishing catalog frames
-            // or waiting on that helper.  The deferred Core effect below sees
-            // this same epoch and becomes a no-op.
+            // Do not advertise the lifecycle as `connected` until all local
+            // facilities promised by that state are usable.  In particular,
+            // callers use the connected notification to discover and connect
+            // configured service listeners; publishing it before binding
+            // those listeners races a local TCP connect with `ECONNREFUSED`.
+            // The session is already cryptographically admitted, so its
+            // receive owner can safely start before the public transition.
             startReceiveWorker(session: connectedSession, mux: mux, coordinatorEpoch: epoch)
             phase = "remote_catalog"
             try publishRemoteCatalog()
@@ -726,6 +726,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             try startOwnServiceOwners()
             phase = "packet_tunnel"
             try startPacketDeviceIfNeeded()
+            apply(coordinator.handle(.authenticated(epoch: epoch)))
             emitDiagnostic("overlay.post_auth.ready", fields: ["epoch": String(epoch)])
         } catch ObstacleBridgeLinuxOverlayTransportError.cancelled {
             // `stop()` has already interrupted the in-flight lower session.
