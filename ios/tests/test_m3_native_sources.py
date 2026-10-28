@@ -219,7 +219,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "private func nativePacketDiagnosticsEnabled() -> Bool" in provider
     assert "guard nativePacketDiagnosticsEnabled() else { return }" in provider
     assert "if shouldRecordHeartbeat, self.nativePacketDiagnosticsEnabled()" in provider
+    assert "private let peerTrafficRateLock = NSLock()" in provider
     assert "private var peerTrafficRateState:" in provider
+    assert "peerTrafficRateLock.lock()" in provider
     assert "private var secureLinkConnectedSinceUnixTS:" in provider
     assert '"rx_bytes_per_sec": rxRate' in provider
     assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS)' in provider

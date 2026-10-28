@@ -1872,6 +1872,7 @@ def test_macos_swift_host_runner_keeps_quic_owner_iOS13_compilable() -> None:
 def test_macos_swift_host_runner_peer_status_aggregates_connection_traffic_like_python() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
 
+    assert "private let peerTrafficRateLock = NSLock()" in source
     assert "private var peerTrafficRateState: [String: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)] = [:]" in source
     assert "private func peerTrafficTotals(from connections: [String: Any]) -> (rxBytes: Int, txBytes: Int)" in source
     assert 'for key in ["udp", "tcp", "tun"]' in source
@@ -1881,6 +1882,7 @@ def test_macos_swift_host_runner_peer_status_aggregates_connection_traffic_like_
     assert '"rx_bytes_per_sec": rxRate' in source
     assert '"tx_bytes_per_sec": txRate' in source
     assert '"traffic": trafficSnapshot(peerID: "1", rxBytes: trafficTotals.rxBytes, txBytes: trafficTotals.txBytes)' in source
+    assert "peerTrafficRateLock.lock()" in source
 
 
 def test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fields() -> None:

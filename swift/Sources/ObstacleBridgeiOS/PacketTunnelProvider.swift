@@ -88,6 +88,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var proxyProviderLastError = ""
     private var providerStartedAt = Date().timeIntervalSince1970
     private var runtimeReloadInProgress = false
+    /// The cache publisher and an on-demand admin request can both calculate
+    /// traffic rates, so serialize access to the rate-history state.
+    private let peerTrafficRateLock = NSLock()
     private var peerTrafficRateState: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)?
     private var secureLinkConnectedSinceUnixTS: Int?
     private var secureLinkLastAuthenticatedUnixTS: Int?
@@ -2597,6 +2600,9 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             rxBytes += adminIntValue(stats["rx_bytes"])
             txBytes += adminIntValue(stats["tx_bytes"])
         }
+
+        peerTrafficRateLock.lock()
+        defer { peerTrafficRateLock.unlock() }
 
         let now = Date().timeIntervalSince1970
         var rxRate = 0.0

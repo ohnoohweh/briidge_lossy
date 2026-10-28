@@ -209,6 +209,9 @@ final class ObstacleBridgeHostRunner {
     private var cachedPeersSnapshot: [[String: Any]] = []
     private var cachedMetaSnapshot: [String: Any] = [:]
     private var cachedTunRoutingSnapshot: [String: Any] = [:]
+    /// Admin requests and the periodic cache publisher can both build a peer
+    /// snapshot. Keep rate-history mutation serialized across those queues.
+    private let peerTrafficRateLock = NSLock()
     private var peerTrafficRateState: [String: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)] = [:]
     private var overlayDisconnectedAt: TimeInterval?
     private var secureLinkSnapshotSessionID: UInt64 = 0
@@ -1790,6 +1793,8 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func trafficSnapshot(peerID: String, rxBytes rawRXBytes: Int, txBytes rawTXBytes: Int) -> [String: Any] {
+        peerTrafficRateLock.lock()
+        defer { peerTrafficRateLock.unlock() }
         let now = Date().timeIntervalSince1970
         var rxBytes = max(0, rawRXBytes)
         var txBytes = max(0, rawTXBytes)
