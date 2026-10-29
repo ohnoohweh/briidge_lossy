@@ -7,6 +7,12 @@ while it waits for peer input. Stream receivers retain partial bytes and decode
 only complete records after the next callback. Closing an owner cancels its
 readiness source before its descriptor or channel is released.
 
+`scripts/check_swift_async_io_guard.py` is required in pull-request CI. It
+rejects newly added Swift `read`, `recv`, and `recvfrom` calls unless the call
+is nonblocking or carries an inline, bounded-bootstrap exception marker. The
+guard is diff-based so it prevents regression while the remaining conversions
+in this document are completed.
+
 ## Delivered boundaries
 
 | Product | Boundary | Receive ownership | Evidence |
