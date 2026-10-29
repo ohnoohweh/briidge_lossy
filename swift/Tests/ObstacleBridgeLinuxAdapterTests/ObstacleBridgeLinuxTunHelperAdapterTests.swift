@@ -139,14 +139,15 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     @Test func swiftHelperServerStopsAfterAuthenticatedOwnerLoss() throws {
         let backend = SwiftHelperBackend()
         let path = "/tmp/obstaclebridge-swift-helper-owner-loss-\(UUID().uuidString).sock"
-        // This scenario first needs to negotiate the authenticated owner.
-        // Leave room for a contended CI executor to schedule that exchange;
-        // the assertion below still verifies shutdown once the owner is gone.
-        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 3)
+        // Keep the server's unauthenticated idle fallback separate from this
+        // test's owner-loss deadline. A contended executor may delay the first
+        // exchange, but closing that authenticated exchange must stop the
+        // helper promptly rather than waiting for the idle fallback.
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 10)
         try server.start(); defer { server.stop() }
-        let client = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token")
+        let client = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token", timeoutMilliseconds: 5_000)
         #expect(try client.send(command: .snapshot, payload: [:])["backend"] as? String == "swift-test")
-        let deadline = Date().addingTimeInterval(4.5)
+        let deadline = Date().addingTimeInterval(3)
         while FileManager.default.fileExists(atPath: path), Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
         #expect(!FileManager.default.fileExists(atPath: path))
     }
