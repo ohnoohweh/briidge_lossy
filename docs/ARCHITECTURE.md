@@ -1200,6 +1200,7 @@ Main contribution:
 Important behaviors:
 
 - multiple concurrent TCP channels on one peer
+- fair progress for ready TCP channels when one throttled overlay path is shared, so a single bulk response cannot monopolize the path
 - mixed UDP and TCP services on one peer
 - per-peer isolation in listener mode
 - cleanup on disconnect

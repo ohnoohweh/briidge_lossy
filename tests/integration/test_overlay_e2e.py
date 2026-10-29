@@ -1557,6 +1557,7 @@ CASE_INDEX_BASE_CONCURRENT = 300
 CASE_INDEX_BASE_RESTART = 400
 CASE_INDEX_BASE_MYUDP_DELAY_LOSS = 500
 CASE_INDEX_BASE_MYUDP_STALE = 580
+CASE_INDEX_OVERLAY_TCP_BANDWIDTH_FAIRNESS = 650
 
 SERVICE_PORT_CEILING = 61000
 ADMIN_PORT_BASE = 61000
@@ -1726,6 +1727,174 @@ class BounceBackServer:
                     return
                 if self.tcp_expected_request_bytes:
                     return
+
+
+class BulkTransferBarrier:
+    def __init__(self, expected_requests: int):
+        self.expected_requests = int(expected_requests)
+        self.ready_event = threading.Event()
+        self.released_at: Optional[float] = None
+        self._requests = 0
+        self._lock = threading.Lock()
+
+    def arrive_and_wait(self, timeout: float) -> None:
+        with self._lock:
+            self._requests += 1
+            if self._requests == self.expected_requests:
+                self.released_at = time.monotonic()
+                self.ready_event.set()
+        if not self.ready_event.wait(timeout):
+            raise TimeoutError(f'timed out waiting for {self.expected_requests} bulk requests')
+
+
+class BulkTCPResponseServer:
+    """A TCP origin that releases one fixed-size response with its peers."""
+
+    def __init__(self, *, name: str, bind_host: str, port: int, payload: bytes,
+                 release_barrier: BulkTransferBarrier, log_path: Path):
+        self.name = name
+        self.bind_host = bind_host
+        self.port = int(port)
+        self.payload = payload
+        self.release_barrier = release_barrier
+        self.log_path = log_path
+        self.ready_event = threading.Event()
+        self.stop_event = threading.Event()
+        self.thread: Optional[threading.Thread] = None
+        self.sock: Optional[socket.socket] = None
+
+    def start(self) -> None:
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        if not self.ready_event.wait(5.0):
+            raise RuntimeError(f'BulkTCPResponseServer {self.name} failed to start')
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.sock is not None:
+            with contextlib.suppress(OSError):
+                self.sock.close()
+        if self.thread is not None:
+            self.thread.join(timeout=2.0)
+
+    def _run(self) -> None:
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind((self.bind_host, self.port))
+        self.sock.listen(self.release_barrier.expected_requests)
+        self.sock.settimeout(0.5)
+        self.ready_event.set()
+        while not self.stop_event.is_set():
+            try:
+                conn, _addr = self.sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
+
+    def _handle(self, conn: socket.socket) -> None:
+        with conn:
+            conn.settimeout(5.0)
+            try:
+                request = conn.recv(1024)
+            except OSError:
+                return
+            if not request:
+                return
+            self.release_barrier.arrive_and_wait(timeout=20.0)
+            try:
+                conn.sendall(self.payload)
+            except OSError:
+                return
+
+
+class RateLimitedTCPProxy:
+    """Single-connection TCP relay with a deterministic aggregate downstream cap."""
+
+    def __init__(self, *, name: str, listen_host: str, listen_port: int,
+                 upstream_host: str, upstream_port: int, downstream_bytes_per_second: int,
+                 log_path: Path):
+        self.name = name
+        self.listen_host = listen_host
+        self.listen_port = int(listen_port)
+        self.upstream_host = upstream_host
+        self.upstream_port = int(upstream_port)
+        self.downstream_bytes_per_second = int(downstream_bytes_per_second)
+        self.log_path = log_path
+        self.ready_event = threading.Event()
+        self.stop_event = threading.Event()
+        self.thread: Optional[threading.Thread] = None
+        self.sock: Optional[socket.socket] = None
+        self._connections: list[socket.socket] = []
+        self._connections_lock = threading.Lock()
+
+    def start(self) -> None:
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        if not self.ready_event.wait(5.0):
+            raise RuntimeError(f'RateLimitedTCPProxy {self.name} failed to start')
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.sock is not None:
+            with contextlib.suppress(OSError):
+                self.sock.close()
+        with self._connections_lock:
+            connections = list(self._connections)
+        for conn in connections:
+            with contextlib.suppress(OSError):
+                conn.shutdown(socket.SHUT_RDWR)
+            with contextlib.suppress(OSError):
+                conn.close()
+        if self.thread is not None:
+            self.thread.join(timeout=3.0)
+
+    def _run(self) -> None:
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind((self.listen_host, self.listen_port))
+        self.sock.listen(1)
+        self.sock.settimeout(0.5)
+        self.ready_event.set()
+        while not self.stop_event.is_set():
+            try:
+                downstream, _addr = self.sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            try:
+                upstream = socket.create_connection((self.upstream_host, self.upstream_port), timeout=5.0)
+            except OSError:
+                downstream.close()
+                continue
+            with self._connections_lock:
+                self._connections.extend((downstream, upstream))
+            threading.Thread(target=self._copy, args=(downstream, upstream, False), daemon=True).start()
+            threading.Thread(target=self._copy, args=(upstream, downstream, True), daemon=True).start()
+
+    def _copy(self, source: socket.socket, destination: socket.socket, limited: bool) -> None:
+        next_send = time.monotonic()
+        try:
+            while not self.stop_event.is_set():
+                data = source.recv(16_384)
+                if not data:
+                    with contextlib.suppress(OSError):
+                        destination.shutdown(socket.SHUT_WR)
+                    return
+                if not limited:
+                    destination.sendall(data)
+                    continue
+                for offset in range(0, len(data), 1_000):
+                    chunk = data[offset:offset + 1_000]
+                    next_send += len(chunk) / self.downstream_bytes_per_second
+                    delay = next_send - time.monotonic()
+                    if delay > 0:
+                        time.sleep(delay)
+                    destination.sendall(chunk)
+        except OSError:
+            return
 
 
 class UdpDelayLossProxy:
@@ -8819,6 +8988,182 @@ def test_overlay_e2e_listener_two_clients(case_name: str, tmp_path: Path) -> Non
 @pytest.mark.parametrize("case_name", CONCURRENT_TCP_CHANNEL_CASES)
 def test_overlay_e2e_concurrent_tcp_channels(case_name: str, tmp_path: Path) -> None:
     run_case_concurrent_tcp_channels(CASES[case_name], tmp_path, CASE_INDEX_BASE_CONCURRENT + ALL_CASES.index(case_name))
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_overlay_shares_throttled_downstream_bandwidth(tmp_path: Path) -> None:
+    """Detect a single TCP channel monopolising a 10 kB/s overlay bottleneck.
+
+    Four independent TCP origins sit behind bridge A.  Bridge B exposes one
+    local TCP service per origin and the only overlay TCP connection is relayed
+    through a 10 kB/s downstream throttle.  The origins wait until every
+    request arrived before releasing their 100 kB responses, so connection
+    setup cannot make one transfer win the bottleneck before the others exist.
+    """
+    lane_count = 4
+    response_bytes = 100_000
+    downstream_bytes_per_second = 10_000
+    base_target_port = 45_000
+    base_service_port = 45_100
+    overlay_server_port = 45_200
+    throttle_port = 45_201
+    case = materialize_case_ports(
+        Case(
+            name='overlay_tcp_throttled_bandwidth_fairness',
+            bounce_proto='tcp', bounce_bind='127.0.0.1', bounce_port=45_300,
+            probe_proto='tcp', probe_host='127.0.0.1', probe_port=base_service_port, probe_bind='127.0.0.1',
+            bridge_server_args=[
+                '--overlay-transport', 'tcp', '--tcp-bind', '127.0.0.1', '--tcp-own-port', str(overlay_server_port),
+                '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-file', 'bandwidth_bridge_a.txt',
+            ],
+            bridge_client_args=[
+                '--overlay-transport', 'tcp', '--tcp-peer', '127.0.0.1', '--tcp-peer-port', str(throttle_port),
+                '--tcp-bind', '127.0.0.1', '--tcp-own-port', '0', '--own-servers',
+                *[
+                    f'tcp,{base_service_port + lane},127.0.0.1,tcp,127.0.0.1,{base_target_port + lane}'
+                    for lane in range(lane_count)
+                ],
+                '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-file', 'bandwidth_bridge_b.txt',
+            ],
+        ),
+        CASE_INDEX_OVERLAY_TCP_BANDWIDTH_FAIRNESS,
+    )
+    server_overlay_port = int(case.bridge_server_args[case.bridge_server_args.index('--tcp-own-port') + 1])
+    client_throttle_port = int(case.bridge_client_args[case.bridge_client_args.index('--tcp-peer-port') + 1])
+    own_servers_index = case.bridge_client_args.index('--own-servers') + 1
+    own_specs: list[list[str]] = []
+    for raw_spec in case.bridge_client_args[own_servers_index:]:
+        if raw_spec.startswith('--'):
+            break
+        own_specs.append([part.strip() for part in raw_spec.split(',')])
+    if len(own_specs) != lane_count:
+        raise RuntimeError(f'expected {lane_count} own TCP services, got {own_specs!r}')
+
+    release_barrier = BulkTransferBarrier(lane_count)
+    origins = [
+        BulkTCPResponseServer(
+            name=f'bandwidth_origin_{lane}', bind_host=spec[4], port=int(spec[5]),
+            payload=bytes([0x41 + lane]) * response_bytes,
+            release_barrier=release_barrier, log_path=tmp_path / f'bandwidth_origin_{lane}.log',
+        )
+        for lane, spec in enumerate(own_specs)
+    ]
+    throttle = RateLimitedTCPProxy(
+        name='overlay_tcp_10kbps_downstream', listen_host=case.probe_host,
+        listen_port=client_throttle_port, upstream_host=case.probe_host,
+        upstream_port=server_overlay_port, downstream_bytes_per_second=downstream_bytes_per_second,
+        log_path=tmp_path / 'overlay_tcp_10kbps_downstream.log',
+    )
+    server_proc: Optional[Proc] = None
+    client_proc: Optional[Proc] = None
+    server_spec, client_spec = build_commands(
+        case, tmp_path, CASE_INDEX_OVERLAY_TCP_BANDWIDTH_FAIRNESS, enable_admin=True,
+    )
+    results: list[Optional[bytes]] = [None] * lane_count
+    completed_after_release: list[Optional[float]] = [None] * lane_count
+    received_lengths = [0] * lane_count
+    errors: list[tuple[int, Exception]] = []
+    start_event = threading.Event()
+
+    def _download(lane: int, spec: list[str]) -> None:
+        try:
+            start_event.wait(timeout=5.0)
+            with socket.create_connection((spec[2], int(spec[1])), timeout=10.0) as conn:
+                # A deliberately serial mux can leave its final lane without a
+                # byte for about 30 seconds.  Leave this larger than the whole
+                # 40-second aggregate transfer so the fairness assertion below
+                # reports the starvation pattern instead of a socket timeout.
+                conn.settimeout(75.0)
+                conn.sendall(f'GET lane {lane}'.encode('ascii'))
+                received = bytearray()
+                while len(received) < response_bytes:
+                    chunk = conn.recv(min(16_384, response_bytes - len(received)))
+                    if not chunk:
+                        raise RuntimeError(f'lane {lane} closed after {len(received)} of {response_bytes} bytes')
+                    received.extend(chunk)
+                    received_lengths[lane] = len(received)
+                results[lane] = bytes(received)
+                if release_barrier.released_at is None:
+                    raise RuntimeError('bulk response completed before the release barrier timestamp')
+                completed_after_release[lane] = time.monotonic() - release_barrier.released_at
+        except Exception as exc:
+            errors.append((lane, exc))
+
+    try:
+        phase('1. Start four TCP origins and the aggregate 10 kB/s overlay throttle')
+        for origin in origins:
+            origin.start()
+        throttle.start()
+
+        phase('2. Start ObstacleBridge A and B through the throttled overlay TCP link')
+        s_name, s_cmd, s_env, s_admin_port = server_spec
+        server_proc = start_proc(f'{case.name}_{s_name}', s_cmd, tmp_path, env_extra=s_env, admin_port=s_admin_port)
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        c_name, c_cmd, c_env, c_admin_port = client_spec
+        client_proc = start_proc(f'{case.name}_{c_name}', c_cmd, tmp_path, env_extra=c_env, admin_port=c_admin_port)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        server_proc, client_proc = wait_both_connected(server_proc, client_proc, tmp_path, timeout=30.0)
+        for spec in own_specs:
+            wait_tcp_listen(spec[2], int(spec[1]), timeout=10.0)
+
+        phase('3. Request four simultaneous 100 kB TCP downloads')
+        threads = [threading.Thread(target=_download, args=(lane, spec), daemon=True) for lane, spec in enumerate(own_specs)]
+        for thread in threads:
+            thread.start()
+        start_event.set()
+        download_deadline = time.monotonic() + 80.0
+        for thread in threads:
+            thread.join(timeout=max(0.0, download_deadline - time.monotonic()))
+        if any(thread.is_alive() for thread in threads):
+            raise RuntimeError(
+                'timed out waiting for throttled parallel TCP downloads: '
+                f'received_lengths={received_lengths!r}'
+            )
+        if errors:
+            raise RuntimeError(
+                f'throttled parallel TCP downloads failed: {errors!r}; '
+                f'received_lengths={received_lengths!r}'
+            )
+        for lane, payload in enumerate(results):
+            expected = bytes([0x41 + lane]) * response_bytes
+            if payload != expected:
+                raise RuntimeError(f'lane {lane} response mismatch: got={len(payload or b"")} expected={response_bytes}')
+
+        completion_times = [value for value in completed_after_release if value is not None]
+        if len(completion_times) != lane_count:
+            raise RuntimeError(f'missing completion times: {completed_after_release!r}')
+        earliest = min(completion_times)
+        latest = max(completion_times)
+        one_lane_seconds = response_bytes / downstream_bytes_per_second
+        shared_seconds = (response_bytes * lane_count) / downstream_bytes_per_second
+        log.info(
+            'throttled TCP overlay fairness: completions=%s earliest=%.2fs latest=%.2fs '
+            'one_lane=%.2fs shared=%.2fs', completion_times, earliest, latest, one_lane_seconds, shared_seconds,
+        )
+        # A FIFO/priority failure finishes one lane at roughly 10 seconds and
+        # leaves the other three queued.  A mux that shares this single capped
+        # tunnel cannot complete a 100 kB lane before the aggregate link has
+        # carried a substantial fraction of all four responses.
+        if earliest < one_lane_seconds * 1.6:
+            raise AssertionError(
+                'TCP overlay bandwidth starvation reproduced: '
+                f'first 100 kB lane completed in {earliest:.2f}s on a {downstream_bytes_per_second} B/s '
+                f'aggregate bottleneck; completions={completion_times!r}'
+            )
+        if latest > shared_seconds * 1.5:
+            raise AssertionError(
+                f'throttled TCP overlay exceeded the bounded shared transfer time: '
+                f'latest={latest:.2f}s expected_about={shared_seconds:.2f}s completions={completion_times!r}'
+            )
+    finally:
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        throttle.stop()
+        for origin in origins:
+            origin.stop()
 
 
 @pytest.mark.integration
