@@ -75,6 +75,11 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     private let overlayAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let secureLinkServer: ObstacleBridgeSecureLinkPSKServer?
     private let requestLock = NSLock()
+    /// SecureLink and the overlay adapter maintain directional protocol state.
+    /// A readiness callback receives on its own queue while service owners may
+    /// send from theirs, so serialize that state without moving socket waits
+    /// back onto a blocking worker.
+    private let protocolLock = NSLock()
     private var receiveOwnerActive = false
     private var pendingCompatibilityReply: (signal: DispatchSemaphore, value: Data?)?
     /// A peer can publish its first authenticated ChannelMux control frame
@@ -196,6 +201,8 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         let started = DispatchTime.now().uptimeNanoseconds
         defer { ObstacleBridgeRuntimeMetrics.shared.record(.overlaySend, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         do {
+            protocolLock.lock()
+            defer { protocolLock.unlock() }
             debug("secure_link.outbound", ["protected": isProtected ? "true" : "false", "application_bytes": String(payload.count)])
             if let overlayAdapter {
                 for wire in try overlayAdapter.handleOutboundPayload(payload).emittedFrames {
@@ -292,6 +299,8 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     }
 
     private func handleReceivedWire(_ wire: Data) throws -> Data? {
+        protocolLock.lock()
+        defer { protocolLock.unlock() }
         let payload: Data?
         if let overlayAdapter {
             let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
