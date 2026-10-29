@@ -1002,24 +1002,32 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             self.muxEgressDrainScheduled = false
-            guard !self.stopped, let channelMux = self.channelMux,
-                  let frame = self.muxEgressScheduler.dequeueNext() else { return }
-            self.emitDebugDiagnostic("myudp.channel_mux.send", [
-                "message_type": String(frame.messageType.rawValue),
-                "channel": String(frame.channelID),
-                "body_bytes": String(frame.body.count),
-            ])
-            do { try channelMux.sendUnsolicited(frame) }
-            catch {
-                self.emitDebugDiagnostic("myudp.channel_mux.send_failed", [
+            // `sendUnsolicited` performs a datagram write, not a receive wait.
+            // Send a bounded fair batch in this turn so an OPEN and its
+            // immediately queued DATA are not separated by arbitrary queue
+            // work.  The bound retains an interruption point for other
+            // lifecycle callbacks and preserves the persistent Core
+            // round-robin order across sources.
+            for _ in 0..<32 {
+                guard !self.stopped, let channelMux = self.channelMux,
+                      let frame = self.muxEgressScheduler.dequeueNext() else { return }
+                self.emitDebugDiagnostic("myudp.channel_mux.send", [
                     "message_type": String(frame.messageType.rawValue),
                     "channel": String(frame.channelID),
-                    "reason": error.localizedDescription,
+                    "body_bytes": String(frame.body.count),
                 ])
-                if let epoch = self.activeCoordinatorEpoch {
-                    self.apply(self.coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
+                do { try channelMux.sendUnsolicited(frame) }
+                catch {
+                    self.emitDebugDiagnostic("myudp.channel_mux.send_failed", [
+                        "message_type": String(frame.messageType.rawValue),
+                        "channel": String(frame.channelID),
+                        "reason": error.localizedDescription,
+                    ])
+                    if let epoch = self.activeCoordinatorEpoch {
+                        self.apply(self.coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
+                    }
+                    return
                 }
-                return
             }
             if !self.muxEgressScheduler.isEmpty { self.scheduleMuxEgressDrain() }
         }
