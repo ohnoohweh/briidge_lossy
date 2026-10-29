@@ -219,7 +219,7 @@ final class CollectorState: @unchecked Sendable {
 
 let flags = fcntl(socketFD, F_GETFL)
 guard flags >= 0, fcntl(socketFD, F_SETFL, flags | O_NONBLOCK) == 0 else { fail("unable to make collector socket nonblocking") }
-nonisolated(unsafe) let collector = CollectorState(socketFD: socketFD, privateMode: privateMode, generation: privateGeneration)
+let collector = CollectorState(socketFD: socketFD, privateMode: privateMode, generation: privateGeneration)
 let collectorQueue = DispatchQueue(label: "org.obstaclebridge.log-collector")
 // This is a dedicated worker process, so a poll loop can wait without
 // blocking its host. It owns private log ingestion explicitly and always uses
@@ -231,6 +231,12 @@ collectorQueue.async {
         // drains. This avoids platform-specific source/poll ownership bugs
         // while keeping all application queues free of socket waits.
         collector.drainReadableDatagrams()
+        if privateMode {
+            var byte: UInt8 = 0
+            let received = recv(lifetimeFD, &byte, 1, Int32(MSG_DONTWAIT))
+            if received == 0 { exit(0) }
+            if received < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK { exit(0) }
+        }
         usleep(10_000)
     }
 }

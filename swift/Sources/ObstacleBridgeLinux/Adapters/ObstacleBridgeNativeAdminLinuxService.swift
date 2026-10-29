@@ -66,7 +66,10 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         source = nil
         let clients = clientSources
         clientSources.removeAll(); clientRequests.removeAll()
-        for source in clients.values { source.cancel() }
+        for (client, source) in clients {
+            source.cancel()
+            _ = close(client)
+        }
         listener = -1
         port = 0
     }
@@ -116,7 +119,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             let source = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
             clientSources[client] = source
             source.setEventHandler { [weak self] in self?.readClientRequest(client) }
-            source.setCancelHandler { _ = close(client) }
+            source.setCancelHandler {}
             source.resume()
             // A loopback client can finish its write before Dispatch installs
             // the first event delivery. This is still a nonblocking probe;
@@ -154,6 +157,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
                     return
                 }
                 clientSources.removeValue(forKey: client)?.cancel()
+                _ = close(client)
                 clientRequests.removeValue(forKey: client)
                 DispatchQueue.global().async { [weak self] in self?.serve(responseClient, requestData: request) }
                 return
@@ -168,6 +172,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     private func closeClientRequest(_ client: Int32) {
         clientSources.removeValue(forKey: client)?.cancel()
         clientRequests.removeValue(forKey: client)
+        _ = close(client)
     }
 
     private func serve(_ client: Int32, requestData: Data) {
