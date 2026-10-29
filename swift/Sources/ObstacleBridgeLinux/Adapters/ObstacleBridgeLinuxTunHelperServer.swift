@@ -89,8 +89,9 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         listener = fd; running = true; hasAuthenticatedClient = false
         lastAuthenticatedActivityNanoseconds = DispatchTime.now().uptimeNanoseconds
         if authenticatedClientIdleTimeout > 0 {
+            let watchdogInterval = min(authenticatedClientIdleTimeout, unauthenticatedClientIdleTimeout, 1)
             let watchdog = DispatchSource.makeTimerSource(queue: watchdogQueue)
-            watchdog.schedule(deadline: .now() + authenticatedClientIdleTimeout, repeating: min(authenticatedClientIdleTimeout, 1))
+            watchdog.schedule(deadline: .now() + watchdogInterval, repeating: watchdogInterval)
             watchdog.setEventHandler { [weak self] in self?.expireIdleHelperIfNeeded() }
             self.watchdog = watchdog; watchdog.resume()
         }
