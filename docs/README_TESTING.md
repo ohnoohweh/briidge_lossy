@@ -999,6 +999,8 @@ The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.m
 
 Runtime-metric source guards exclude inclusive queue, transaction, payload-batch, payload-delivery, TCP-message-dispatch, TUN-payload, and lower-transport socket-wait wrappers, so Runtime Analysis can select only an actionable uninterrupted scope. Linux myUDP measures Core processing of a datagram after readiness, ending before transport output; it does not measure the wait for socket readiness.
 
+Diff-based Python and Swift runtime guards reject new raw receive/read, synchronous readiness-wait, and sleep-poll additions. A line may be admitted only with an explicit `OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION:` marker documenting the bounded dependency boundary that cannot safely expose asynchronous ownership.
+
 Linux plain TCP and WebSocket live receive are readiness-driven after bootstrap: callback tests cover a peer-first record and TLS/QUIC echo paths, while their incremental decoders retain partial frame bytes and never complete a record with a blocking read or condition wait.
 
 ### First traceability mapping for the unit suite

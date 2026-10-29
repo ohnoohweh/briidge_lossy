@@ -2048,6 +2048,8 @@ REQ-ADM-012:
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_insecure_context_notice_prefers_own_server_path
 
 REQ-IO-001:
+  # Python and Swift diff guards reject new raw receive/wait additions unless
+  # the changed line carries the documented bounded-boundary exception marker.
   unit_tests:
     - tests/unit/test_tun_helper_linux_backend.py::test_open_write_read_and_stop_round_trip
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input
