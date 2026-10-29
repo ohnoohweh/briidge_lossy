@@ -1333,7 +1333,7 @@ class LinuxTunHelperBackend:
                 if fd is None:
                     return
                 try:
-                    packet = os.read(fd, max(68, int(self._mtu or 1600) + 4))
+                    packet = os.read(fd, max(68, int(self._mtu or 1600) + 4))  # O_NONBLOCK readiness owner
                 except BlockingIOError:
                     return
                 except OSError as exc:

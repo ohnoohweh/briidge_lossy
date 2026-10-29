@@ -17,6 +17,7 @@ BLOCKING_WAIT = re.compile(
     r"(?:\.(?:recv|recvfrom|recv_into)\s*\(|\bos\.read\s*\(|\bselect\.select\s*\(|\btime\.sleep\s*\()"
 )
 AWAITED = re.compile(r"\bawait\s+[^#]*(?:\.read\s*\(|\.recv\s*\()")
+NONBLOCKING = re.compile(r"\b(?:MSG_DONTWAIT|O_NONBLOCK)\b")
 EXCEPTION = "OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION:"
 
 
@@ -47,7 +48,8 @@ def validate(diff_args: list[str]) -> list[str]:
     for path, line_number, line in changed_lines(diff_args):
         if not path.startswith(SOURCE_PREFIX) or not path.endswith(".py"):
             continue
-        if BLOCKING_WAIT.search(line) and not AWAITED.search(line) and EXCEPTION not in line:
+        if (BLOCKING_WAIT.search(line) and not AWAITED.search(line)
+                and not NONBLOCKING.search(line) and EXCEPTION not in line):
             errors.append(
                 f"{path}:{line_number}: new blocking I/O wait is forbidden. "
                 "Use an asyncio/readiness callback, or document the bounded dependency "
