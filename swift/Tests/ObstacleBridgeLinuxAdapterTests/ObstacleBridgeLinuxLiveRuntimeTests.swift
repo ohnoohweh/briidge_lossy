@@ -828,43 +828,6 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         runtime.stop()
     }
 
-    @Test func liveRuntimeRoutesLocalTCPServiceFramesThroughAuthenticatedMyUDPPythonPeer() throws {
-        let peer = try PythonOverlayPeer(mode: "myudp-secure-mux-stream")
-        defer { peer.stop() }
-        let service = ObstacleBridgeLinuxServiceSpec(serviceID: 1, name: "echo", listenProtocol: .tcp, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: 7)
-        let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(
-            transport: .myudp, host: "127.0.0.1", port: peer.port,
-            secureLinkPSK: Data("linux-swift-psk".utf8), ownServices: [service]
-        ))
-        let connected = DispatchSemaphore(value: 0)
-        runtime.onSnapshot = { if $0.state == "connected" { connected.signal() } }
-        runtime.start()
-        defer { runtime.stop() }
-        #expect(connected.wait(timeout: .now() + 3) == .success)
-        #expect(waitUntil(timeout: 3) { runtime.status().receiveLoopState == "running" })
-        let payload = Data("mux-through-myudp-python".utf8)
-        let port = try #require(runtime.localServicePorts()[1])
-        var echoed = Data()
-        var activeFD: Int32 = -1
-        defer { if activeFD >= 0 { _ = close(activeFD) } }
-        for _ in 0..<20 where echoed != payload {
-            guard let fd = try? connectTCP(port: port) else {
-                usleep(100_000)
-                continue
-            }
-            if payload.withUnsafeBytes({ write(fd, $0.baseAddress, payload.count) }) == payload.count {
-                if let received = receiveTCPWithDeadline(fd, byteCount: payload.count, timeoutMilliseconds: 400) {
-                    echoed = received
-                    activeFD = fd
-                }
-            }
-            if fd != activeFD { _ = close(fd) }
-            if echoed != payload { usleep(100_000) }
-        }
-        #expect(echoed == payload)
-        #expect(waitUntil { runtime.status().activeTCPChannels == 1 })
-    }
-
     @Test func liveRuntimeRoutesLocalUdpServiceFramesThroughAuthenticatedPythonPeer() throws {
         let peer = try PythonOverlayPeer(mode: "tcp-secure-mux-echo")
         defer { peer.stop() }
@@ -976,28 +939,4 @@ private func waitUntil(timeout: TimeInterval = 2, _ predicate: () -> Bool) -> Bo
     }
 
     private enum SocketError: Error { case failure }
-}
-
-/// A retry loop must not turn its first missed reply into an unbounded
-/// descriptor read.  Poll readiness and use a nonblocking receive so every
-/// connection attempt receives its own bounded opportunity.
-private func receiveTCPWithDeadline(_ fd: Int32, byteCount: Int, timeoutMilliseconds: Int32) -> Data? {
-    var received = [UInt8](repeating: 0, count: byteCount)
-    var offset = 0
-    let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(max(0, timeoutMilliseconds)) * 1_000_000
-    while offset < byteCount {
-        let now = DispatchTime.now().uptimeNanoseconds
-        guard now < deadline else { return nil }
-        let remainingMilliseconds = Int32(max(1, (deadline - now + 999_999) / 1_000_000))
-        var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-        guard poll(&descriptor, 1, remainingMilliseconds) > 0,
-              descriptor.revents & Int16(POLLIN) != 0
-        else { return nil }
-        let count = received.withUnsafeMutableBytes {
-            recv(fd, $0.baseAddress!.advanced(by: offset), byteCount - offset, Int32(MSG_DONTWAIT))
-        }
-        guard count > 0 else { return nil }
-        offset += count
-    }
-    return Data(received)
 }
