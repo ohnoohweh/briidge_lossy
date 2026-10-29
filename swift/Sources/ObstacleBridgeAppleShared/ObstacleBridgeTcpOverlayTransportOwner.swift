@@ -51,6 +51,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var receiveBuffer = Data()
     private var pendingOutboundWires: [Data] = []
     private var outboundSendInFlight = false
+    private let muxEgressScheduler = ObstacleBridgeChannelMuxEgressSequencer<Data>()
+    private var muxEgressDrainScheduled = false
     private var overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
     private var lastOverlayRxWallNS: UInt64 = 0
     private var udpServerConnections: [Int: NWConnection] = [:]
@@ -1204,18 +1206,30 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
 
     private func sendMuxFrames(_ muxFrames: [Data]) {
         for frame in muxFrames {
-            if let adapter = overlayLayerTransportAdapter {
+            guard let wire = try? ObstacleBridgeChannelMuxFrameCodec.decode(frame) else { continue }
+            muxEgressScheduler.enqueue(frame, from: .init(wire))
+        }
+        scheduleMuxEgressDrain()
+    }
+
+    private func scheduleMuxEgressDrain() {
+        guard !muxEgressDrainScheduled else { return }
+        muxEgressDrainScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.muxEgressDrainScheduled = false
+            guard let frame = self.muxEgressScheduler.dequeueNext() else { return }
+            if let adapter = self.overlayLayerTransportAdapter {
                 do {
                     let snapshot = try adapter.handleOutboundPayload(frame)
-                    for secureFrame in snapshot.emittedFrames {
-                        sendOverlayTransportPayload(secureFrame)
-                    }
+                    for secureFrame in snapshot.emittedFrames { self.sendOverlayTransportPayload(secureFrame) }
                 } catch {
-                    eventSink?("tcp_overlay_overlay_layer_send_failed", ["error": error.localizedDescription, "packet_bytes": frame.count])
+                    self.eventSink?("tcp_overlay_overlay_layer_send_failed", ["error": error.localizedDescription, "packet_bytes": frame.count])
                 }
             } else {
-                sendOverlayTransportPayload(frame)
+                self.sendOverlayTransportPayload(frame)
             }
+            if !self.muxEgressScheduler.isEmpty { self.scheduleMuxEgressDrain() }
         }
     }
 

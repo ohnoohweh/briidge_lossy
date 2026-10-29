@@ -1835,7 +1835,7 @@ pass over its bounded aggregate set.
 - Run the regular pytest suite during normal development to cover unit, integration, and overlay harness regression paths.
 - Use the parallel overlay harness for frequent end-to-end validation when transport and socket behavior matter most.
 - Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
-- Keep the throttled TCP-overlay fairness case in that flow: four synchronized 100 kB downloads sharing one 10 kB/s relay must expose any channel that monopolizes the aggregate path; a persistent per-source round robin schedules every TCP, UDP, TUN, and control mux record.
+- Keep the throttled TCP-overlay fairness case in that flow: four synchronized 100 kB downloads sharing one 10 kB/s relay must expose any channel that monopolizes the aggregate path; the shared Python/Swift persistent per-source round robin schedules every TCP, UDP, TUN, and control mux record.
 - Keep Python TCP, QUIC, and WebSocket reconnect cleanup covered through stopped-event-loop teardown so supervisor restarts do not emit secondary coroutine-close exceptions.
 - Keep UDP multi-peer resolution coverage aligned with dual-stack behavior, including `prefer-ipv6` retention across immediate send errors and IPv4 fallback through IPv4-mapped sends when the active socket is IPv6.
 - Keep the Python and Swift `prefer-ipv6` peer-resolution contract pinned for native IPv4 literals: resolution should keep the IPv4 host identity intact, while IPv4-mapped notation is reserved for IPv6 socket send compatibility.

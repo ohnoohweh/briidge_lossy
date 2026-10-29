@@ -181,6 +181,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var serviceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var remoteServiceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var channelOwners: [String: ObstacleBridgeLinuxServiceSocketOwner] = [:]
+    private let muxEgressScheduler = ObstacleBridgeChannelMuxEgressSequencer<ObstacleBridgeChannelMuxFrame>()
+    private var muxEgressDrainScheduled = false
     private var proxyProvider: ObstacleBridgeLinuxProxyProvider?
     /// Published under statusLock so Admin never waits for the transport queue.
     private var proxyWorker: ObstacleBridgeSupervisedProxyWorker?
@@ -383,6 +385,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         transportLifecycleOwner.cancelInFlightConnection()
         queue.sync {
             stopped = true
+            muxEgressScheduler.removeAll()
+            muxEgressDrainScheduled = false
             apply(coordinator.handle(.stop))
             stopRuntimeHealthHeartbeat()
             proxyProvider?.stop(); proxyProvider = nil
@@ -770,6 +774,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 session?.close()
                 session = nil
                 channelMux = nil
+                muxEgressScheduler.removeAll()
+                muxEgressDrainScheduled = false
                 stopPacketDevice()
                 activeCoordinatorEpoch = nil
                 replaceReceiveWorker(with: nil)
@@ -982,26 +988,40 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     }
 
     private func sendServiceFrames(_ frames: [ObstacleBridgeChannelMuxFrame], from owner: ObstacleBridgeLinuxServiceSocketOwner) {
-        guard !stopped, let channelMux else { return }
+        guard !stopped, channelMux != nil else { return }
         for frame in frames {
-            emitDebugDiagnostic("myudp.channel_mux.send", [
+            muxEgressScheduler.enqueue(frame, from: .init(frame))
+            if frame.messageType == .open { channelOwners[channelKey(frame)] = owner }
+        }
+        scheduleMuxEgressDrain()
+    }
+
+    private func scheduleMuxEgressDrain() {
+        guard !muxEgressDrainScheduled else { return }
+        muxEgressDrainScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.muxEgressDrainScheduled = false
+            guard !self.stopped, let channelMux = self.channelMux,
+                  let frame = self.muxEgressScheduler.dequeueNext() else { return }
+            self.emitDebugDiagnostic("myudp.channel_mux.send", [
                 "message_type": String(frame.messageType.rawValue),
                 "channel": String(frame.channelID),
                 "body_bytes": String(frame.body.count),
             ])
-            if frame.messageType == .open { channelOwners[channelKey(frame)] = owner }
             do { try channelMux.sendUnsolicited(frame) }
             catch {
-                emitDebugDiagnostic("myudp.channel_mux.send_failed", [
+                self.emitDebugDiagnostic("myudp.channel_mux.send_failed", [
                     "message_type": String(frame.messageType.rawValue),
                     "channel": String(frame.channelID),
                     "reason": error.localizedDescription,
                 ])
-                if let epoch = activeCoordinatorEpoch {
-                    apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
+                if let epoch = self.activeCoordinatorEpoch {
+                    self.apply(self.coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
                 }
                 return
             }
+            if !self.muxEgressScheduler.isEmpty { self.scheduleMuxEgressDrain() }
         }
     }
 

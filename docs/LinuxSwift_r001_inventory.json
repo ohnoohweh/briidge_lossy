@@ -82,6 +82,7 @@
       "disposition": "split-contract",
       "files": [
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxEgressSequencer.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxReplyPolicy.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCorePorts.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskCodec.swift",

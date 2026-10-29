@@ -360,6 +360,14 @@ The persistent cursor is essential: a new scheduling cycle never restarts at a
 fixed channel, so a continuously ready first channel cannot win every recovery
 from saturation.
 
+Python and Swift use the same peer-scoped source identity and persistent turn
+contract. Swift’s shared core sequencer is installed at the Linux service
+egress and at the TCP, WebSocket, and QUIC Apple stream-overlay owners; their
+asynchronous one-record drains keep lower-layer writes nonblocking while
+preserving the same source order. The throttled end-to-end regression is the
+Python runtime proof of bandwidth sharing; the shared Swift scheduler test
+proves the equivalent message-order contract.
+
 ## TCP protocol
 
 TCP in `ChannelMux` is connection-oriented. One accepted or dialed TCP socket maps to one mux channel id for the lifetime of that connection.

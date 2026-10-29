@@ -1200,7 +1200,7 @@ Main contribution:
 Important behaviors:
 
 - multiple concurrent TCP channels on one peer
-- fair progress for ready TCP, UDP, and TUN sources when one throttled stream-overlay path is shared, using one-message round-robin turns over bounded source queues for every outbound mux record (`OPEN`, `DATA`, fragments, `CLOSE`, and control) so a single bulk response cannot monopolize the path
+- fair progress for ready TCP, UDP, and TUN sources when one throttled stream-overlay path is shared, using the common peer-scoped egress sequencer for one-message round-robin turns over bounded source queues for every outbound mux record (`OPEN`, `DATA`, fragments, `CLOSE`, and control) so a single bulk response cannot monopolize the path; Swift Linux service egress and Apple TCP/WebSocket/QUIC owners use asynchronous one-record drains at this boundary
 - mixed UDP and TCP services on one peer
 - per-peer isolation in listener mode
 - cleanup on disconnect
