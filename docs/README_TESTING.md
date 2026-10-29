@@ -116,6 +116,10 @@ Representative anchors for those areas:
   decoded only for the CONNECT Basic header and are not treated as endpoint
   host material.
 - Linux Swift adapter coverage separately exercises one shared myudp descriptor admitting two independently authenticated PSK peers before exposing either child session.
+- Native peer-worker source coverage verifies Linux and macOS control descriptors
+  become nonblocking before frame assembly and use readiness-gated POSIX reads;
+  their isolated child process retains only the documented no-host-event-loop
+  `poll` compatibility wait.
 - The foreground myudp listener probes retain separate authenticated child projections in local Admin, and pin rejection of a second endpoint once the configured admission bound is full.
 - The same listener tests reject ambiguous local-service maps rather than binding one configured port independently for every admitted peer.
 - Listener-lifecycle coverage also expires an idle child and verifies that the listener removes it rather than attempting an outbound reconnect.

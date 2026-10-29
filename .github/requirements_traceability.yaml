@@ -2066,6 +2066,8 @@ REQ-IO-001:
   # The shared native Admin lifetime owner is a nonblocking Dispatch read
   # source and its deadline-bounded control frames use nonblocking POSIX
   # reads, covered by owner-loss and fragmented-frame Linux tests.
+  # Linux/macOS native peer workers use the same nonblocking frame read with
+  # an isolated child-process poll compatibility loop.
   unit_tests:
     - tests/unit/test_admin_worker.py::test_admin_worker_timeout_fences_late_reply
     - tests/unit/test_ws_payload_mode.py::test_open_ws_proxy_socket_blocking_establishes_connect_tunnel

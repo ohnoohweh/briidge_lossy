@@ -79,6 +79,9 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert '"--peer-worker-control-fd"' in entrypoint
     assert '"--log-fd"' in entrypoint
     assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker
+    assert "Darwin.fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)" in worker
+    assert "Darwin.read(handle.fileDescriptor, &buffer, buffer.count) // O_NONBLOCK readiness owner" in worker
+    assert "isolated native peer control owner has no host event loop" in worker
     assert "ObstacleBridgeLogProducer(inheritedFD: $0, minimumLevel: rootLogLevel)" in worker
     assert '"peer.ready"' in worker and '"peer.snapshot.reply"' in worker
     assert "startPeerWorker()" in runner and "stopPeerWorker()" in runner

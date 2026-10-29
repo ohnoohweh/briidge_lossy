@@ -1,5 +1,6 @@
 import CoreFoundation
 import Foundation
+import Darwin
 
 /// Protocol-v1 native peer child. The inherited connected descriptor is both
 /// configuration capability and owner-lifetime signal; no config path, secret
@@ -15,6 +16,7 @@ enum ObstacleBridgeNativePeerWorker {
 
     static func run(controlFD: Int32, logFD: Int32? = nil) throws {
         guard controlFD >= 0, logFD != controlFD else { throw WorkerError.invalidDescriptor }
+        try makeNonBlocking(controlFD)
         let control = FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)
         var runner: ObstacleBridgeHostRunner?
         defer { runner?.stopPeerWorker() }
@@ -109,11 +111,33 @@ enum ObstacleBridgeNativePeerWorker {
     private static func readExactly(_ handle: FileHandle, count: Int) throws -> Data {
         var output = Data()
         while output.count < count {
-            let chunk = try handle.read(upToCount: count - output.count) ?? Data()
-            guard !chunk.isEmpty else { throw NSError(domain: "ObstacleBridgeNativePeerWorker", code: 1) }
-            output.append(chunk)
+            try waitReadable(handle.fileDescriptor)
+            var buffer = [UInt8](repeating: 0, count: count - output.count)
+            let received = Darwin.read(handle.fileDescriptor, &buffer, buffer.count) // O_NONBLOCK readiness owner
+            if received > 0 { output.append(buffer, count: received); continue }
+            if received < 0 && errno == EINTR { continue }
+            if received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) { continue }
+            throw NSError(domain: "ObstacleBridgeNativePeerWorker", code: 1)
         }
         return output
+    }
+
+    private static func makeNonBlocking(_ descriptor: Int32) throws {
+        let flags = Darwin.fcntl(descriptor, F_GETFL)
+        guard flags >= 0, Darwin.fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0
+        else { throw WorkerError.invalidDescriptor }
+    }
+
+    /// The private child owns this one synchronous protocol loop.  Reads stay
+    /// nonblocking; `poll` is the documented no-event-loop compatibility wait.
+    private static func waitReadable(_ descriptor: Int32) throws {
+        var pollDescriptor = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+        while true {
+            let result = Darwin.poll(&pollDescriptor, 1, -1) // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: isolated native peer control owner has no host event loop
+            if result < 0 && errno == EINTR { continue }
+            guard result > 0, pollDescriptor.revents & Int16(POLLIN) != 0 else { throw WorkerError.invalidFrame }
+            return
+        }
     }
 
     private static func writeFrame(_ handle: FileHandle, _ frame: [String: Any]) throws {
