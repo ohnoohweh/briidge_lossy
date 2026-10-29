@@ -119,7 +119,10 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         listenerSource = source
         source.setEventHandler { [weak self] in self?.listenerReadable() }
-        source.setCancelHandler { _ = close(fd) }
+        // Descriptor ownership remains synchronous.  A cancellation handler
+        // can run after a replacement catalog has rebound the same numeric
+        // descriptor, so closing from it could tear down the new listener.
+        source.setCancelHandler {}
         source.resume()
     }
 
@@ -127,9 +130,12 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         queue.sync {
             guard !stopped else { return }
             stopped = true
-            listenerSource?.cancel(); listenerSource = nil; listener = -1
+            let activeListener = listener
+            listener = -1
+            listenerSource?.cancel(); listenerSource = nil
             for source in connectionSources.values { source.cancel() }
             connectionSources.removeAll()
+            if activeListener >= 0 { _ = close(activeListener) }
             for fd in descriptors.values { _ = close(fd) }
             descriptors.removeAll(); udpPeers.removeAll(); udpChannels.removeAll()
         }
@@ -278,7 +284,9 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         connectionSources[channelID] = source
         source.setEventHandler { [weak self] in self?.connectionReadable(channelID: channelID, isUDP: isUDP) }
-        source.setCancelHandler { _ = close(fd) }
+        // See the listener source above: close while this owner still holds
+        // the descriptor rather than asynchronously after cancellation.
+        source.setCancelHandler {}
         source.resume()
     }
 
@@ -447,7 +455,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
             completedTraffic.txMessages += traffic.txMessages
         }
         connectionSources.removeValue(forKey: channelID)?.cancel()
-        descriptors.removeValue(forKey: channelID)
+        if let fd = descriptors.removeValue(forKey: channelID) { _ = close(fd) }
         udpPeers.removeValue(forKey: channelID)
         udpChannels = udpChannels.filter { $0.value != channelID }
         coreTCPChannels.remove(channelID)
