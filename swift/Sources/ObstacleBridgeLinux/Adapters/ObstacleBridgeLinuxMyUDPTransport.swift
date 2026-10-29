@@ -196,7 +196,10 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private func drainReadyDatagrams(_ handler: @escaping (Result<Data, Error>) -> Void) {
         while true {
             var buffer = [UInt8](repeating: 0, count: 1_452)
-            let received = recv(descriptor, &buffer, buffer.count, 0)
+            // Dispatch readiness can be stale after close or an adjacent
+            // drain.  The asynchronous owner must never enter a blocking
+            // datagram read from this callback.
+            let received = recv(descriptor, &buffer, buffer.count, Int32(MSG_DONTWAIT))
             if received <= 0 {
                 let code = errno
                 if code == EAGAIN || code == EWOULDBLOCK { return }

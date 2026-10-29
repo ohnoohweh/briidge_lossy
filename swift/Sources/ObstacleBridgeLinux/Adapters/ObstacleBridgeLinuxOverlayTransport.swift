@@ -231,6 +231,14 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     exchange: { payload in try datagram.exchange(payload) },
                     send: { payload in _ = try datagram.send(payload) },
                     receive: { try datagram.receive().payload },
+                    // The session retains this closure, which in turn retains
+                    // the datagram owner for the lifetime of the configured
+                    // session.  Keep live myUDP receives on its readiness
+                    // source rather than moving them back to a blocking worker.
+                    asyncReceive: { handler in
+                        do { try datagram.startAsyncReceive(handler) }
+                        catch { handler(.failure(error)) }
+                    },
                     probeLiveness: { try datagram.serviceTimers() },
                     protocolStats: { datagram.protocolStatsSnapshot() },
                     secureLinkBoundary: { direction in
