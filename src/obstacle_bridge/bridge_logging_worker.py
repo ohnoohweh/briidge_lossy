@@ -6,6 +6,7 @@ published. The separate lifetime socket lets the worker observe parent death.
 from __future__ import annotations
 
 import contextlib
+import asyncio
 import json
 import logging
 import os
@@ -45,18 +46,20 @@ def _is_logging_hello(frame: Any, generation: int, role: str) -> bool:
         return False
 
 
-def serve_private_receiver(data_fd: int, lifetime_fd: int, generation: int = 1) -> int:
+async def _serve_private_receiver(data_fd: int, lifetime_fd: int, generation: int = 1) -> int:
     """Serve records until the owner closes its inherited lifetime socket."""
     with socket.socket(fileno=data_fd) as data, socket.socket(fileno=lifetime_fd) as lifetime:
         if data.family != socket.AF_UNIX or data.type != socket.SOCK_DGRAM or lifetime.family != socket.AF_UNIX or lifetime.type != socket.SOCK_STREAM:
             raise ValueError("invalid private logging sockets")
-        readable, _, _ = select.select([data, lifetime], [], [], PRIVATE_STARTUP_TIMEOUT_S)
-        if lifetime in readable:
-            return 0
-        if data not in readable:
+        data.setblocking(False)
+        lifetime.setblocking(False)
+        loop = asyncio.get_running_loop()
+        try:
+            hello = await asyncio.wait_for(loop.sock_recv(data, PRIVATE_MAX_DATAGRAM + 21), PRIVATE_STARTUP_TIMEOUT_S)
+        except (asyncio.TimeoutError, OSError):
             return 0
         try:
-            frame, remainder = try_decode_frame(data.recv(PRIVATE_MAX_DATAGRAM + 21)) or (None, b"")
+            frame, remainder = try_decode_frame(hello) or (None, b"")
         except ValueError:
             return 0
         if remainder or not _is_logging_hello(frame, generation, "supervisor"):
@@ -66,14 +69,18 @@ def serve_private_receiver(data_fd: int, lifetime_fd: int, generation: int = 1) 
         receiver.reply_transform = lambda reply: encode_frame(WorkerIPCFrameKind.RESPONSE, generation, reply)
         data.send(encode_control(WorkerIPCFrameKind.READY, generation, {"v": LOG_WIRE_VERSION, "kind": "worker.ready", "role": "logging", "implementation": "python"}))
         while True:
-            readable, _, _ = select.select([data, lifetime], [], [])
-            if lifetime in readable:
+            data_task = asyncio.create_task(loop.sock_recv(data, PRIVATE_MAX_DATAGRAM + 21))
+            lifetime_task = asyncio.create_task(loop.sock_recv(lifetime, 1))
+            done, pending = await asyncio.wait({data_task, lifetime_task}, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            if lifetime_task in done:
                 # No commands are defined on this socket; EOF or unexpected
                 # input both revoke the worker's authority to keep running.
-                lifetime.recv(1)
                 return 0
-            if data in readable:
-                packet = data.recv(PRIVATE_MAX_DATAGRAM + 21)
+            if data_task in done:
+                packet = data_task.result()
                 try:
                     decoded = try_decode_frame(packet)
                     if decoded is None or decoded[1] or decoded[0].generation != generation or decoded[0].kind not in {WorkerIPCFrameKind.REQUEST, WorkerIPCFrameKind.DATA}:
@@ -81,6 +88,10 @@ def serve_private_receiver(data_fd: int, lifetime_fd: int, generation: int = 1) 
                     receiver.handle_datagram(decoded[0].payload)
                 except ValueError:
                     continue
+
+
+def serve_private_receiver(data_fd: int, lifetime_fd: int, generation: int = 1) -> int:
+    return asyncio.run(_serve_private_receiver(data_fd, lifetime_fd, generation))
 
 
 class _PrivateLogHandler(NonBlockingUdpLogHandler):
