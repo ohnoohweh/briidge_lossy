@@ -34,7 +34,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let statusProvider: () -> ObstacleBridgeLinuxRuntimeStatus
     private let peersProvider: () -> [(identity: String, snapshot: ObstacleBridgeLinuxPeerSnapshot)]
     private let connectionsProvider: () -> [String: Any]
-    private let peerTrafficProvider: () -> [String: UInt64]
+    private let peerTrafficRates = ObstacleBridgeAdminPeerTrafficRateSampler()
     private let runtimeHealthProvider: () -> (count: Int, previousClean: Bool?)
     private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
     private let resourceHealthProvider: () -> [String: Any]
@@ -65,7 +65,6 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
         self.connectionsProvider = connectionsProvider
-        self.peerTrafficProvider = { .init() }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
@@ -88,7 +87,6 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.statusProvider = { liveRuntime.status() }
         self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
         self.connectionsProvider = { liveRuntime.connectionsForAdmin() }
-        self.peerTrafficProvider = { liveRuntime.peerTrafficForAdmin() }
         self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
         self.runtimeHealthRecordsProvider = { liveRuntime.runtimeHealthRecentRecordsForAdmin() }
         self.resourceHealthProvider = { liveRuntime.resourceHealthForAdmin() }
@@ -113,7 +111,6 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             myudpListenerRuntime.peers().map { ($0.identity, $0.snapshot) }
         }
         self.connectionsProvider = { ["tcp": [], "udp": [], "tun": []] }
-        self.peerTrafficProvider = { .init() }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
@@ -824,18 +821,32 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
 
     private func peersPayload() -> [[String: Any]] {
         let status = statusProvider()
-        let traffic = peerTrafficProvider()
-        return ObstacleBridgeAdminSnapshotSupport.peersSnapshotForAPI(peersProvider().map { row in
+        let connections = connectionsProvider()
+        let traffic = ObstacleBridgeAdminSnapshotSupport.aggregateConnectionTraffic(connections)
+        let activeConnections = ObstacleBridgeAdminSnapshotSupport.activeConnectionCounts(connections)
+        let peers = peersProvider()
+        let identities = Set(peers.map(\.identity))
+        peerTrafficRates.removeUnknownPeers(identities)
+        return ObstacleBridgeAdminSnapshotSupport.peersSnapshotForAPI(peers.map { row in
             let endpointHost = status.activeHost ?? status.configuredCandidates.first
-            return ObstacleBridgeAdminSnapshotSupport.peerEnvelope(facts: peerFacts(
-                row.snapshot, identity: row.identity, endpointHost: endpointHost, status: status, traffic: traffic
+            var envelope = ObstacleBridgeAdminSnapshotSupport.peerEnvelope(facts: peerFacts(
+                row.snapshot, identity: row.identity, endpointHost: endpointHost, status: status,
+                traffic: traffic,
+                trafficRates: peerTrafficRates.sample(identity: row.identity, traffic: traffic),
+                activeConnections: activeConnections
             ))
+            // The Core policy merges only connection rows that belong to this
+            // client peer and strips retired byte-window internals later.
+            envelope["throttle"] = ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(
+                peerID: 1, connectionsSnapshot: connections
+            )
+            return envelope
         })
     }
 
     /// Convert Linux-owned runtime state into portable facts. Core owns every
     /// `/api/peers` key and nested object derived from those facts.
-    private func peerFacts(_ peer: ObstacleBridgeLinuxPeerSnapshot, identity: String, endpointHost: String?, status: ObstacleBridgeLinuxRuntimeStatus, traffic: [String: UInt64] = [:]) -> ObstacleBridgeAdminPeerFacts {
+    private func peerFacts(_ peer: ObstacleBridgeLinuxPeerSnapshot, identity: String, endpointHost: String?, status: ObstacleBridgeLinuxRuntimeStatus, traffic: [String: UInt64] = [:], trafficRates: [String: Double] = [:], activeConnections: [String: Int] = [:]) -> ObstacleBridgeAdminPeerFacts {
         .init(
             identity: identity, transport: peer.transport, lifecycleState: peer.lifecycleState,
             secureLinkState: peer.secureLinkState, connectionEpoch: peer.connectionEpoch,
@@ -852,9 +863,12 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             observedPublicIP: peer.observedPublicIP, observedPublicPort: peer.observedPublicPort,
             compression: peer.compression,
             secureLinkMode: status.secureLinkMode, endpointHost: endpointHost, endpointPort: status.port,
-            configuredCandidates: status.configuredCandidates, activeTCPChannels: status.activeTCPChannels,
-            activeUDPChannels: status.activeUDPChannels, failureReason: status.failureReason,
-            traffic: traffic, myudpStats: peer.myudpStats
+            configuredCandidates: status.configuredCandidates,
+            activeTCPChannels: activeConnections["tcp"] ?? status.activeTCPChannels,
+            activeUDPChannels: activeConnections["udp"] ?? status.activeUDPChannels,
+            activeTUNChannels: activeConnections["tun"] ?? 0,
+            failureReason: status.failureReason,
+            traffic: traffic, trafficRates: trafficRates, myudpStats: peer.myudpStats
         )
     }
 

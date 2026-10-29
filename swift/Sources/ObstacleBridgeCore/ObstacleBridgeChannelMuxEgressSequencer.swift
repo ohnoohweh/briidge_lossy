@@ -26,42 +26,68 @@ public struct ObstacleBridgeChannelMuxEgressSource: Hashable, Sendable {
 /// appears at most once in the ready ring, so continuously ready traffic
 /// cannot regain the turn before every other ready source has had one record.
 public final class ObstacleBridgeChannelMuxEgressSequencer<Element>: @unchecked Sendable {
+    // Linux service owners and Apple framework callbacks may enqueue on a
+    // different executor while a transport drain is in flight.  The owner
+    // normally serializes those calls, but that is not a memory-safety
+    // contract: native Set/Dictionary mutation must remain protected during
+    // handoff and shutdown as well.
+    private let lock = NSLock()
     private var queues: [ObstacleBridgeChannelMuxEgressSource: [Element]] = [:]
     private var readySources: [ObstacleBridgeChannelMuxEgressSource] = []
     private var readySet: Set<ObstacleBridgeChannelMuxEgressSource> = []
 
     public init() {}
 
-    public var isEmpty: Bool { readySources.isEmpty }
-    public var queuedCount: Int { queues.values.reduce(0) { $0 + $1.count } }
+    public var isEmpty: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return readySources.isEmpty
+    }
+
+    public var queuedCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return queues.values.reduce(0) { $0 + $1.count }
+    }
 
     public func enqueue(_ element: Element, from source: ObstacleBridgeChannelMuxEgressSource) {
+        lock.lock(); defer { lock.unlock() }
         queues[source, default: []].append(element)
         if readySet.insert(source).inserted { readySources.append(source) }
     }
 
     public func enqueue<S: Sequence>(_ elements: S, from source: ObstacleBridgeChannelMuxEgressSource) where S.Element == Element {
-        for element in elements { enqueue(element, from: source) }
+        lock.lock(); defer { lock.unlock() }
+        var appended = false
+        for element in elements {
+            queues[source, default: []].append(element)
+            appended = true
+        }
+        if appended, readySet.insert(source).inserted {
+            readySources.append(source)
+        }
     }
 
     /// Returns exactly one record and advances the persistent source cursor.
     public func dequeueNext() -> Element? {
-        guard !readySources.isEmpty else { return nil }
-        let source = readySources.removeFirst()
-        readySet.remove(source)
-        guard var queue = queues[source], !queue.isEmpty else { return dequeueNext() }
-        let element = queue.removeFirst()
-        if queue.isEmpty {
-            queues.removeValue(forKey: source)
-        } else {
-            queues[source] = queue
-            readySources.append(source)
-            readySet.insert(source)
+        lock.lock(); defer { lock.unlock() }
+        while !readySources.isEmpty {
+            let source = readySources.removeFirst()
+            readySet.remove(source)
+            guard var queue = queues[source], !queue.isEmpty else { continue }
+            let element = queue.removeFirst()
+            if queue.isEmpty {
+                queues.removeValue(forKey: source)
+            } else {
+                queues[source] = queue
+                readySources.append(source)
+                readySet.insert(source)
+            }
+            return element
         }
-        return element
+        return nil
     }
 
     public func removeAll() {
+        lock.lock(); defer { lock.unlock() }
         queues.removeAll(keepingCapacity: false)
         readySources.removeAll(keepingCapacity: false)
         readySet.removeAll(keepingCapacity: false)

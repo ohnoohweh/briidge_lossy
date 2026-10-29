@@ -31,6 +31,7 @@ ARC-CMP-001:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_stream_egress_round_robins_one_message_per_source
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxEgressSequencerTests.swift::allMuxMessageTypesSharePersistentSourceTurns
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxEgressSequencerTests.swift::concurrentEnqueueAndDrainProtectsNativeSetStorage
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayConnectionPolicyTests.swift::projectsAndUpdatesConnectionState
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxChannelIDAllocationTests.swift::splitsMaximumMyUDPRecordAtTheChannelMuxWireBoundary
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebSocketOverlayRuntimeTests.swift::clientLayerAdapterRequestsAndProjectsObservedPublicEndpoint
@@ -865,7 +866,8 @@ ARC-CMP-005:
   # enabled-layer visibility, ChannelMux-owned reconnect countdowns, and
   # the stable peer Transport detail layout, peer-local identity-cell row spans,
   # semantic status-pill colors, consistent peer open-channel labeling, negative-uptime launcher restart countdown,
-  # and peer-scoped wrapper status.
+  # peer-scoped wrapper status. Core also owns sampled peer traffic rates,
+  # active TCP/UDP/TUN counts, and sanitized throttle presentation.
   # Telemetry coverage keeps bounded worker-owned Runner producer/upload work off forwarding
   # paths, the loopback collector endpoint, and
   # client-spool defaults aligned with macOS/iOS, while Python exposes its

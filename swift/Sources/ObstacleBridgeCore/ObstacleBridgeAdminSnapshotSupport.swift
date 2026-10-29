@@ -33,8 +33,10 @@ public struct ObstacleBridgeAdminPeerFacts: Sendable {
     public let configuredCandidates: [String]
     public let activeTCPChannels: Int
     public let activeUDPChannels: Int
+    public let activeTUNChannels: Int
     public let failureReason: String?
     public let traffic: [String: UInt64]
+    public let trafficRates: [String: Double]
     public let myudpStats: [String: UInt64]
 
     public init(
@@ -50,8 +52,8 @@ public struct ObstacleBridgeAdminPeerFacts: Sendable {
         observedPublicIP: String = "", observedPublicPort: Int? = nil,
         compression: ObstacleBridgeMuxCompressionSnapshot, secureLinkMode: String,
         endpointHost: String?, endpointPort: Int, configuredCandidates: [String],
-        activeTCPChannels: Int, activeUDPChannels: Int, failureReason: String?,
-        traffic: [String: UInt64] = [:], myudpStats: [String: UInt64]
+        activeTCPChannels: Int, activeUDPChannels: Int, activeTUNChannels: Int = 0,
+        failureReason: String?, traffic: [String: UInt64] = [:], trafficRates: [String: Double] = [:], myudpStats: [String: UInt64]
     ) {
         self.identity = identity; self.transport = transport; self.lifecycleState = lifecycleState
         self.secureLinkState = secureLinkState; self.connectionEpoch = connectionEpoch
@@ -67,12 +69,64 @@ public struct ObstacleBridgeAdminPeerFacts: Sendable {
         self.compression = compression; self.secureLinkMode = secureLinkMode
         self.endpointHost = endpointHost; self.endpointPort = endpointPort
         self.configuredCandidates = configuredCandidates; self.activeTCPChannels = activeTCPChannels
-        self.activeUDPChannels = activeUDPChannels; self.failureReason = failureReason
-        self.traffic = traffic; self.myudpStats = myudpStats
+        self.activeUDPChannels = activeUDPChannels; self.activeTUNChannels = activeTUNChannels
+        self.failureReason = failureReason
+        self.traffic = traffic; self.trafficRates = trafficRates; self.myudpStats = myudpStats
+    }
+}
+
+/// Retains only the last redacted total for each peer so `/api/peers` can
+/// expose rates without each platform inventing its own sampling schema.
+public final class ObstacleBridgeAdminPeerTrafficRateSampler: @unchecked Sendable {
+    private let lock = NSLock()
+    private var previous: [String: (uptime: TimeInterval, rxBytes: UInt64, txBytes: UInt64)] = [:]
+
+    public init() {}
+
+    public func sample(
+        identity: String,
+        traffic: [String: UInt64],
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> [String: Double] {
+        lock.lock(); defer { lock.unlock() }
+        let rxBytes = max(traffic["rx_bytes"] ?? 0, previous[identity]?.rxBytes ?? 0)
+        let txBytes = max(traffic["tx_bytes"] ?? 0, previous[identity]?.txBytes ?? 0)
+        let prior = previous[identity]
+        let elapsed = max(0.000_001, uptime - (prior?.uptime ?? uptime))
+        let rxRate = prior.map { Double(rxBytes - $0.rxBytes) / elapsed } ?? 0.0
+        let txRate = prior.map { Double(txBytes - $0.txBytes) / elapsed } ?? 0.0
+        previous[identity] = (uptime, rxBytes, txBytes)
+        let projected: [String: Double] = [
+            "rx_bytes_per_sec": max(0, rxRate),
+            "tx_bytes_per_sec": max(0, txRate),
+        ]
+        return projected
+    }
+
+    public func removeUnknownPeers(_ identities: Set<String>) {
+        lock.lock(); defer { lock.unlock() }
+        previous = previous.filter { identities.contains($0.key) }
     }
 }
 
 public enum ObstacleBridgeAdminSnapshotSupport {
+    /// Counts the same active ChannelMux rows shown on the connections page.
+    /// This is deliberately Core-owned so a native host cannot report an
+    /// operational TUN row as a permanently-zero peer counter.
+    public static func activeConnectionCounts(_ connections: [String: Any]) -> [String: Int] {
+        var counts = ["tcp": 0, "udp": 0, "tun": 0]
+        for protocolName in ["tcp", "udp", "tun"] {
+            guard let rows = connections[protocolName] as? [[String: Any]] else { continue }
+            counts[protocolName] = rows.reduce(into: 0) { total, row in
+                guard row["chan_id"] != nil, !(row["chan_id"] is NSNull),
+                      String(describing: row["state"] ?? "connected").lowercased() != "listening"
+                else { return }
+                total += 1
+            }
+        }
+        return counts
+    }
+
     /// Sums the common connection-table counters for the enclosing peer row.
     /// Connection rows retain per-channel detail while the peer page presents
     /// the complete authenticated ChannelMux traffic for that peer.
@@ -279,6 +333,7 @@ public enum ObstacleBridgeAdminSnapshotSupport {
         ].merging(compressionLayer, uniquingKeysWith: { _, supplied in supplied })
         let normalizedTraffic: [String: Any] = [
             "rx_bytes": 0, "tx_bytes": 0, "rx_msgs": 0, "tx_msgs": 0,
+            "rx_bytes_per_sec": 0.0, "tx_bytes_per_sec": 0.0,
         ].merging(traffic, uniquingKeysWith: { _, supplied in supplied })
         let normalizedConnections: [String: Any] = [
             "udp": 0, "tcp": 0, "tun": 0,
@@ -375,8 +430,13 @@ public enum ObstacleBridgeAdminSnapshotSupport {
             transmitDelayEstimateMS: facts.myudpStats["transmit_delay_est_ms"] ?? 0,
             decodeErrors: facts.myudpStats["stream_decode_errors"] ?? 0,
             inflight: facts.myudpStats["inflight"] ?? 0,
-            traffic: facts.traffic.reduce(into: [String: Any]()) { $0[$1.key] = $1.value },
-            openConnections: ["tcp": facts.activeTCPChannels, "udp": facts.activeUDPChannels, "tun": 0],
+            traffic: facts.traffic.reduce(into: [String: Any]()) { $0[$1.key] = $1.value }
+                .merging(facts.trafficRates, uniquingKeysWith: { _, supplied in supplied }),
+            openConnections: [
+                "tcp": facts.activeTCPChannels,
+                "udp": facts.activeUDPChannels,
+                "tun": facts.activeTUNChannels,
+            ],
             connectionLayers: layers,
             secureLink: [
                 "state": facts.secureLinkState, "authenticated": facts.authenticated,
@@ -541,7 +601,7 @@ public enum ObstacleBridgeAdminSnapshotSupport {
         return lastIncomingAgeSeconds(from: transportRuntime)
     }
 
-    static func peerThrottleSnapshot(peerID: Int, connectionsSnapshot: [String: Any]) -> [String: Any] {
+    public static func peerThrottleSnapshot(peerID: Int, connectionsSnapshot: [String: Any]) -> [String: Any] {
         var summary: [String: Any]? = nil
         for key in ["udp", "tcp", "tun"] {
             guard let rows = connectionsSnapshot[key] as? [[String: Any]] else {

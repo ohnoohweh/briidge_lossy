@@ -33,4 +33,24 @@ struct ObstacleBridgeChannelMuxEgressSequencerTests {
         let close = ObstacleBridgeChannelMuxFrame(channelID: 4, protocolType: .tcp, counter: 2, messageType: .close, body: Data())
         #expect(ObstacleBridgeChannelMuxEgressSource(open) == ObstacleBridgeChannelMuxEgressSource(close))
     }
+
+    @Test func concurrentEnqueueAndDrainProtectsNativeSetStorage() async {
+        let scheduler = ObstacleBridgeChannelMuxEgressSequencer<Int>()
+        await withTaskGroup(of: Void.self) { group in
+            for sourceID in 0..<8 {
+                group.addTask {
+                    let source = ObstacleBridgeChannelMuxEgressSource(protocolType: 1, channelID: UInt16(sourceID + 1))
+                    for value in 0..<200 {
+                        scheduler.enqueue(sourceID * 1_000 + value, from: source)
+                    }
+                }
+            }
+        }
+        var delivered: Set<Int> = []
+        while let value = scheduler.dequeueNext() {
+            delivered.insert(value)
+        }
+        #expect(delivered.count == 1_600)
+        #expect(scheduler.isEmpty)
+    }
 }

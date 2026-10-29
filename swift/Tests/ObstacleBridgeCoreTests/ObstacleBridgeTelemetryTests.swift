@@ -48,8 +48,9 @@ struct ObstacleBridgeTelemetryTests {
             compression: compression.snapshot(), secureLinkMode: "psk",
             endpointHost: "198.51.100.7", endpointPort: 443,
             configuredCandidates: ["198.51.100.7"], activeTCPChannels: 3,
-            activeUDPChannels: 4, failureReason: nil,
+            activeUDPChannels: 4, activeTUNChannels: 1, failureReason: nil,
             traffic: ["rx_bytes": 321, "tx_bytes": 654, "rx_msgs": 3, "tx_msgs": 4],
+            trafficRates: ["rx_bytes_per_sec": 12.5, "tx_bytes_per_sec": 25.0],
             myudpStats: ["rtt_est_ms": 7, "inflight": 2]
         ))
         let secureLink = try! #require(peer["secure_link"] as? [String: Any])
@@ -63,6 +64,8 @@ struct ObstacleBridgeTelemetryTests {
         #expect(peer["observed_public_port"] as? Int == 44321)
         #expect((peer["traffic"] as? [String: Any])?["rx_bytes"] as? UInt64 == 321)
         #expect((peer["traffic"] as? [String: Any])?["tx_bytes"] as? UInt64 == 654)
+        #expect((peer["traffic"] as? [String: Any])?["rx_bytes_per_sec"] as? Double == 12.5)
+        #expect((peer["open_connections"] as? [String: Any])?["tun"] as? Int == 1)
         #expect(JSONSerialization.isValidJSONObject(peer))
     }
 
@@ -78,6 +81,33 @@ struct ObstacleBridgeTelemetryTests {
         #expect(totals["tx_bytes"] == 234)
         #expect(totals["rx_msgs"] == 5)
         #expect(totals["tx_msgs"] == 4)
+    }
+
+    @Test func peerTrafficRatesAndOpenCountsUseTheCoreConnectionContract() {
+        let sampler = ObstacleBridgeAdminPeerTrafficRateSampler()
+        let first = sampler.sample(identity: "peer", traffic: ["rx_bytes": 100, "tx_bytes": 200], uptime: 10)
+        let second = sampler.sample(identity: "peer", traffic: ["rx_bytes": 160, "tx_bytes": 260], uptime: 12)
+        #expect(first["rx_bytes_per_sec"] == 0)
+        #expect(second["rx_bytes_per_sec"] == 30)
+        #expect(second["tx_bytes_per_sec"] == 30)
+        let counts = ObstacleBridgeAdminSnapshotSupport.activeConnectionCounts([
+            "tcp": [["chan_id": 3, "state": "connected"]],
+            "udp": [["chan_id": NSNull(), "state": "listening"]],
+            "tun": [["chan_id": 9, "state": "connected"]],
+        ])
+        #expect(counts == ["tcp": 1, "udp": 0, "tun": 1])
+        let throttle = ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: [
+            "tun": [[
+                "chan_id": 9,
+                "state": "connected",
+                "throttle": [
+                    "applicable": true, "active": false, "disabled": true,
+                    "waiting_count": 0, "inflight": 3, "max_inflight": 200,
+                ],
+            ]],
+        ])
+        #expect(throttle["applicable"] as? Bool == true)
+        #expect(throttle["active"] as? Bool == false)
     }
 
     @Test func adminStatusEnvelopeOwnsSharedDashboardFields() {
