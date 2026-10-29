@@ -142,11 +142,11 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         // This scenario first needs to negotiate the authenticated owner.
         // Leave room for a contended CI executor to schedule that exchange;
         // the assertion below still verifies shutdown once the owner is gone.
-        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 1.5)
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 3)
         try server.start(); defer { server.stop() }
         let client = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token")
         #expect(try client.send(command: .snapshot, payload: [:])["backend"] as? String == "swift-test")
-        let deadline = Date().addingTimeInterval(3.0)
+        let deadline = Date().addingTimeInterval(4.5)
         while FileManager.default.fileExists(atPath: path), Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
         #expect(!FileManager.default.fileExists(atPath: path))
     }
