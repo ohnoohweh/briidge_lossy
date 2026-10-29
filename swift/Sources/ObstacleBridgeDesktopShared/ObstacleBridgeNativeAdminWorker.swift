@@ -84,6 +84,7 @@ public enum ObstacleBridgeNativeAdminWorker {
         guard controlFD >= 0, lifetimeFD >= 0, controlFD != lifetimeFD, generation > 0,
               isUnixStreamDescriptor(controlFD), isUnixStreamDescriptor(lifetimeFD)
         else { throw Failure.invalidBootstrap }
+        try makeNonBlocking(controlFD)
         let control = FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)
         let hello = try readControl(control, generation: generation, expectedKind: .hello, deadline: ProcessInfo.processInfo.systemUptime + 5)
         guard hello["kind"] as? String == "worker.hello", hello["role"] as? String == "supervisor",
@@ -167,11 +168,23 @@ public enum ObstacleBridgeNativeAdminWorker {
         var output = Data()
         while output.count < count {
             try waitReadable(handle.fileDescriptor, deadline: deadline)
-            let chunk = try handle.read(upToCount: count - output.count) ?? Data()
-            guard !chunk.isEmpty else { throw Failure.invalidBootstrap }
-            output.append(chunk)
+            var buffer = [UInt8](repeating: 0, count: count - output.count)
+            let received = read(handle.fileDescriptor, &buffer, buffer.count) // O_NONBLOCK readiness owner
+            if received > 0 {
+                output.append(buffer, count: received)
+                continue
+            }
+            if received < 0 && errno == EINTR { continue }
+            if received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) { continue }
+            throw Failure.invalidBootstrap
         }
         return output
+    }
+
+    private static func makeNonBlocking(_ descriptor: Int32) throws {
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0
+        else { throw Failure.invalidBootstrap }
     }
 
     private static func waitReadable(_ descriptor: Int32, deadline: TimeInterval) throws {

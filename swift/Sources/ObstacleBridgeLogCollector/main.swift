@@ -148,7 +148,7 @@ if privateMode {
 defer { close(socketFD) }
 defer { if lifetimeFD >= 0 { close(lifetimeFD) } }
 
-final class CollectorState {
+final class CollectorState: @unchecked Sendable {
     private let socketFD: Int32
     private let privateMode: Bool
     private let generation: UInt64
@@ -219,7 +219,7 @@ final class CollectorState {
 
 let flags = fcntl(socketFD, F_GETFL)
 guard flags >= 0, fcntl(socketFD, F_SETFL, flags | O_NONBLOCK) == 0 else { fail("unable to make collector socket nonblocking") }
-let collector = CollectorState(socketFD: socketFD, privateMode: privateMode, generation: privateGeneration)
+nonisolated(unsafe) let collector = CollectorState(socketFD: socketFD, privateMode: privateMode, generation: privateGeneration)
 let collectorQueue = DispatchQueue(label: "org.obstaclebridge.log-collector")
 // This is a dedicated worker process, so a poll loop can wait without
 // blocking its host. It owns private log ingestion explicitly and always uses
