@@ -3147,6 +3147,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         proto: "ChannelMux.Proto",
         chunk_mtype: "ChannelMux.MType",
         payload: bytes,
+        peer_id: Optional[int] = None,
     ) -> None:
         max_data_len = self._max_mux_data_len()
         chunk_payload_cap = max_data_len - ChannelMux.CTRL_CHUNK_HDR.size
@@ -3186,7 +3187,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 idx,
                 total_chunks,
             ) + part
-            self._send_mux(chan_id, proto, chunk_mtype, frame_data)
+            self._send_mux(chan_id, proto, chunk_mtype, frame_data, peer_id=peer_id)
 
     def _consume_control_chunk(
         self,
@@ -3275,25 +3276,57 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._mux_connection_seq = (self._mux_connection_seq + 1) & 0xFFFFFFFF
         self._send_remote_services_catalog_if_any(allow_empty=True)
 
+    def _remote_catalog_target_peer_ids(self) -> list[Optional[int]]:
+        """Resolve authenticated listener children without transport inference."""
+        getter = getattr(self.session, "get_overlay_peers_snapshot", None)
+        if callable(getter):
+            targets: list[Optional[int]] = []
+            with contextlib.suppress(Exception):
+                for row in list(getter() or []):
+                    if not isinstance(row, Mapping) or bool(row.get("listening")):
+                        continue
+                    secure_link = row.get("secure_link")
+                    if not isinstance(secure_link, Mapping) or not bool(secure_link.get("authenticated")):
+                        continue
+                    targets.append(int(row.get("peer_id", 0) or 0))
+            if targets:
+                return list(dict.fromkeys(targets))
+        # Client sessions and lightweight compatibility sessions retain the
+        # ordinary implicit single-peer route.
+        return [None]
+
     def _send_remote_services_catalog_if_any(self, *, allow_empty: bool = False) -> None:
         if not self._remote_services_requested and not allow_empty:
             return
         try:
             payload = self._encode_remote_services_set_v2(self._remote_services_requested)
-            if ChannelMux.MUX_HDR.size + len(payload) <= self._session_max_app_payload:
-                self._send_mux(0, ChannelMux.Proto.UDP, ChannelMux.MType.REMOTE_SERVICES_SET_V2, payload)
-                self.log.info("[MUX/CTRL] sent REMOTE_SERVICES_SET_V2 with %d service(s)", len(self._remote_services_requested))
-            else:
-                self._send_chunked_control_payload(
-                    chan_id=0,
-                    proto=ChannelMux.Proto.UDP,
-                    chunk_mtype=ChannelMux.MType.REMOTE_SERVICES_SET_V2_CHUNK,
-                    payload=payload,
-                )
-                self.log.info(
-                    "[MUX/CTRL] sent chunked REMOTE_SERVICES_SET_V2 with %d service(s)",
-                    len(self._remote_services_requested),
-                )
+            for peer_id in self._remote_catalog_target_peer_ids():
+                if ChannelMux.MUX_HDR.size + len(payload) <= self._session_max_app_payload:
+                    self._send_mux(
+                        0,
+                        ChannelMux.Proto.UDP,
+                        ChannelMux.MType.REMOTE_SERVICES_SET_V2,
+                        payload,
+                        peer_id=peer_id,
+                    )
+                    self.log.info(
+                        "[MUX/CTRL] sent REMOTE_SERVICES_SET_V2 with %d service(s) peer_id=%s",
+                        len(self._remote_services_requested),
+                        peer_id,
+                    )
+                else:
+                    self._send_chunked_control_payload(
+                        chan_id=0,
+                        proto=ChannelMux.Proto.UDP,
+                        chunk_mtype=ChannelMux.MType.REMOTE_SERVICES_SET_V2_CHUNK,
+                        payload=payload,
+                        peer_id=peer_id,
+                    )
+                    self.log.info(
+                        "[MUX/CTRL] sent chunked REMOTE_SERVICES_SET_V2 with %d service(s) peer_id=%s",
+                        len(self._remote_services_requested),
+                        peer_id,
+                    )
         except Exception as e:
             self.log.warning("[MUX/CTRL] failed sending REMOTE_SERVICES_SET_V2: %r", e)
 

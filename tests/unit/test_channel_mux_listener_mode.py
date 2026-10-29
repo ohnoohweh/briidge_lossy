@@ -42,6 +42,7 @@ class _FakeSession:
         self.app_cb = None
         self.peer_disconnect_cb = None
         self.sent = []
+        self.sent_peer_ids = []
         self.rotation_requests = []
         self.rotation_cycle_resets = 0
         self.connected = connected
@@ -87,8 +88,9 @@ class _FakeSession:
     def set_on_peer_disconnect(self, cb):
         self.peer_disconnect_cb = cb
 
-    def send_app(self, payload):
+    def send_app(self, payload, peer_id=None):
         self.sent.append(payload)
+        self.sent_peer_ids.append(peer_id)
         return len(payload)
 
     def request_connection_rotation(self, reason=""):
@@ -2110,6 +2112,12 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             mux.loop.close()
 
     def test_listener_mode_explicitly_publishes_remote_servers_per_authenticated_peer(self):
+        session = _FakeSession(connected=True)
+        session.get_overlay_peers_snapshot = lambda: [
+            {"peer_id": -1, "listening": True, "secure_link": {"authenticated": False}},
+            {"peer_id": 41, "connected": True, "secure_link": {"authenticated": True}},
+            {"peer_id": 43, "connected": True, "secure_link": {"authenticated": True}},
+        ]
         args = argparse.Namespace(
             peer=None,
             udp_peer=None,
@@ -2128,11 +2136,19 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             mux_tcp_bp_poll_interval_ms=50,
         )
 
-        mux = ChannelMux.from_args(_FakeSession(), asyncio.new_event_loop(), args)
+        mux = ChannelMux.from_args(session, asyncio.new_event_loop(), args)
         try:
             self.assertEqual(mux._local_services, {})
             self.assertEqual(len(mux._remote_services_requested), 1)
             self.assertEqual(mux._remote_services_requested[0].l_port, 3129)
+            mux._send_remote_services_catalog_if_any()
+            self.assertEqual(session.sent_peer_ids, [41, 43])
+            self.assertEqual(len(session.sent), 2)
+            for wire in session.sent:
+                parsed = mux._unpack_mux(wire)
+                self.assertIsNotNone(parsed)
+                assert parsed is not None
+                self.assertEqual(parsed[3], ChannelMux.MType.REMOTE_SERVICES_SET_V2)
         finally:
             mux.loop.close()
 
