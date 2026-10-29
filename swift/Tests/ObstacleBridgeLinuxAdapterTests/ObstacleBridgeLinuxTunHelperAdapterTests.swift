@@ -126,10 +126,10 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(receivedEvents == ["packet-ready"])
     }
 
-    @Test func swiftHelperServerStopsAfterAuthenticatedClientIdleWindow() throws {
+    @Test func swiftHelperServerStopsAfterUnauthenticatedClientIdleWindow() throws {
         let backend = SwiftHelperBackend()
         let path = "/tmp/obstaclebridge-swift-helper-idle-\(UUID().uuidString).sock"
-        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 0.5)
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 5, unauthenticatedClientIdleTimeout: 0.5)
         try server.start(); defer { server.stop() }
         let deadline = Date().addingTimeInterval(1.5)
         while FileManager.default.fileExists(atPath: path), Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
@@ -139,15 +139,13 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     @Test func swiftHelperServerStopsAfterAuthenticatedOwnerLoss() throws {
         let backend = SwiftHelperBackend()
         let path = "/tmp/obstaclebridge-swift-helper-owner-loss-\(UUID().uuidString).sock"
-        // Keep the server's unauthenticated idle fallback separate from this
-        // test's owner-loss deadline. A contended executor may delay the first
-        // exchange, but closing that authenticated exchange must stop the
-        // helper promptly rather than waiting for the idle fallback.
-        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 10)
+        // Keep the server's unauthenticated startup window separate from its
+        // short post-authentication owner-loss deadline.
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 0.5, unauthenticatedClientIdleTimeout: 10)
         try server.start(); defer { server.stop() }
         let client = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token", timeoutMilliseconds: 5_000)
         #expect(try client.send(command: .snapshot, payload: [:])["backend"] as? String == "swift-test")
-        let deadline = Date().addingTimeInterval(3)
+        let deadline = Date().addingTimeInterval(1.5)
         while FileManager.default.fileExists(atPath: path), Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
         #expect(!FileManager.default.fileExists(atPath: path))
     }
