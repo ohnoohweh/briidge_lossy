@@ -80,6 +80,34 @@ def _read_socket_frame(sock: socket.socket, generation: int = 1) -> dict[str, An
     return value
 
 
+async def _read_socket_frame_async(
+    sock: socket.socket, generation: int = 1
+) -> dict[str, Any]:
+    """Read one inherited control frame through the event-loop readiness owner."""
+    loop = asyncio.get_running_loop()
+
+    async def read_exact(size: int) -> bytes:
+        result = bytearray()
+        while len(result) < size:
+            chunk = await loop.sock_recv(sock, size - len(result))
+            if not chunk:
+                raise EOFError("Admin worker control closed")
+            result.extend(chunk)
+        return bytes(result)
+
+    header = await read_exact(20)
+    size = frame_size(header)
+    if size is None or size > MAX_FRAME:
+        raise ValueError("invalid Admin worker frame size")
+    decoded = try_decode_frame(header + await read_exact(size))
+    if decoded is None or decoded[1] or decoded[0].generation != generation:
+        raise ValueError("invalid Admin worker frame")
+    value = decode_control(decoded[0])
+    if value.get("v") != 1:
+        raise ValueError("invalid Admin worker frame")
+    return value
+
+
 def _serializable_args(args: Any) -> dict[str, Any]:
     result = {}
     for key, value in vars(args).items():
@@ -150,12 +178,14 @@ async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None, ge
             or lifetime.family != socket.AF_UNIX or lifetime.type != socket.SOCK_STREAM
             or control_fd == lifetime_fd):
         raise ValueError("invalid Admin worker sockets")
-    control.settimeout(5.0)
-    hello = _read_socket_frame(control, generation)
+    control.setblocking(False)
+    lifetime.setblocking(False)
+    loop = asyncio.get_running_loop()
+    hello = await asyncio.wait_for(_read_socket_frame_async(control, generation), 5.0)
     if hello != {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": generation}:
         raise ValueError("invalid Admin worker hello")
-    control.sendall(_encode({"v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": generation}, generation))
-    bootstrap = _read_socket_frame(control, generation)
+    await loop.sock_sendall(control, _encode({"v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": generation}, generation))
+    bootstrap = await asyncio.wait_for(_read_socket_frame_async(control, generation), 5.0)
     if bootstrap.get("kind") != "admin.start" or not isinstance(bootstrap.get("args"), dict):
         raise ValueError("invalid Admin worker startup")
     args = argparse.Namespace(**bootstrap["args"])
@@ -171,23 +201,22 @@ async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None, ge
     swap_admin_log_query_client(proxy)
     ui = AdminWebUI(args, proxy)
     stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-
-    def watch_owner():
+    async def watch_owner() -> None:
         with contextlib.suppress(OSError):
-            lifetime.recv(1)
-        with contextlib.suppress(RuntimeError):
-            loop.call_soon_threadsafe(stop.set)
+            await loop.sock_recv(lifetime, 1)
+        stop.set()
 
-    watcher = threading.Thread(target=watch_owner, name="admin-worker-lifetime", daemon=True)
-    watcher.start()
+    owner_task = asyncio.create_task(watch_owner(), name="admin-worker-lifetime")
     try:
         await ui.start()
         sockets = ui.server.sockets if ui.server else []
         port = sockets[0].getsockname()[1] if sockets else 0
-        control.sendall(_encode({"v": 1, "kind": "admin.ready", "implementation": "python", "port": port}, generation))
+        await loop.sock_sendall(control, _encode({"v": 1, "kind": "admin.ready", "implementation": "python", "port": port}, generation))
         await stop.wait()
     finally:
+        owner_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await owner_task
         await ui.stop()
         lifetime.close()
         control.close()
