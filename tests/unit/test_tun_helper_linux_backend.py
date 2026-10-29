@@ -59,6 +59,11 @@ class LinuxTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
 
         backend = LinuxTunHelperBackend(read_poll_interval_s=0.001)
         backend.set_packet_sink(_sink)
+        reader_callbacks: dict[int, object] = {}
+        loop = asyncio.get_running_loop()
+
+        def _add_reader(fd, callback, *args):
+            reader_callbacks[fd] = lambda: callback(*args)
 
         with mock.patch.object(helper_linux.sys, "platform", "linux"), \
              mock.patch.object(helper_linux, "fcntl", types.SimpleNamespace(ioctl=_fake_ioctl)), \
@@ -67,8 +72,11 @@ class LinuxTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
              mock.patch.object(helper_linux.os, "read", side_effect=_fake_read), \
              mock.patch.object(helper_linux.os, "write", side_effect=_fake_write), \
              mock.patch.object(helper_linux.os, "close", side_effect=_fake_close), \
+             mock.patch.object(loop, "add_reader", side_effect=_add_reader), \
+             mock.patch.object(loop, "remove_reader", return_value=True) as remove_reader, \
              mock.patch.object(helper_linux.socket, "socket", return_value=_FakeSocket()):
             opened = await backend.open_tun({"ifname": "obtun0", "mtu": 1400})
+            reader_callbacks[55]()
             await asyncio.sleep(0.02)
             wrote = await backend.write_packet(b"\x45native-helper-egress")
             snapshot = await backend.snapshot()
@@ -80,6 +88,8 @@ class LinuxTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wrote["len"], len(b"\x45native-helper-egress"))
         self.assertEqual(writes, [(55, b"\x45native-helper-egress")])
         self.assertEqual(packets_seen, [b"\x45native-helper-ingress"])
+        self.assertIn(55, reader_callbacks)
+        remove_reader.assert_called_once_with(55)
         self.assertEqual(snapshot["packets_from_runtime"], 1)
         self.assertEqual(snapshot["packets_to_runtime"], 1)
         self.assertIn(55, closes)

@@ -451,6 +451,8 @@ ARC-CMP-004:
   # Python and native macOS/Linux TUN helpers use generation-fenced OBIP
   # HELLO/READY, request/response/event/data frames; the Linux shared gate
   # runs the local authenticated-owner-loss helper qualification.
+  # The Python Linux native-helper TUN descriptor is likewise event-loop
+  # readiness-owned and drains bounded FIFO packet batches between awaits.
   # Native peer-worker evidence includes bounded private-descriptor admission;
   # Linux executable qualification remains a CI-host responsibility.
   # Desktop process evidence covers delivered component-specific worker slices.
