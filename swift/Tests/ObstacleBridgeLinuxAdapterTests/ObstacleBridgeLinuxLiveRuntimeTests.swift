@@ -415,7 +415,11 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         // The test process shares one network namespace, so both clients
         // cannot bind the same fixed listener port simultaneously. Assert the
         // portable per-child catalog-control boundary here instead.
-        #expect(waitUntil { clients.allSatisfy { $0.status().receivedFrames > 0 } })
+        // myUDP control records are retransmitted with bounded backoff.  Give
+        // both independently admitted children the complete delivery window,
+        // rather than assuming a shared-loopback scheduling turn reaches both
+        // clients inside one short poll interval.
+        #expect(waitUntil(timeout: 5) { clients.allSatisfy { $0.status().receivedFrames > 0 } })
     }
 
     @Test func myudpForegroundOwnerBoundsAuthenticatedPeerAdmission() throws {
@@ -851,8 +855,10 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
                 continue
             }
             if payload.withUnsafeBytes({ write(fd, $0.baseAddress, payload.count) }) == payload.count {
-                var received = [UInt8](repeating: 0, count: payload.count)
-                if read(fd, &received, received.count) == payload.count { echoed = Data(received); activeFD = fd }
+                if let received = receiveTCPWithDeadline(fd, byteCount: payload.count, timeoutMilliseconds: 400) {
+                    echoed = received
+                    activeFD = fd
+                }
             }
             if fd != activeFD { _ = close(fd) }
             if echoed != payload { usleep(100_000) }
@@ -972,4 +978,28 @@ private func waitUntil(timeout: TimeInterval = 2, _ predicate: () -> Bool) -> Bo
     }
 
     private enum SocketError: Error { case failure }
+}
+
+/// A retry loop must not turn its first missed reply into an unbounded
+/// descriptor read.  Poll readiness and use a nonblocking receive so every
+/// connection attempt receives its own bounded opportunity.
+private func receiveTCPWithDeadline(_ fd: Int32, byteCount: Int, timeoutMilliseconds: Int32) -> Data? {
+    var received = [UInt8](repeating: 0, count: byteCount)
+    var offset = 0
+    let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(max(0, timeoutMilliseconds)) * 1_000_000
+    while offset < byteCount {
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now < deadline else { return nil }
+        let remainingMilliseconds = Int32(max(1, (deadline - now + 999_999) / 1_000_000))
+        var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        guard poll(&descriptor, 1, remainingMilliseconds) > 0,
+              descriptor.revents & Int16(POLLIN) != 0
+        else { return nil }
+        let count = received.withUnsafeMutableBytes {
+            recv(fd, $0.baseAddress!.advanced(by: offset), byteCount - offset, Int32(MSG_DONTWAIT))
+        }
+        guard count > 0 else { return nil }
+        offset += count
+    }
+    return Data(received)
 }
