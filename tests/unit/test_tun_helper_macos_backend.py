@@ -53,6 +53,11 @@ class DarwinTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
 
         backend = DarwinTunHelperBackend(read_poll_interval_s=0.001)
         backend.set_packet_sink(_sink)
+        reader_callbacks: dict[int, object] = {}
+        loop = asyncio.get_running_loop()
+
+        def _add_reader(fd, callback, *args):
+            reader_callbacks[fd] = lambda: callback(*args)
 
         with mock.patch.object(helper_macos.sys, "platform", "darwin"), \
              mock.patch.object(helper_macos.bridge_tun_macos.sys, "platform", "darwin"), \
@@ -64,8 +69,11 @@ class DarwinTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
              mock.patch.object(helper_macos.os, "set_blocking"), \
              mock.patch.object(helper_macos.os, "read", side_effect=_fake_read), \
              mock.patch.object(helper_macos.os, "write", side_effect=_fake_write), \
-             mock.patch.object(helper_macos.os, "close", side_effect=_fake_close):
+             mock.patch.object(helper_macos.os, "close", side_effect=_fake_close), \
+             mock.patch.object(loop, "add_reader", side_effect=_add_reader), \
+             mock.patch.object(loop, "remove_reader", return_value=True) as remove_reader:
             opened = await backend.open_tun({"ifname": "obtun0", "mtu": 1400})
+            reader_callbacks[55]()
             await asyncio.sleep(0.02)
             wrote = await backend.write_packet(b"\x45darwin-helper-egress")
             snapshot = await backend.snapshot()
@@ -77,6 +85,8 @@ class DarwinTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wrote["len"], len(b"\x45darwin-helper-egress"))
         self.assertEqual(writes, [(55, socket.AF_INET.to_bytes(4, "big") + b"\x45darwin-helper-egress")])
         self.assertEqual(packets_seen, [incoming_packet])
+        self.assertIn(55, reader_callbacks)
+        remove_reader.assert_called_once_with(55)
         self.assertEqual(snapshot["packets_from_runtime"], 1)
         self.assertEqual(snapshot["packets_to_runtime"], 1)
         self.assertIn(55, closes)

@@ -21,6 +21,7 @@ in this document are completed.
 | Linux | local TCP/UDP service sockets | nonblocking listener plus `MSG_DONTWAIT` drain on the serial service owner | `ObstacleBridgeLinuxServiceSocketOwnerTests` |
 | Linux | inline TUN | `DispatchSourceRead` plus nonblocking TUN descriptor | `ObstacleBridgeLinuxTunDeviceTests` |
 | Linux | long-lived helper packet/event IPC | `DispatchSourceRead` plus incremental OBIP frame buffer | `packetDeviceReceivesHelperPacketAndEventThroughReadinessSource` |
+| macOS Python helper | `utun` packet device | asyncio descriptor readiness plus bounded nonblocking FIFO drain | `test_tun_helper_macos_backend.py` |
 | Linux and desktop | logging collector datagrams | `DispatchSourceRead` plus nonblocking bounded datagram drain | collector UDP record/query probe |
 | macOS | Network.framework overlay, proxy, Admin, and service sockets | Network.framework receive completion | Apple host/simulator adapter tests |
 | macOS | `utun` packet device | `DispatchSourceRead` plus `O_NONBLOCK` descriptor | macOS adapter tests |

@@ -455,7 +455,8 @@ ARC-CMP-004:
   # HELLO/READY, request/response/event/data frames; the Linux shared gate
   # runs the local authenticated-owner-loss helper qualification.
   # The Python Linux native-helper TUN descriptor is likewise event-loop
-  # readiness-owned and drains bounded FIFO packet batches between awaits.
+  # readiness-owned and drains bounded FIFO packet batches between awaits; the
+  # Python macOS utun helper uses the same asyncio readiness-owned FIFO model.
   # Native peer-worker evidence includes bounded private-descriptor admission;
   # Linux executable qualification remains a CI-host responsibility.
   # Desktop process evidence covers delivered component-specific worker slices.
