@@ -1569,6 +1569,7 @@ REQ-MYU-002:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_reported_missing_frame_retries_every_rtt_until_cumulative_ack
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_persistent_missing_retries_survive_flight_window_pressure
     - tests/unit/test_myudp_processing_repro.py::test_lost_multi_chunk_batch_recovers_with_per_chunk_retransmits
+    - tests/unit/test_myudp_processing_repro.py::test_unconfirmed_retransmit_sweep_yields_between_bounded_fifo_batches
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreRetransmissionPolicyPacesAndDeduplicatesCandidates
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCorePeerEngineUsesImmediateMissingAndTimedUnconfirmedRetransmission
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCorePeerEngineSplitsMaximumControlRetransmissionIntoBoundedDatagrams
@@ -1592,6 +1593,7 @@ REQ-MYU-004:
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_large_payload_is_chunked_and_backpressured_by_inflight_window
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_to_channelmux_edge_reassembles_large_payload
+    - tests/unit/test_myudp_processing_repro.py::test_unconfirmed_retransmit_sweep_yields_between_bounded_fifo_batches
     - tests/unit/test_myudp_stream_boundary.py::test_stream_deserializer_accepts_every_split_of_length_prefix_and_body
     - tests/unit/test_myudp_stream_boundary.py::test_stream_serializer_rejects_records_above_wire_limit
     - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_splits_final_record_to_use_remaining_batch_space

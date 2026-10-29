@@ -103,6 +103,12 @@ class BaseFrameV2:
 CONTROL_FIXED_BASE = 2 + 2 + 2 # last(2) + highest(2) + num_missed(2)
 # -------------------- Timers / RTT / Keepalive --------------------
 RETRANSMIT_UNCONFIRMED_MS = 25
+# Keep congested retransmission work interruptible: timer callbacks process a
+# bounded FIFO batch and reschedule the remainder with call_soon().
+RETRANSMIT_SWEEP_BATCH_SIZE = 32
+# DATA_BATCH decoding may contain many stream chunks.  Keep each event-loop
+# callback short while retaining datagram order through the per-peer FIFO.
+RECEIVE_DATA_CHUNK_BATCH_SIZE = 16
 RTT_EWMA_ALPHA = 0.125
 TRANSMIT_DELAY_EWMA_ALPHA = RTT_EWMA_ALPHA
 RETRANS_MULTIPLIER = 1.5
@@ -1191,6 +1197,11 @@ class PeerProtocol(asyncio.DatagramProtocol):
         self._runtime_attached = False
         self._ctl_task = None
         self._retx_task = None
+        self._unconfirmed_sweep_pending: Deque[int] = deque()
+        self._unconfirmed_sweep_scheduled = False
+        self._data_chunk_pending: Deque[StreamChunk] = deque()
+        self._data_chunk_scheduled = False
+        self._data_batch_prev_missing: Optional[Set[int]] = None
         self._move_grace_ns = int(3 * 1e9)  # 3 seconds
         self._rx_pending: Deque[Tuple[bytes, Any]] = deque()
         self._rx_pending_scheduled = False
@@ -1272,6 +1283,11 @@ class PeerProtocol(asyncio.DatagramProtocol):
         self._rx_pending_scheduled = False
         self._completed_pending.clear()
         self._completed_pending_scheduled = False
+        self._unconfirmed_sweep_pending.clear()
+        self._unconfirmed_sweep_scheduled = False
+        self._data_chunk_pending.clear()
+        self._data_chunk_scheduled = False
+        self._data_batch_prev_missing = None
 
     def error_received(self, exc):
         self.session.log.debug("[UDP/PROTO] error_received exc=%r", exc)
@@ -1537,16 +1553,89 @@ class PeerProtocol(asyncio.DatagramProtocol):
 
     def _retx_sweep_unconfirmed(self) -> None:
         if self.send_port is None:
+            self._unconfirmed_sweep_pending.clear()
             return
         s = self.session
         if not s.send_buf:
+            self._unconfirmed_sweep_pending.clear()
             return
+        if not self._unconfirmed_sweep_pending:
+            self._unconfirmed_sweep_pending.extend(s.send_buf.keys())
+        counters = [
+            self._unconfirmed_sweep_pending.popleft()
+            for _ in range(min(RETRANSMIT_SWEEP_BATCH_SIZE, len(self._unconfirmed_sweep_pending)))
+        ]
         self._retransmit_counters(
-            list(s.send_buf.keys()),
+            counters,
             reason="timeout_sweep",
             window_ns=self._retrans_window_ns(RETRANS_MULTIPLIER),
             use_first_tx_when_no_retx=True,
         )
+        if self._unconfirmed_sweep_pending:
+            self._schedule_unconfirmed_sweep()
+
+    def _schedule_unconfirmed_sweep(self) -> None:
+        if self._unconfirmed_sweep_scheduled:
+            return
+        self._unconfirmed_sweep_scheduled = True
+
+        def _run() -> None:
+            self._unconfirmed_sweep_scheduled = False
+            self._retx_sweep_unconfirmed()
+
+        try:
+            asyncio.get_running_loop().call_soon(_run)
+        except RuntimeError:
+            _run()
+
+    def _schedule_data_chunk_pending(self) -> None:
+        if self._data_chunk_scheduled:
+            return
+        self._data_chunk_scheduled = True
+
+        def _run() -> None:
+            self._data_chunk_scheduled = False
+            self._process_data_chunk_batch()
+
+        try:
+            asyncio.get_running_loop().call_soon(_run)
+        except RuntimeError:
+            _run()
+
+    def _process_data_chunk_batch(self) -> None:
+        if not self._data_chunk_pending:
+            return
+        started_ns = time.monotonic_ns()
+        completed: List[bytes] = []
+        try:
+            for _ in range(min(RECEIVE_DATA_CHUNK_BATCH_SIZE, len(self._data_chunk_pending))):
+                _, delivered = self.session.process_data(self._data_chunk_pending.popleft())
+                completed.extend(delivered)
+        except StreamDecodeError:
+            self._unidentified_frames += 1
+            self.session._stream_deserializer.reset()
+            self.session.stream_decode_errors += 1
+            self._data_chunk_pending.clear()
+            self._data_batch_prev_missing = None
+        else:
+            for payload in completed:
+                self._completed_pending.append(payload)
+            if self._data_chunk_pending:
+                self._schedule_data_chunk_pending()
+            else:
+                previous_missing = self._data_batch_prev_missing or set()
+                self._data_batch_prev_missing = None
+                if any(counter in previous_missing and counter not in self.session.missing for counter in previous_missing):
+                    self._emit_control(now_ns(), reason="gap_filled_ack")
+                self._evaluate_control_policy_inbound(bool(self.session.missing - previous_missing))
+                if self._completed_pending:
+                    self._schedule_completed_pending()
+                if self._rx_pending:
+                    self._schedule_rx_pending()
+        finally:
+            callback = getattr(self.session, "_runner_runtime_metric_cb", None)
+            if callable(callback):
+                callback("overlay_receive_data", max(0, time.monotonic_ns() - started_ns))
     # ---- asyncio protocol ----
     def _schedule_rx_pending(self) -> None:
         if self._rx_pending_scheduled:
@@ -1754,39 +1843,16 @@ class PeerProtocol(asyncio.DatagramProtocol):
             record_phase("overlay_receive_idle", idle_started_ns)
             return
         if kind == "data" and pkt:
-            data_started_ns = time.monotonic_ns()
             chunks: List[StreamChunk] = pkt
-            prev_missing = set(self.session.missing)
-            completed: List[bytes] = []
-            try:
-                for chunk in chunks:
-                    _, delivered = self.session.process_data(chunk)
-                    completed.extend(delivered)
-            except StreamDecodeError:
-                self._unidentified_frames += 1
-                if isinstance(self.session, MyUDP2Session):
-                    self.session._stream_deserializer.reset()
-                    self.session.stream_decode_errors += 1
-                if self._rx_pending:
-                    self._schedule_rx_pending()
-                record_phase("overlay_receive_data", data_started_ns)
-                return
             if isinstance(self.session, MyUDP2Session):
                 self.session.batch_datagrams_received += 1
                 self.session.batch_chunks_received += len(chunks)
                 self.session.batch_stream_bytes_received += sum(len(chunk.data) for chunk in chunks)
-            if any(chunk.counter in prev_missing and chunk.counter not in self.session.missing for chunk in chunks):
-                self._emit_control(now_ns(), reason="gap_filled_ack")
-            grew_missing = len(self.session.missing - prev_missing) > 0
-            self._evaluate_control_policy_inbound(grew_missing)
-            for c in completed:
-                self.session.log.debug(f"[PeerProtocol] On Complete  on session id=%x", id(self))
-                self._completed_pending.append(c)
-            if self._completed_pending:
-                self._schedule_completed_pending()
-            if self._rx_pending:
-                self._schedule_rx_pending()
-            record_phase("overlay_receive_data", data_started_ns)
+            # Preserve datagram order: do not schedule the next received
+            # datagram until this batch's chunk FIFO has completed.
+            self._data_batch_prev_missing = set(self.session.missing)
+            self._data_chunk_pending.extend(chunks)
+            self._schedule_data_chunk_pending()
             return
         if kind == "control" and pkt:
             control_started_ns = time.monotonic_ns()
