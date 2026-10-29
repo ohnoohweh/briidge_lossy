@@ -231,10 +231,6 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     exchange: { payload in try datagram.exchange(payload) },
                     send: { payload in _ = try datagram.send(payload) },
                     receive: { try datagram.receive().payload },
-                    asyncReceive: { handler in
-                        do { try datagram.startAsyncReceive(handler) }
-                        catch { handler(.failure(error)) }
-                    },
                     probeLiveness: { try datagram.serviceTimers() },
                     protocolStats: { datagram.protocolStatsSnapshot() },
                     secureLinkBoundary: { direction in
