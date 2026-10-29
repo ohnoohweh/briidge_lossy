@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Mapping
 
 from ._bridge_import import export_bridge_globals
@@ -764,6 +765,17 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._tcp_bp_latency_ms: int = 300
         self._tcp_bp_poll_interval_s: float = 0.05
         self._tcp_ingress_throttle_poll_s: float = 0.05
+
+        # Stream overlays hand all mux records to a single lower-layer send
+        # queue. Keep one bounded queue per peer/protocol/channel and let a
+        # single dispatcher hand one record to each ready source per turn.
+        # This prevents the first readable TCP socket from filling that lower
+        # queue before UDP, TUN, or another TCP channel runs.
+        self._egress_source_queue_limit: int = 8
+        self._egress_data_queues: dict[tuple[int, int, int], deque[tuple[int, "ChannelMux.Proto", "ChannelMux.MType", bytes, Optional[int]]]] = {}
+        self._egress_ready_sources: deque[tuple[int, int, int]] = deque()
+        self._egress_ready_source_set: set[tuple[int, int, int]] = set()
+        self._egress_dispatch_task: Optional[asyncio.Task] = None
 
         # Listener peers may legally reuse channel ids, so counters are scoped
         # to the peer session that receives the frame.
@@ -2348,6 +2360,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
     async def stop(self, reason: str = "") -> None:
         self.log.info("[MUX] stopping reason=%s", str(reason or "unspecified"))
+        self._clear_egress_data_queues()
         for t in (self._ensure_task, self._sweeper_task, self._transport_delay_rotation_task):
             if t:
                 try: t.cancel()
@@ -2397,6 +2410,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if not effective_connected:
             self._schedule_connection_rotation()
             self._accepting_enabled = False
+            self._clear_egress_data_queues()
             self._log_overlay_accepting_state(
                 reason="on_overlay_state_disconnected",
                 connected_arg=connected,
@@ -3496,7 +3510,134 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             packet_bytes=len(payload),
         )
 
+    def _fair_egress_enabled(self) -> bool:
+        """Whether this lower transport needs ChannelMux-owned fairness."""
+        return str(self._overlay_transport or "").lower() in {"tcp", "ws", "quic"}
+
+    def _egress_source_key(
+        self,
+        chan_id: int,
+        proto: "ChannelMux.Proto",
+        peer_id: Optional[int],
+    ) -> tuple[int, int, int]:
+        owner_peer_id = peer_id if peer_id is not None else self._chan_owner_peer_id.get(int(chan_id), 0)
+        return (int(owner_peer_id or 0), int(proto), int(chan_id))
+
+    def _egress_source_depth(
+        self,
+        chan_id: int,
+        proto: "ChannelMux.Proto",
+        peer_id: Optional[int] = None,
+    ) -> int:
+        queue = self._egress_data_queues.get(self._egress_source_key(chan_id, proto, peer_id))
+        return len(queue) if queue is not None else 0
+
+    def _clear_egress_data_queues(self) -> None:
+        self._egress_data_queues.clear()
+        self._egress_ready_sources.clear()
+        self._egress_ready_source_set.clear()
+        task = self._egress_dispatch_task
+        self._egress_dispatch_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _enqueue_fair_egress(
+        self,
+        chan_id: int,
+        proto: "ChannelMux.Proto",
+        mtype: "ChannelMux.MType",
+        data: bytes,
+        *,
+        peer_id: Optional[int],
+        allow_overflow: bool = False,
+    ) -> bool:
+        source = self._egress_source_key(chan_id, proto, peer_id)
+        queue = self._egress_data_queues.setdefault(source, deque())
+        if len(queue) >= self._egress_source_queue_limit and not allow_overflow:
+            self.log.debug(
+                "[MUX/EGRESS] drop queued data source=%s depth=%s limit=%s",
+                source,
+                len(queue),
+                self._egress_source_queue_limit,
+            )
+            return False
+        queue.append((int(chan_id), proto, mtype, bytes(data or b""), peer_id))
+        if source not in self._egress_ready_source_set:
+            self._egress_ready_sources.append(source)
+            self._egress_ready_source_set.add(source)
+        if self._egress_dispatch_task is None or self._egress_dispatch_task.done():
+            self._egress_dispatch_task = self.loop.create_task(self._drain_fair_egress())
+        return True
+
+    async def _drain_fair_egress(self) -> None:
+        """Hand one mux record per ready source to the lower layer."""
+        try:
+            while self._egress_ready_sources:
+                if not self.session.is_connected():
+                    self._clear_egress_data_queues()
+                    return
+                snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
+                if self._session_overlay_backpressure_active(snapshot):
+                    await asyncio.sleep(self._tcp_ingress_throttle_poll_s)
+                    continue
+                source = self._egress_ready_sources.popleft()
+                self._egress_ready_source_set.discard(source)
+                queue = self._egress_data_queues.get(source)
+                if not queue:
+                    self._egress_data_queues.pop(source, None)
+                    continue
+                chan_id, proto, mtype, data, peer_id = queue.popleft()
+                if queue:
+                    self._egress_ready_sources.append(source)
+                    self._egress_ready_source_set.add(source)
+                else:
+                    self._egress_data_queues.pop(source, None)
+                self._send_mux_now(chan_id, proto, mtype, data, peer_id=peer_id)
+                # Let lower transport writers and other local ingress tasks run
+                # before selecting the next source. This is a cooperative yield,
+                # not a blocking wait.
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._egress_dispatch_task is asyncio.current_task():
+                self._egress_dispatch_task = None
+
     def _send_mux(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType, data: bytes, *, peer_id: Optional[int] = None) -> None:
+        if self._fair_egress_enabled():
+            # Expand before admission so every fragment retains its place in
+            # this source's sequence. Otherwise a later CLOSE could overtake
+            # fragments emitted only when the oversized DATA reaches the head.
+            payload = bytes(data or b"")
+            if (
+                mtype == ChannelMux.MType.DATA
+                and proto == ChannelMux.Proto.UDP
+                and ChannelMux.MUX_HDR.size + len(payload) > self._session_max_app_payload
+            ):
+                self._send_udp_mux_fragments(chan_id, payload)
+                return
+            if (
+                mtype == ChannelMux.MType.DATA
+                and proto == ChannelMux.Proto.TUN
+                and ChannelMux.MUX_HDR.size + len(payload) > self._session_max_app_payload
+            ):
+                self._send_tun_mux_fragments(chan_id, payload, peer_id=peer_id)
+                return
+            self._enqueue_fair_egress(
+                chan_id,
+                proto,
+                mtype,
+                data,
+                peer_id=peer_id,
+                # A local TCP pump never admits DATA once its bounded source
+                # queue is full. Lifecycle and catalog records must still be
+                # retained behind that data to preserve wire ordering.
+                allow_overflow=mtype not in (ChannelMux.MType.DATA, ChannelMux.MType.DATA_FRAG),
+            )
+            return
+        self._send_mux_now(chan_id, proto, mtype, data, peer_id=peer_id)
+
+    def _send_mux_now(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType, data: bytes, *, peer_id: Optional[int] = None) -> None:
         try:
             self._record_sync_diag("ChannelMux._send_mux", phase="started")
             if not self.session.is_connected():
@@ -4722,12 +4863,33 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             or float(snapshot.get("rtt_est_ms", 0.0) or 0.0) >= self._transport_delay_threshold_ms
         )
 
-    async def _wait_for_local_tcp_ingress(self, chan: int) -> None:
+    async def _wait_for_local_tcp_ingress(
+        self,
+        chan: int,
+        *,
+        wire_chan: Optional[int] = None,
+        peer_id: Optional[int] = None,
+    ) -> None:
         while self._overlay_connected and self._accepting_enabled:
             snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
-            if float(snapshot.get("rtt_est_ms", 0.0) or 0.0) < self._transport_delay_threshold_ms:
+            source_chan = int(wire_chan if wire_chan is not None else chan)
+            source_full = (
+                self._fair_egress_enabled()
+                and self._egress_source_depth(source_chan, ChannelMux.Proto.TCP, peer_id)
+                >= self._egress_source_queue_limit
+            )
+            if (
+                not self._session_overlay_backpressure_active(snapshot)
+                and not source_full
+            ):
                 return
-            self.log.debug("[TCP/INGRESS] paused chan=%s rtt_est_ms=%.1f", chan, float(snapshot["rtt_est_ms"]))
+            self.log.debug(
+                "[TCP/INGRESS] paused chan=%s rtt_est_ms=%.1f source_queue=%s/%s",
+                chan,
+                float(snapshot["rtt_est_ms"]),
+                self._egress_source_depth(source_chan, ChannelMux.Proto.TCP, peer_id),
+                self._egress_source_queue_limit,
+            )
             await asyncio.sleep(self._tcp_ingress_throttle_poll_s)
 
     def _tcp_overlay_read_size(self) -> int:
@@ -6994,7 +7156,11 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 async def _rx():
                     try:
                         while True:
-                            await self._wait_for_local_tcp_ingress(local_chan)
+                            await self._wait_for_local_tcp_ingress(
+                                local_chan,
+                                wire_chan=wire_chan,
+                                peer_id=peer_key,
+                            )
                             buf = await reader.read(self._tcp_overlay_read_size())
                             if not buf:
                                 break

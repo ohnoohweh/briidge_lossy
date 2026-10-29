@@ -220,6 +220,42 @@ def test_channelmux_tcp_inbound_channels_are_scoped_to_authenticated_peer():
     asyncio.run(_run())
 
 
+def test_channelmux_stream_egress_round_robins_one_message_per_source():
+    async def _run():
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_transport = "tcp"
+        try:
+            mux._send_mux(7, ChannelMux.Proto.TCP, ChannelMux.MType.OPEN, b"tcp-7-open")
+            mux._send_mux(7, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, b"tcp-7-data")
+            mux._send_mux(7, ChannelMux.Proto.TCP, ChannelMux.MType.CLOSE, b"")
+            mux._send_mux(9, ChannelMux.Proto.UDP, ChannelMux.MType.DATA, b"udp-9-a")
+            mux._send_mux(9, ChannelMux.Proto.UDP, ChannelMux.MType.DATA, b"udp-9-b")
+            mux._send_mux(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, b"tun-11-a")
+            mux._send_mux(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, b"tun-11-b")
+
+            for _ in range(20):
+                if len(session.sent) == 7:
+                    break
+                await asyncio.sleep(0)
+
+            sent = [mux._unpack_mux(frame) for frame in session.sent]
+            assert [frame[0] for frame in sent] == [7, 9, 11, 7, 9, 11, 7]
+            assert [frame[3] for frame in sent] == [
+                ChannelMux.MType.OPEN,
+                ChannelMux.MType.DATA,
+                ChannelMux.MType.DATA,
+                ChannelMux.MType.DATA,
+                ChannelMux.MType.DATA,
+                ChannelMux.MType.DATA,
+                ChannelMux.MType.CLOSE,
+            ]
+        finally:
+            mux._clear_egress_data_queues()
+
+    asyncio.run(_run())
+
+
 async def _start_tcp_capture_server() -> tuple[asyncio.AbstractServer, int, list[bytes]]:
     captured: list[bytes] = []
 

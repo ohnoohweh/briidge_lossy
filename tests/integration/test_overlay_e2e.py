@@ -9003,7 +9003,9 @@ def test_overlay_e2e_tcp_overlay_shares_throttled_downstream_bandwidth(tmp_path:
     """
     lane_count = 4
     response_bytes = 100_000
-    downstream_bytes_per_second = 10_000
+    downstream_bytes_per_second = int(os.environ.get("OBSTACLEBRIDGE_E2E_THROTTLE_BYTES_PER_SECOND", "10000"))
+    if downstream_bytes_per_second <= 0:
+        raise RuntimeError("OBSTACLEBRIDGE_E2E_THROTTLE_BYTES_PER_SECOND must be positive")
     base_target_port = 45_000
     base_service_port = 45_100
     overlay_server_port = 45_200
@@ -9140,6 +9142,11 @@ def test_overlay_e2e_tcp_overlay_shares_throttled_downstream_bandwidth(tmp_path:
         log.info(
             'throttled TCP overlay fairness: completions=%s earliest=%.2fs latest=%.2fs '
             'one_lane=%.2fs shared=%.2fs', completion_times, earliest, latest, one_lane_seconds, shared_seconds,
+        )
+        print(
+            'throttled TCP overlay fairness: '
+            f'completions={[round(value, 2) for value in completion_times]!r} '
+            f'one_lane={one_lane_seconds:.2f}s shared={shared_seconds:.2f}s'
         )
         # A FIFO/priority failure finishes one lane at roughly 10 seconds and
         # leaves the other three queued.  A mux that shares this single capped
