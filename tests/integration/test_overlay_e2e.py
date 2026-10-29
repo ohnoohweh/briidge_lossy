@@ -8553,7 +8553,20 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
                     remote_ready = client.recv(len(payload)) == response_payload(payload)
             except OSError:
                 time.sleep(0.1)
-        assert remote_ready, 'Swift did not install the full Python-runtime remote service catalog'
+        if not remote_ready:
+            connection_snapshot: object = {}
+            with contextlib.suppress(Exception):
+                _code, connection_snapshot = fetch_json(
+                    f'http://127.0.0.1:{swift_admin}/api/connections', timeout=1.0,
+                )
+            server_tail = server_proc.log_path.read_text(errors='replace')[-6000:] if server_proc.log_path.exists() else ''
+            swift_tail = swift_proc.log_path.read_text(errors='replace')[-6000:] if swift_proc.log_path.exists() else ''
+            raise AssertionError(
+                'Swift remote catalog round trip failed\n'
+                f'connections={connection_snapshot!r}\n'
+                f'--- python server tail ---\n{server_tail}\n'
+                f'--- Swift client tail ---\n{swift_tail}'
+            )
 
         # An explicit empty RS3 catalog withdraws the previously published
         # listener without waiting for a reconnect. The Python Admin action is
