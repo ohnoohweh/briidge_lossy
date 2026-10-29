@@ -2056,7 +2056,8 @@ REQ-IO-001:
   # explicit O_NONBLOCK readiness owners and documented bounded exceptions are
   # admitted. Python Admin-child bootstrap/owner-lifetime reads are asyncio-owned;
   # the child-log relay and restart placeholder own readiness-gated
-  # nonblocking receives on dedicated no-event-loop threads.
+  # nonblocking receives on dedicated no-event-loop threads; the shared Apple
+  # UDP DispatchSource drain uses MSG_DONTWAIT against stale readiness.
   unit_tests:
     - tests/unit/test_tun_helper_linux_backend.py::test_open_write_read_and_stop_round_trip
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input

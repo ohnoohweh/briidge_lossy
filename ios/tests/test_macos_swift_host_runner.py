@@ -266,6 +266,8 @@ def test_macos_runtime_metrics_keep_atomic_leaf_boundaries() -> None:
     assert ".secureLinkWorker" not in adapter
     assert "drainOnePendingSecureLinkPayload" in adapter
     assert ".appleTransportOwnerQueue" not in owner
+    assert "DispatchSource.makeReadSource" in owner
+    assert "recvfrom(socketFD, &buffer, buffer.count, Int32(MSG_DONTWAIT)" in owner
     assert ".appleTransportParseDispatch" in owner
     assert ".appleTransportEgress" in owner
     assert ".appleTransportPayloadRoute" not in owner
@@ -281,9 +283,10 @@ def test_macos_runtime_metrics_keep_atomic_leaf_boundaries() -> None:
     assert ".appleTransportTunSystemEnqueue" in (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     assert ".appleTransportTunSystemWrite" in packet_flow
     provider_source = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
-    assert "ObstacleBridgePacketFlowBridge.activate(provider: provider, tunnelAddress: tunnelAddress, mtu: settings.mtu)" in provider_source
+    assert "ObstacleBridgePacketFlowBridge.activate(" in provider_source
+    assert "pcapEnabled: captureEnabled" in provider_source
     assert "ObstacleBridgePacketFlowBridge.deactivate()" in provider_source
-    assert "maxOutgoingQueuedPackets = 2048" in packet_flow
+    assert "maxOutgoingQueuedPackets = ObstacleBridgeRuntimeConfig.packetFlowFIFOQueueCapacity" in packet_flow
     assert "outgoingDrainGeneration" in packet_flow
     assert ".appleTransportTcpPayload" not in owner
     assert ".appleTransportUdpPayload" in owner

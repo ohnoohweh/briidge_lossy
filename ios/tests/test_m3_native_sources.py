@@ -378,6 +378,8 @@ def test_ios_runtime_metrics_include_atomic_leaf_boundaries() -> None:
     assert "drainOnePendingSecureLinkPayload" in adapter
     assert "scheduleOutboundMuxFrameDrain" in owner
     assert "scheduleInboundOverlayPayloadDrain" in owner
+    assert "DispatchSource.makeReadSource" in owner
+    assert "recvfrom(socketFD, &buffer, buffer.count, Int32(MSG_DONTWAIT)" in owner
     assert ".appleTransportOwnerQueue" not in owner
     assert ".appleTransportParseDispatch" in owner
     assert ".appleTransportEgress" in owner
