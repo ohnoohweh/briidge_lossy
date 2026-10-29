@@ -21,7 +21,8 @@ def test_shared_native_admin_child_source_uses_inherited_control_and_lifetime_de
     assert '"admin.control"' in child
     assert '"get_onboarding_config_snapshot"' in child
     assert '"admin.ready"' in child
-    assert "lifetime.availableData" in child
+    assert "DispatchSource.makeReadSource(fileDescriptor: lifetimeFD" in child
+    assert "O_NONBLOCK" in child
     assert "ObstacleBridgeWebAdminServer" in macos_service
     assert '"/api/status"' in macos_service
     assert "staticAssetResponse" in macos_service

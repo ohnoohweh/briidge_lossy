@@ -102,6 +102,7 @@ public enum ObstacleBridgeNativeAdminWorker {
         guard initialStatus is [String: Any]
         else { throw Failure.invalidBootstrap }
         let service = try serviceFactory?(bootstrap["args"] as! [String: Any], parentRPC)
+        defer { service?.stop() }
         logProducer?.emit(name: "admin.native", level: "INFO", levelNumber: 20, message: "native_admin_ready")
         try write(control, kind: .ready, generation: generation, value: [
             "v": 1, "kind": "admin.ready", "implementation": "native", "port": service?.port ?? 0, "generation": generation,
@@ -115,25 +116,26 @@ public enum ObstacleBridgeNativeAdminWorker {
         guard flags >= 0, fcntl(lifetimeFD, F_SETFL, flags | O_NONBLOCK) == 0
         else { throw Failure.invalidBootstrap }
         let lifetimeQueue = DispatchQueue(label: "org.obstaclebridge.native-admin-lifetime")
+        let lifetimeEnded = DispatchSemaphore(value: 0)
         let lifetimeSource = DispatchSource.makeReadSource(fileDescriptor: lifetimeFD, queue: lifetimeQueue)
         lifetimeSource.setEventHandler {
             var byte: UInt8 = 0
             while true {
                 let received = read(lifetimeFD, &byte, 1) // O_NONBLOCK readiness owner
                 if received == 0 {
-                    service?.stop()
-                    exit(0)
+                    lifetimeEnded.signal()
+                    return
                 }
                 if received > 0 { continue }
                 if errno == EINTR { continue }
                 if errno == EAGAIN || errno == EWOULDBLOCK { return }
-                service?.stop()
-                exit(0)
+                lifetimeEnded.signal()
+                return
             }
         }
         lifetimeSource.setCancelHandler { _ = close(lifetimeFD) }
         lifetimeSource.resume()
-        withExtendedLifetime(lifetimeSource) { dispatchMain() }
+        withExtendedLifetime(lifetimeSource) { lifetimeEnded.wait() }
     }
 
     private static func strictPositiveInt(_ value: Any?) -> Int? {
