@@ -2063,6 +2063,8 @@ REQ-IO-001:
   # HTTP CONNECT leaves only connect/Windows SSPI inside its explicitly
   # isolated compatibility thread; connected header framing and synchronous
   # Admin parent-worker control use deadline-bounded nonblocking descriptors.
+  # The shared native Admin lifetime owner is a nonblocking Dispatch read
+  # source, covered by its owner-loss and fragmented-frame Linux tests.
   unit_tests:
     - tests/unit/test_admin_worker.py::test_admin_worker_timeout_fences_late_reply
     - tests/unit/test_ws_payload_mode.py::test_open_ws_proxy_socket_blocking_establishes_connect_tunnel

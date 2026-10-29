@@ -1,4 +1,5 @@
 import CoreFoundation
+import Dispatch
 import Foundation
 #if os(macOS) || os(iOS)
 import Darwin
@@ -84,7 +85,6 @@ public enum ObstacleBridgeNativeAdminWorker {
               isUnixStreamDescriptor(controlFD), isUnixStreamDescriptor(lifetimeFD)
         else { throw Failure.invalidBootstrap }
         let control = FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)
-        let lifetime = FileHandle(fileDescriptor: lifetimeFD, closeOnDealloc: true)
         let hello = try readControl(control, generation: generation, expectedKind: .hello, deadline: ProcessInfo.processInfo.systemUptime + 5)
         guard hello["kind"] as? String == "worker.hello", hello["role"] as? String == "supervisor",
               hello["capabilities"] as? [String] == ["admin.control"], strictPositiveInt(hello["generation"]) == generation
@@ -101,14 +101,38 @@ public enum ObstacleBridgeNativeAdminWorker {
         guard initialStatus is [String: Any]
         else { throw Failure.invalidBootstrap }
         let service = try serviceFactory?(bootstrap["args"] as! [String: Any], parentRPC)
-        defer { service?.stop() }
         logProducer?.emit(name: "admin.native", level: "INFO", levelNumber: 20, message: "native_admin_ready")
         try write(control, kind: .ready, generation: generation, value: [
             "v": 1, "kind": "admin.ready", "implementation": "native", "port": service?.port ?? 0, "generation": generation,
         ])
-        // A zero-byte lifetime read is the sole owner-loss signal. Closing it
-        // releases both inherited capabilities without an ambient endpoint.
-        while !lifetime.availableData.isEmpty { }
+        // A zero-byte lifetime read is the sole owner-loss signal. Keep it
+        // callback-owned: FileHandle.availableData would block this process
+        // and can race descriptor teardown on Linux. The descriptor is made
+        // nonblocking before the source starts, so a stale readiness event
+        // cannot turn this handler into a blocking read.
+        let flags = fcntl(lifetimeFD, F_GETFL)
+        guard flags >= 0, fcntl(lifetimeFD, F_SETFL, flags | O_NONBLOCK) == 0
+        else { throw Failure.invalidBootstrap }
+        let lifetimeQueue = DispatchQueue(label: "org.obstaclebridge.native-admin-lifetime")
+        let lifetimeSource = DispatchSource.makeReadSource(fileDescriptor: lifetimeFD, queue: lifetimeQueue)
+        lifetimeSource.setEventHandler {
+            var byte: UInt8 = 0
+            while true {
+                let received = read(lifetimeFD, &byte, 1) // O_NONBLOCK readiness owner
+                if received == 0 {
+                    service?.stop()
+                    exit(0)
+                }
+                if received > 0 { continue }
+                if errno == EINTR { continue }
+                if errno == EAGAIN || errno == EWOULDBLOCK { return }
+                service?.stop()
+                exit(0)
+            }
+        }
+        lifetimeSource.setCancelHandler { _ = close(lifetimeFD) }
+        lifetimeSource.resume()
+        withExtendedLifetime(lifetimeSource) { dispatchMain() }
     }
 
     private static func strictPositiveInt(_ value: Any?) -> Int? {
