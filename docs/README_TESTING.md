@@ -110,7 +110,9 @@ Representative anchors for those areas:
   packet-flow lifecycle fence that rejects stale deferred drains.
 - current overlay failover coverage pins ordered-peer rotation, completed candidate cycles, reset-on-connected behavior, and fresh-socket rotation for Python `myudp` clients and the native Swift UDP owner through [tests/unit/test_stream_peer_rotation.py](../tests/unit/test_stream_peer_rotation.py), [tests/unit/test_peer_resolution.py](../tests/unit/test_peer_resolution.py), and [ios/tests/test_m3_native_sources.py](../ios/tests/test_m3_native_sources.py)
 - WebSocket proxy coverage verifies environment and manual endpoint selection,
-  `NO_PROXY` bypasses, and credential-bearing proxy URIs. Credentials are
+  `NO_PROXY` bypasses, credential-bearing proxy URIs, and nonblocking
+  deadline-bounded CONNECT request/response framing after the isolated
+  dependency-owned connect/Windows-SSPI setup. Credentials are
   decoded only for the CONNECT Basic header and are not treated as endpoint
   host material.
 - Linux Swift adapter coverage separately exercises one shared myudp descriptor admitting two independently authenticated PSK peers before exposing either child session.

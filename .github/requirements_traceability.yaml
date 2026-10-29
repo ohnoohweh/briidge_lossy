@@ -2060,7 +2060,12 @@ REQ-IO-001:
   # the child-log relay and restart placeholder own readiness-gated
   # nonblocking receives on dedicated no-event-loop threads; shared Apple UDP
   # uses MSG_DONTWAIT and Python macOS utun uses an asyncio readiness drain.
+  # HTTP CONNECT leaves only connect/Windows SSPI inside its explicitly
+  # isolated compatibility thread; connected header framing and synchronous
+  # Admin parent-worker control use deadline-bounded nonblocking descriptors.
   unit_tests:
+    - tests/unit/test_admin_worker.py::test_admin_worker_timeout_fences_late_reply
+    - tests/unit/test_ws_payload_mode.py::test_open_ws_proxy_socket_blocking_establishes_connect_tunnel
     - tests/unit/test_tun_helper_linux_backend.py::test_open_write_read_and_stop_round_trip
     - tests/unit/test_tun_helper_macos_backend.py::test_open_write_read_and_stop_wraps_utun_frames
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input

@@ -5,8 +5,10 @@ import contextlib
 import ctypes
 import logging
 import os
+import select
 import socket
 import sys
+import time
 import urllib.parse
 import urllib.request
 from ctypes import wintypes
@@ -495,10 +497,52 @@ def win_build_negotiate_token(target_name: str, challenge: Optional[bytes] = Non
             secur32.FreeCredentialsHandle(ctypes.byref(cred))
 
 
-def read_http_proxy_response(sock: socket.socket) -> Tuple[int, Dict[str, List[str]]]:
+def _wait_for_proxy_socket(sock: socket.socket, *, writable: bool, deadline: float) -> None:
+    """Wait only at the isolated synchronous HTTP CONNECT compatibility boundary."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("proxy CONNECT response timed out")
+    readable, writable_sockets, _ = select.select(  # OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: isolated CONNECT/Windows-SSPI compatibility thread
+        [] if writable else [sock],
+        [sock] if writable else [],
+        [],
+        remaining,
+    )
+    if not readable and not writable_sockets:
+        raise TimeoutError("proxy CONNECT response timed out")
+
+
+def _send_proxy_request(sock: socket.socket, payload: bytes, *, deadline: float) -> None:
+    offset = 0
+    while offset < len(payload):
+        try:
+            sent = sock.send(payload[offset:])
+        except (BlockingIOError, InterruptedError):
+            _wait_for_proxy_socket(sock, writable=True, deadline=deadline)
+            continue
+        if sent <= 0:
+            raise RuntimeError("proxy closed while receiving CONNECT request")
+        offset += sent
+
+
+def read_http_proxy_response(sock: socket.socket, *, deadline: Optional[float] = None) -> Tuple[int, Dict[str, List[str]]]:
+    """Parse a CONNECT response without a kernel-blocking receive call.
+
+    This helper is called only from the explicit ``asyncio.to_thread``
+    compatibility boundary in :func:`open_http_connect_tunnel`: Windows
+    Negotiate/SSPI and ``socket.create_connection`` do not expose a safe
+    asyncio equivalent.  Once connected, all header I/O is nonblocking and
+    the caller-provided deadline bounds the readiness wait.
+    """
+    sock.setblocking(False)
+    bounded_deadline = time.monotonic() + 5.0 if deadline is None else deadline
     data = b""
     while b"\r\n\r\n" not in data:
-        chunk = sock.recv(4096)
+        try:
+            chunk = sock.recv(4096)  # O_NONBLOCK readiness owner
+        except (BlockingIOError, InterruptedError):
+            _wait_for_proxy_socket(sock, writable=False, deadline=bounded_deadline)
+            continue
         if not chunk:
             break
         data += chunk
@@ -550,6 +594,11 @@ def open_http_connect_tunnel(
             log.debug("%s CONNECT attempt=%d proxy=%s:%d", log_prefix, attempts, proxy_host, int(proxy_port))
         sock = socket.create_connection((proxy_host, int(proxy_port)), timeout=timeout)
         try:
+            # The connect/Windows SSPI work above is the documented, isolated
+            # thread compatibility boundary. Do not retain a blocking socket
+            # for CONNECT request/response framing after that work completes.
+            sock.setblocking(False)
+            attempt_deadline = time.monotonic() + max(0.01, float(timeout))
             auth_header = basic_auth
             if normalized_auth == "negotiate" and attempts > 1:
                 if log:
@@ -564,14 +613,13 @@ def open_http_connect_tunnel(
                 auth_header=auth_header,
                 user_agent=user_agent,
             )
-            sock.sendall(request)
-            status_code, headers = read_http_proxy_response(sock)
+            _send_proxy_request(sock, request, deadline=attempt_deadline)
+            status_code, headers = read_http_proxy_response(sock, deadline=attempt_deadline)
             if log:
                 log.debug("%s CONNECT response status=%s proxy_authenticate=%s", log_prefix, status_code, headers.get("proxy-authenticate", []))
             if status_code == 200:
                 if log:
                     log.debug("%s CONNECT tunnel established on attempt=%d", log_prefix, attempts)
-                sock.setblocking(False)
                 return sock
             if status_code != 407:
                 raise RuntimeError(f"proxy CONNECT failed with HTTP {status_code}")

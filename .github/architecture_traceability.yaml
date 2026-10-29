@@ -96,6 +96,7 @@ ARC-CMP-001:
     - tests/unit/test_ws_payload_mode.py::test_connect_reports_proxy_negotiation_failures_as_failed
     - tests/unit/test_ws_payload_mode.py::test_proxy_uri_credentials_are_separated_from_endpoint_and_encoded_for_basic_auth
     - tests/unit/test_ws_payload_mode.py::test_manual_proxy_uri_credentials_are_forwarded_as_basic_authorization
+    - tests/unit/test_ws_payload_mode.py::test_open_ws_proxy_socket_blocking_establishes_connect_tunnel
     - tests/unit/test_ws_payload_mode.py::test_connect_proxy_open_timeout_cancels_without_asyncio_callback_error
     - tests/unit/test_ws_payload_mode.py::test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight
     - tests/unit/test_ws_payload_mode.py::test_proxy_multi_ws_peer_uses_resolved_candidate_for_lookup_and_connect

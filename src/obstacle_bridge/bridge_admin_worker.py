@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import os
+import select
 import shutil
 import socket
 import sys
@@ -58,11 +59,49 @@ async def _read_frame(reader: asyncio.StreamReader, generation: int = 1) -> dict
     return value
 
 
-def _read_socket_frame(sock: socket.socket, generation: int = 1) -> dict[str, Any]:
+def _wait_socket_ready(sock: socket.socket, *, writable: bool, deadline: float) -> None:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Admin worker control deadline elapsed")
+    readable, writable_sockets, _ = select.select(  # OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded synchronous Admin-Web compatibility facade
+        [] if writable else [sock],
+        [sock] if writable else [],
+        [],
+        remaining,
+    )
+    if not readable and not writable_sockets:
+        raise TimeoutError("Admin worker control deadline elapsed")
+
+
+def _send_socket_frame(sock: socket.socket, payload: bytes, *, deadline: float) -> None:
+    offset = 0
+    while offset < len(payload):
+        try:
+            sent = sock.send(payload[offset:])
+        except (BlockingIOError, InterruptedError):
+            _wait_socket_ready(sock, writable=True, deadline=deadline)
+            continue
+        if sent <= 0:
+            raise EOFError("Admin worker control closed")
+        offset += sent
+
+
+def _read_socket_frame(sock: socket.socket, generation: int = 1, *, deadline: float) -> dict[str, Any]:
+    """Read a parent-side Admin IPC frame without blocking a request thread.
+
+    ``_RemoteRunner`` retains a synchronous facade because legacy Admin-Web
+    handlers invoke it from a non-async call stack.  That facade is the only
+    compatibility boundary: descriptor operations stay nonblocking and this
+    helper waits through ``select`` only until the request deadline.
+    """
     def read_exact(size: int) -> bytes:
         result = bytearray()
         while len(result) < size:
-            chunk = sock.recv(size - len(result))
+            try:
+                chunk = sock.recv(size - len(result))  # O_NONBLOCK readiness owner
+            except (BlockingIOError, InterruptedError):
+                _wait_socket_ready(sock, writable=False, deadline=deadline)
+                continue
             if not chunk:
                 raise EOFError("Admin worker control closed")
             result.extend(chunk)
@@ -137,10 +176,13 @@ class _RemoteRunner:
             if self._failed or remaining <= 0:
                 raise TimeoutError("Admin worker runner unavailable")
             request_id = uuid.uuid4().hex
-            self._socket.settimeout(remaining)
-            self._socket.sendall(_encode({"v": 1, "kind": "admin.call", "id": request_id,
-                                         "method": method, "args": args, "kwargs": kwargs, "deadline": deadline}, self._generation))
-            reply = _read_socket_frame(self._socket, self._generation)
+            # Legacy Admin-Web handlers are synchronous.  Keep their bounded
+            # facade, but never let a kernel-blocking control read occupy the
+            # handler thread; all descriptor I/O below is readiness-driven.
+            self._socket.setblocking(False)
+            _send_socket_frame(self._socket, _encode({"v": 1, "kind": "admin.call", "id": request_id,
+                                                       "method": method, "args": args, "kwargs": kwargs, "deadline": deadline}, self._generation), deadline=deadline)
+            reply = _read_socket_frame(self._socket, self._generation, deadline=deadline)
             if reply.get("kind") != "admin.reply" or reply.get("id") != request_id:
                 raise ValueError("invalid Admin runner reply")
             if not reply.get("ok"):
