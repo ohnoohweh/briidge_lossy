@@ -1789,6 +1789,8 @@ connections, peer inventory, build-info, security-advisor, logging, ChannelMux,
 and TUN callbacks. myUDP receive and unconfirmed retransmission work use
 bounded event-loop FIFOs so a congested window or multi-chunk batch yields
 between fixed-size work slices.
+The standalone Python UDP log collector is likewise callback-owned and does
+not retain a worker in a blocking socket receive loop.
 and TUN boundaries are displayed as event-loop occupancy estimates. Inclusive
 queue, transaction, payload-batch, TCP-message-dispatch, or TUN-payload wrappers that span separately measurable subtasks are not
 shown as uninterrupted-work signals. The

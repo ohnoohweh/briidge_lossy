@@ -6,6 +6,7 @@ datagram is optional observability data; losing it must not affect forwarding.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import select
@@ -224,12 +225,25 @@ class UdpLogReceiver:
             self.malformed_datagrams += 1
             return False
 
-    def serve_forever(self) -> None:
-        while True:
-            readable, _, _ = select.select([self._socket], [], [])
-            if readable:
-                data, _ = self._socket.recvfrom(self.max_datagram_bytes)
-                self.handle_datagram(data, _)
+    async def serve(self) -> None:
+        """Own this receiver through asyncio datagram callbacks.
+
+        No collector thread waits in ``select`` or ``recvfrom``: the event
+        loop supplies complete datagrams and cancellation closes the transport.
+        """
+        receiver = self
+
+        class _Protocol(asyncio.DatagramProtocol):
+            def datagram_received(self, data: bytes, address) -> None:
+                receiver.handle_datagram(data, address)
+
+        transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+            _Protocol, sock=self._socket
+        )
+        try:
+            await asyncio.Future()
+        finally:
+            transport.close()
 
 
 def _debug_log_ring():
@@ -256,7 +270,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         return serve_private_receiver(*args.private_fds, args.generation)
     receiver = UdpLogReceiver(args.bind, args.max_datagram_bytes)
     logging.getLogger("logging_ipc").info("UDP log receiver listening on %s", args.bind)
-    receiver.serve_forever()
+    try:
+        asyncio.run(receiver.serve())
+    except KeyboardInterrupt:
+        pass
     return 0
 
 

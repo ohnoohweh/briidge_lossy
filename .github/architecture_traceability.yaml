@@ -138,6 +138,7 @@ ARC-CMP-002:
   # Swift parity compiles Core directly; no SessionCodec compatibility fixture
   # participates in this component boundary.
   unit_tests:
+    - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpListenerRejectsDelayedStaleEpochForSameEndpoint
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpListenerAuthenticatesIndependentPeersBeforeExposingSessions
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerBoundsAuthenticatedPeerAdmission
