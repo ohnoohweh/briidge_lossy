@@ -16,6 +16,7 @@ import ipaddress
 import json
 import os
 import pathlib
+import select
 import shlex
 import socket
 import subprocess
@@ -266,7 +267,7 @@ def _make_listener_socket(host: str, port: int) -> socket.socket:
                     listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
             listener.bind(sockaddr)
             listener.listen(socket.SOMAXCONN)
-            listener.settimeout(0.5)
+            listener.setblocking(False)
             return listener
         except Exception as exc:
             last_error = exc
@@ -406,18 +407,26 @@ class _RestartCountdownServer:
             return
         while not self._stop.is_set():
             try:
+                readable, _, _ = select.select([listener], [], [], 0.5)  # OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: restart placeholder owns a dedicated synchronous thread
+                if not readable:
+                    continue
                 conn, _addr = listener.accept()
-            except socket.timeout:
+            except BlockingIOError:
                 continue
             except OSError:
                 break
             with conn:
-                conn.settimeout(1.0)
+                conn.setblocking(False)
                 self._handle_connection(conn)
 
     def _handle_connection(self, conn: socket.socket) -> None:
         try:
-            request = conn.recv(4096)
+            readable, _, _ = select.select([conn], [], [], 1.0)  # OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: restart placeholder owns a dedicated synchronous thread
+            if not readable:
+                return
+            request = conn.recv(4096)  # O_NONBLOCK readiness owner
+        except BlockingIOError:
+            return
         except OSError:
             return
         if not request:
