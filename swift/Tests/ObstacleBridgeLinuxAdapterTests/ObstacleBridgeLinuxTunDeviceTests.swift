@@ -743,6 +743,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             let result = output.withUnsafeMutableBytes { bytes in
                 read(descriptor, bytes.baseAddress!.advanced(by: offset), count - offset)
             }
+            if result < 0 && errno == EINTR { continue }
             guard result > 0 else { throw POSIXError(.EIO) }
             offset += result
         }
