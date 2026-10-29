@@ -30,6 +30,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private var deliveredPayloads: [Data] = []
     private let stateLock = NSLock()
     private let receiveLock = NSLock()
+    private let synchronousReceiveWaitMS: Int32
     private let readinessQueue = DispatchQueue(label: "org.obstaclebridge.linux.myudp.readiness")
     private var readSource: DispatchSourceRead?
     private var timerSource: DispatchSourceTimer?
@@ -38,6 +39,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     /// rollover qualification; normal runtime construction uses `1`.
     public init(host: String, port: Int, timeoutMilliseconds: Int = 1_000, nextDataCounter: UInt16 = 1) throws {
         peerRuntime = .init(nextCounter: Int(nextDataCounter))
+        synchronousReceiveWaitMS = Int32(max(1, min(Int(Int32.max), timeoutMilliseconds)))
         // Configured IPv6 literals commonly retain URI brackets. `getaddrinfo`
         // accepts the literal itself, not its URI presentation.
         let resolvedHost: String
@@ -60,8 +62,6 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             let fd = socket(row.pointee.ai_family, row.pointee.ai_socktype, row.pointee.ai_protocol)
             if fd >= 0 {
                 if connect(fd, row.pointee.ai_addr, row.pointee.ai_addrlen) == 0 {
-                    var timeout = timeval(tv_sec: timeoutMilliseconds / 1_000, tv_usec: (timeoutMilliseconds % 1_000) * 1_000)
-                    _ = withUnsafePointer(to: &timeout) { setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, $0, socklen_t(MemoryLayout<timeval>.size)) }
                     opened = fd
                     break
                 }
@@ -136,7 +136,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             }
             stateLock.unlock()
             var buffer = [UInt8](repeating: 0, count: 1_452)
-            let received = recv(descriptor, &buffer, buffer.count, 0)
+            let received = recv(descriptor, &buffer, buffer.count, Int32(MSG_DONTWAIT))
             guard received > 0 else {
                 let code = errno
                 // A receive timeout is the owner’s timer cadence, not a
@@ -145,7 +145,8 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                 // Treating EAGAIN as fatal caused an otherwise healthy quiet
                 // myUDP epoch to reconnect before its first local service
                 // connection could be accepted.
-                if code == EAGAIN || code == EWOULDBLOCK || code == ETIMEDOUT {
+                if code == EAGAIN || code == EWOULDBLOCK {
+                    if try waitForSynchronousReceive() { continue }
                     try serviceTimers()
                     continue
                 }
@@ -165,6 +166,23 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             stateLock.unlock()
             try execute(effect.emittedFrames)
             if let payload { return (0, payload) }
+        }
+    }
+
+    /// Compatibility path for `exchange()` callers that have no event-loop
+    /// owner. The runtime never uses it after `startAsyncReceive()` installs
+    /// its Dispatch read source. Frame reads remain MSG_DONTWAIT even here.
+    private func waitForSynchronousReceive() throws -> Bool {
+        var pollDescriptor = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+        while true {
+            let result = poll(&pollDescriptor, 1, synchronousReceiveWaitMS) // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded synchronous myUDP bootstrap fallback without an event loop
+            if result < 0 && errno == EINTR { continue }
+            if result == 0 { return false }
+            guard result > 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
+            if pollDescriptor.revents & Int16(POLLIN) != 0 { return true }
+            if pollDescriptor.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 {
+                throw ObstacleBridgeLinuxMyUDPError.ioFailure(ECONNRESET)
+            }
         }
     }
 
