@@ -2050,7 +2050,8 @@ REQ-ADM-012:
 REQ-IO-001:
   # Python and Swift diff guards reject new blocking receive/wait additions;
   # explicit O_NONBLOCK readiness owners and documented bounded exceptions are
-  # admitted. Python Admin-child bootstrap and owner-lifetime reads are asyncio-owned.
+  # admitted. Python Admin-child bootstrap/owner-lifetime reads are asyncio-owned;
+  # the child-log relay owns readiness-gated nonblocking datagram receives.
   unit_tests:
     - tests/unit/test_tun_helper_linux_backend.py::test_open_write_read_and_stop_round_trip
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input

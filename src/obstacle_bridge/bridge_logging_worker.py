@@ -369,7 +369,7 @@ class ChildLogRelay:
             for endpoint in (self.receiver, self.sender):
                 endpoint.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 64 * 1024)
                 endpoint.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
-            self.receiver.settimeout(0.2)
+            self.receiver.setblocking(False)
             self.sender.setblocking(False)
             self._thread = threading.Thread(target=self._run, name="child-log-relay", daemon=True)
             self._thread.start()
@@ -381,8 +381,11 @@ class ChildLogRelay:
     def _run(self):
         while not self._stop.is_set():
             try:
-                packet = self.receiver.recv(PRIVATE_MAX_DATAGRAM + 1)
-            except socket.timeout:
+                readable, _, _ = select.select([self.receiver], [], [], 0.2)  # OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: dedicated relay owner has no event loop
+                if not readable:
+                    continue
+                packet = self.receiver.recv(PRIVATE_MAX_DATAGRAM + 1)  # O_NONBLOCK readiness owner
+            except BlockingIOError:
                 continue
             except OSError:
                 return
