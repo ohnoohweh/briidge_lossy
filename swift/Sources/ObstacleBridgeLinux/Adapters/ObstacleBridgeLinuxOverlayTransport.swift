@@ -729,6 +729,13 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
 private final class POSIXStreamConnection: ObstacleBridgeLinuxWebSocketByteConnection {
     private var fd: Int32
     private let descriptorLock = NSLock()
+    /// SecureLink output, liveness replies, and receive-side PONGs can be
+    /// scheduled from different queues.  A stream `send` is allowed to make a
+    /// partial write, so the complete framed record must have one owner until
+    /// its final byte is accepted by the kernel.  Otherwise a second writer
+    /// can splice a different frame into that record and desynchronise the
+    /// peer's TCP frame decoder.
+    private let writeLock = NSLock()
     private let readinessQueue = DispatchQueue(label: "org.obstaclebridge.linux.posix-stream-readiness")
     private var readSource: DispatchSourceRead?
 
@@ -781,6 +788,8 @@ private final class POSIXStreamConnection: ObstacleBridgeLinuxWebSocketByteConne
     }
 
     func write(_ data: Data) throws {
+        writeLock.lock()
+        defer { writeLock.unlock() }
         let descriptor = try activeDescriptor()
         var offset = 0
         while offset < data.count {

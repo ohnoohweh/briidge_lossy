@@ -143,10 +143,10 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         catch { close(parentData); close(childData); throw error }
         var adopted = false
         let childInput = FileHandle(fileDescriptor: childData, closeOnDealloc: true)
-        let childError = FileHandle(fileDescriptor: childLifetime, closeOnDealloc: true)
+        let childLifetimeHandle = FileHandle(fileDescriptor: childLifetime, closeOnDealloc: true)
         let child = Process()
         defer {
-            try? childInput.close(); try? childError.close()
+            try? childInput.close(); try? childLifetimeHandle.close()
             if !adopted {
                 close(parentData); close(parentLifetime)
                 if child.isRunning { _ = kill(child.processIdentifier, SIGKILL); child.waitUntilExit() }
@@ -161,15 +161,17 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         var noSignal: Int32 = 1
         guard setsockopt(parentData, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else { throw Failure.unavailable }
         #endif
-        guard let nullOutput = FileHandle(forWritingAtPath: "/dev/null") else { throw Failure.unavailable }
         child.executableURL = URL(fileURLWithPath: executable)
         let nextGeneration = UInt64(generation + 1)
-        child.arguments = (implementation == "python" ? ["-m", "obstacle_bridge.bridge_logging_ipc"] : []) + ["--private-fds", "0", "2", "--generation", String(nextGeneration)]
+        child.arguments = (implementation == "python" ? ["-m", "obstacle_bridge.bridge_logging_ipc"] : []) + ["--private-fds", "0", "1", "--generation", String(nextGeneration)]
         child.standardInput = childInput
-        child.standardError = childError
-        child.standardOutput = nullOutput
+        // Keep standard error available for worker diagnostics. Foundation's
+        // optimized Linux stderr redirection can prematurely close an
+        // inherited Unix lifetime stream; stdout is an equivalent private
+        // descriptor and avoids that lifecycle regression.
+        child.standardOutput = childLifetimeHandle
         try child.run()
-        try childInput.close(); try childError.close(); try nullOutput.close()
+        try childInput.close(); try childLifetimeHandle.close()
         guard sendDatagram(parentData, kind: .hello, generation: nextGeneration, payload: [
                   "v": 1, "kind": "worker.hello", "role": "supervisor",
                   "capabilities": ["logging.query", "logging.records"],
