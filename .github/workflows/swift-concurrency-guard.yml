@@ -1,5 +1,7 @@
 name: Swift Concurrency Guard
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   guard:
     runs-on: ubuntu-latest
