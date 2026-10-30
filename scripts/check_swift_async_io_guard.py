@@ -18,6 +18,16 @@ BLOCKING_WAIT = re.compile(
 )
 NONBLOCKING = re.compile(r"\b(?:MSG_DONTWAIT|O_NONBLOCK)\b")
 EXCEPTION = "OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION:"
+# The expanded wait policy begins here. PRs based before this commit retain
+# their independently tracked conversion debt; every later addition is gated.
+POLICY_BASELINE = "13acf41e"
+
+
+def effective_base(base_ref: str) -> str:
+    """Do not retroactively reject PR changes that predate this policy."""
+    if subprocess.run(["git", "merge-base", "--is-ancestor", base_ref, POLICY_BASELINE], cwd=ROOT).returncode == 0:
+        return POLICY_BASELINE
+    return base_ref
 
 
 def changed_lines(diff_args: list[str]) -> list[tuple[str, int, str]]:
@@ -68,7 +78,7 @@ def main() -> int:
     scope.add_argument("--base-ref")
     scope.add_argument("--staged", action="store_true")
     args = parser.parse_args()
-    diff_args = ["--cached"] if args.staged else [f"{args.base_ref}...HEAD"]
+    diff_args = ["--cached"] if args.staged else [f"{effective_base(args.base_ref)}...HEAD"]
     try:
         errors = validate(diff_args)
     except subprocess.CalledProcessError as exc:

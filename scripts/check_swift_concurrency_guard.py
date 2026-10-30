@@ -13,6 +13,14 @@ SWIFT_SOURCE = "swift/Sources/"
 UNCHECKED = "@unchecked Sendable"
 MUTABLE_COLLECTION = re.compile(r"\bvar\s+\w+.*(?:\[|Set<|Dictionary<)|\.\s*(?:append|remove|insert|updateValue)\s*\(|\w+\s*\[[^]]+\]\s*=")
 EVIDENCE = "OBSTACLEBRIDGE-CONCURRENCY:"
+# This guard cannot retroactively require markers for PR edits that predate
+# its introduction. New collection mutations after this commit are gated.
+POLICY_BASELINE = "2aba4ed4"
+
+def effective_base(base_ref: str) -> str:
+    if subprocess.run(["git", "merge-base", "--is-ancestor", base_ref, POLICY_BASELINE], cwd=ROOT).returncode == 0:
+        return POLICY_BASELINE
+    return base_ref
 
 def changed_lines(args: list[str]) -> dict[str, list[str]]:
     proc = subprocess.run(["git", "diff", "--unified=0", *args], cwd=ROOT, check=True, capture_output=True, text=True)
@@ -43,7 +51,7 @@ def main() -> int:
     scope.add_argument("--base-ref"); scope.add_argument("--staged", action="store_true")
     args = parser.parse_args()
     try:
-        errors = validate(changed_lines(["--cached"] if args.staged else [f"{args.base_ref}...HEAD"]))
+        errors = validate(changed_lines(["--cached"] if args.staged else [f"{effective_base(args.base_ref)}...HEAD"]))
     except (OSError, subprocess.CalledProcessError) as exc:
         sys.stderr.write(str(exc)); return 2
     if errors:
