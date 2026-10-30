@@ -43,6 +43,8 @@ struct ObstacleBridgeChannelMuxChannelIDAllocationTests {
         let frames = try sent.frames.map { try ObstacleBridgeChannelMuxCodec.decode($0) }
         #expect(frames.allSatisfy { $0.body.count + ObstacleBridgeChannelMuxCodec.muxHeaderSize <= 65_535 })
         #expect(Data(frames.flatMap(\.body)) == payload)
-        #expect(frames.map(\.counter) == [2, 3])
+        // The accepted service emitted OPEN at counter zero. Each split DATA
+        // frame advances the same channel sequence exactly once.
+        #expect(frames.map(\.counter) == [1, 2])
     }
 }
