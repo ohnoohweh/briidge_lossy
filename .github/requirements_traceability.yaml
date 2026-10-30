@@ -2075,8 +2075,9 @@ REQ-IO-001:
   # The shared native Admin lifetime owner is a nonblocking Dispatch read
   # source and its deadline-bounded control frames use nonblocking POSIX
   # reads, covered by owner-loss and fragmented-frame Linux tests.
-  # Linux/macOS native peer workers use the same nonblocking frame read with
-  # an isolated child-process poll compatibility loop.
+  # The Linux native peer worker changes from its bounded bootstrap to a
+  # serial descriptor-readiness owner with shared incremental OBIP framing.
+  # The macOS child keeps its documented isolated-process compatibility wait.
   # Linux-native TUN-helper listener and accepted control clients likewise
   # retain partial OBIP frames in a shared incremental decoder behind serial
   # Dispatch read sources.
@@ -2096,6 +2097,7 @@ REQ-IO-001:
     - tests/unit/test_tun_helper_macos_backend.py::test_open_write_read_and_stop_wraps_utun_frames
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input
     - tests/unit/test_native_log_supervisor.py::test_native_log_supervisor_query_uses_readiness_callback_not_polling
+    - tests/unit/test_linux_native_peer_worker.py::test_linux_native_peer_worker_uses_readiness_decoder_after_bootstrap
     - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpDuplexSessionUsesReadinessCallbacksAfterBootstrap
