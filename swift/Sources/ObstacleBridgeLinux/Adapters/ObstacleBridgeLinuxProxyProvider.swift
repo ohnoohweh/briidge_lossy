@@ -8,6 +8,7 @@ import Glibc
 /// remain usable while the overlay is connecting and never creates a route
 /// dependency on the packet tunnel it helps bootstrap.
 public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxProxyProviderTests
     private let configuration: ObstacleBridgeLinuxProxyProviderConfiguration
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.proxy")
     private var listeners: [(fd: Int32, source: DispatchSourceRead)] = []
@@ -54,6 +55,7 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
                 if errno == EAGAIN || errno == EWOULDBLOCK { return }
                 return
             }
+            guard setNonblocking(client) else { _ = close(client); continue }
             lock.lock(); accepted += 1; lock.unlock()
             DispatchQueue.global().async { [weak self] in self?.serve(client: client, socks: socks) }
         }
@@ -99,9 +101,65 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
         try write(client, Data([5,0,0,1,0,0,0,0,0,0])); relay(client, remote)
     }
 
-    private func relay(_ left: Int32, _ right: Int32) { let group = DispatchGroup(); for (from, to) in [(left,right),(right,left)] { group.enter(); DispatchQueue.global().async { var buffer = [UInt8](repeating: 0, count: 16_384); while true { let n = read(from, &buffer, buffer.count); if n <= 0 { _ = shutdown(to, Int32(SHUT_WR)); break }; var offset = 0; while offset < n { let w = Glibc.write(to, buffer.withUnsafeBytes { $0.baseAddress!.advanced(by: offset) }, n - offset); if w <= 0 { break }; offset += w } }; group.leave() } }; group.wait() }
+    private func relay(_ left: Int32, _ right: Int32) {
+        let group = DispatchGroup()
+        for (from, to) in [(left, right), (right, left)] {
+            group.enter()
+            DispatchQueue.global().async {
+                defer { group.leave() }
+                var buffer = [UInt8](repeating: 0, count: 16_384)
+                while true {
+                    let count = recv(from, &buffer, buffer.count, Int32(MSG_DONTWAIT))
+                    if count == 0 { _ = shutdown(to, Int32(SHUT_WR)); return }
+                    if count < 0 {
+                        if errno == EINTR { continue }
+                        if errno == EAGAIN || errno == EWOULDBLOCK {
+                            var descriptor = pollfd(fd: from, events: Int16(POLLIN), revents: 0)
+                            _ = poll(&descriptor, 1, 1_000) // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded relay-worker compatibility wait pending per-client readiness state machine.
+                            continue
+                        }
+                        _ = shutdown(to, Int32(SHUT_WR)); return
+                    }
+                    var offset = 0
+                    while offset < Int(count) {
+                        let written = buffer.withUnsafeBytes { send(to, $0.baseAddress!.advanced(by: offset), Int(count) - offset, Int32(MSG_NOSIGNAL | MSG_DONTWAIT)) }
+                        if written > 0 { offset += Int(written); continue }
+                        if written < 0, errno == EINTR { continue }
+                        if written < 0, errno == EAGAIN || errno == EWOULDBLOCK {
+                            var descriptor = pollfd(fd: to, events: Int16(POLLOUT), revents: 0)
+                            guard poll(&descriptor, 1, 1_000) > 0 else { return } // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded relay-worker compatibility wait pending per-client readiness state machine.
+                            continue
+                        }
+                        return
+                    }
+                }
+            }
+        }
+        group.wait() // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded relay-worker lifetime join pending per-client readiness state machine.
+    }
     private func readHeader(_ fd: Int32) throws -> Data { var result = Data(); while result.count < 65_536 { result.append(try readExactly(fd, 1)); if result.suffix(4) == Data("\r\n\r\n".utf8) { return result } }; throw ProxyError.invalid }
-    private func readExactly(_ fd: Int32, _ count: Int) throws -> Data { var data = Data(count: count); let n = data.withUnsafeMutableBytes { read(fd, $0.baseAddress, count) }; guard n == count else { throw ProxyError.invalid }; return data }
+    /// Bounded parser compatibility path. The listener never delegates a
+    /// blocking `read`: every byte is consumed only after readiness, with the
+    /// descriptor remaining nonblocking through the later relay handoff.
+    private func readExactly(_ fd: Int32, _ count: Int) throws -> Data {
+        var output = Data(); output.reserveCapacity(count)
+        var buffer = [UInt8](repeating: 0, count: min(8192, max(1, count)))
+        let deadline = DispatchTime.now().uptimeNanoseconds + 10_000_000_000
+        while output.count < count {
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now < deadline else { throw ProxyError.invalid }
+            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let remaining = Int32(min(UInt64(Int32.max), max(1, (deadline - now) / 1_000_000)))
+            let ready = poll(&descriptor, 1, remaining) // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded compatibility parser pending per-client readiness state machine.
+            if ready < 0, errno == EINTR { continue }
+            guard ready > 0, descriptor.revents & Int16(POLLIN) != 0 else { throw ProxyError.invalid }
+            let received = recv(fd, &buffer, min(buffer.count, count - output.count), Int32(MSG_DONTWAIT))
+            if received < 0, errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
+            guard received > 0 else { throw ProxyError.invalid }
+            output.append(buffer, count: Int(received))
+        }
+        return output
+    }
     private func write(_ fd: Int32, _ text: String) throws { try write(fd, Data(text.utf8)) }
     private func write(_ fd: Int32, _ data: Data) throws { let n = data.withUnsafeBytes { Glibc.write(fd, $0.baseAddress, data.count) }; guard n == data.count else { throw ProxyError.invalid } }
     private func authorized(_ header: String?) -> Bool { guard let credentials = configuration.credentials else { return true }; guard let header, header.lowercased().hasPrefix("basic "), let data = Data(base64Encoded: String(header.dropFirst(6))), let value = String(data: data, encoding: .utf8) else { return false }; return value == "\(credentials.username):\(credentials.password)" }
@@ -120,6 +178,10 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
         let flags = fcntl(fd, F_GETFL)
         guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { _ = close(fd); throw ProxyError.invalid }
         return fd
+    }
+    private func setNonblocking(_ fd: Int32) -> Bool {
+        let flags = fcntl(fd, F_GETFL)
+        return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0
     }
     private func boundPort(_ fd: Int32) -> Int { var address = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size); _ = withUnsafeMutablePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }; return Int(UInt16(bigEndian: address.sin_port)) }
     private func connect(_ host: String, _ port: Int) throws -> Int32 { var hints = addrinfo(ai_flags: 0, ai_family: AF_UNSPEC, ai_socktype: Int32(SOCK_STREAM.rawValue), ai_protocol: 0, ai_addrlen: 0, ai_addr: nil, ai_canonname: nil, ai_next: nil); var result: UnsafeMutablePointer<addrinfo>?; guard getaddrinfo(host, String(port), &hints, &result) == 0 else { throw ProxyError.invalid }; defer { freeaddrinfo(result) }; var row = result; while let current = row { if !configuration.allowPrivateDestinations && isPrivate(current.pointee.ai_addr, family: current.pointee.ai_family) { row = current.pointee.ai_next; continue }; let fd = socket(current.pointee.ai_family, current.pointee.ai_socktype, current.pointee.ai_protocol); if fd >= 0 && Glibc.connect(fd, current.pointee.ai_addr, current.pointee.ai_addrlen) == 0 { return fd }; if fd >= 0 { _ = close(fd) }; row = current.pointee.ai_next }; throw ProxyError.invalid }

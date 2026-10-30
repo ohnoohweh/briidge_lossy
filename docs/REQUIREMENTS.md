@@ -685,6 +685,8 @@ Implementation note: the diff guards apply to every Python runtime and Swift pro
 
 Implementation note: the Linux in-process HTTP/SOCKS proxy listener is an `O_NONBLOCK` readiness owner and drains all pending accepts before its callback returns. Client parsing and bidirectional relay remain a separate incremental state-machine conversion; they must not use the listener callback as a synchronous fallback.
 
+Until that per-client owner is delivered, parsing and relay use only `MSG_DONTWAIT` receives with an explicit bounded compatibility wait; no proxy request or relay path may enter a blocking `read` or `recv`.
+
 Linux-native plain TCP similarly transitions after bootstrap to a POSIX readiness source plus an incremental length-prefixed frame decoder. Partial headers and bodies remain buffered for a later readability notification; the readiness callback shall never call a blocking read to complete a record. Plain WebSocket uses the same POSIX readiness source with incremental WebSocket framing. TLS WebSocket and QUIC expose their existing NIO inbound callbacks through equivalent incremental decoders; none of these post-bootstrap client receive owners may wait on a condition variable or socket read for a missing frame byte.
 
 Runtime Analysis excludes `apple_transport_payload_route` and `apple_transport_delivered_payload`: they are routing/delivery wrappers, not one actionable uninterrupted operation. Per-payload SecureLink handoff, ChannelMux dispatch, and TUN/TCP/UDP branch metrics remain eligible to identify the leading work.

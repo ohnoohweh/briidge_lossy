@@ -6,6 +6,19 @@ import Glibc
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxProxyProviderTests {
+    @Test func socksParserCompletesFragmentedGreetingWithoutBlockingRead() throws {
+        let provider = ObstacleBridgeLinuxProxyProvider(configuration: .init(enabled: true, socks5Port: 0, httpEnabled: false, allowPrivateDestinations: true))
+        try provider.start(); defer { provider.stop() }
+        let port = try #require(provider.snapshot()["socks5_port"] as? Int)
+        let client = try connect(port: port); defer { _ = close(client) }
+        try send(client, Data([5]))
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.02) {
+            let tail = Data([1, 0])
+            _ = tail.withUnsafeBytes { Glibc.write(client, $0.baseAddress, tail.count) }
+        }
+        #expect(try receive(client) == Data([5, 0]))
+    }
+
     @Test func listenerReadinessDrainAdmitsEveryQueuedSOCKSClient() throws {
         let provider = ObstacleBridgeLinuxProxyProvider(configuration: .init(enabled: true, socks5Port: 0, httpEnabled: false, allowPrivateDestinations: true))
         try provider.start(); defer { provider.stop() }

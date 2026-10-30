@@ -42,7 +42,7 @@ must be converted rather than retained indefinitely.
 | --- | --- | --- |
 | Linux TCP and TLS-WebSocket listener admission | framed SecureLink and HTTP-upgrade reads | listener-owned readiness state machine with incremental HTTP/WebSocket/OBIP buffers |
 | Linux foreground and native-child Admin web servers | live-WebSocket polling loops | ordinary HTTP requests use per-client readiness sources with bounded reassembly; replace live polling with a timer-driven live-topic scheduler |
-| Linux in-process HTTP/SOCKS proxy client parsing and relay | blocking per-connection reads | per-client readiness state machine with incremental HTTP/SOCKS buffers and queued write readiness |
+| Linux in-process HTTP/SOCKS proxy client parsing and relay | bounded `poll` compatibility waits with `MSG_DONTWAIT` reads | per-client readiness state machine with incremental HTTP/SOCKS buffers and queued write readiness |
 | Linux native peer/Admin worker IPC | `FileHandle` framed reads after bootstrap | descriptor readiness source with generation-fenced incremental OBIP decoder |
 | Linux TUN helper control IPC | synchronous request/reply reads | callback-based correlated control requests; preserve independent request deadline |
 | Desktop logging supervisor query | bounded poll/receive request path | descriptor readiness handling and callback completion for bounded queries |
