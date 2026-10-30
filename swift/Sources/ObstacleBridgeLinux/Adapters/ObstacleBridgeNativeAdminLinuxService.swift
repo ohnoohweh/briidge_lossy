@@ -962,7 +962,11 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             handshake: handshake,
             payload: { [weak self] topic in self?.livePayload(topic: topic) },
             finished: { [weak self] descriptor in
-                self?.queue.async { self?.liveSessions.removeValue(forKey: descriptor) }
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxTunDeviceTests
+                guard let owner = self else { return }
+                owner.queue.async { [weak owner] in
+                    owner?.liveSessions.removeValue(forKey: descriptor)
+                }
             }
         )
         queue.async { [weak self] in
