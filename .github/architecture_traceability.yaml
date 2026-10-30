@@ -1280,6 +1280,7 @@ ARC-IO-001:
   unit_tests:
     - tests/unit/test_async_io_guards.py::test_swift_guard_rejects_waits_in_every_product_source
     - tests/unit/test_async_io_guards.py::test_python_guard_rejects_new_wait_without_exception
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxProxyProviderTests.swift::listenerReadinessDrainAdmitsEveryQueuedSOCKSClient
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpDuplexSessionUsesReadinessCallbacksAfterBootstrap
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tlsWebSocketSessionUsesNIOCallbacksAfterBootstrap

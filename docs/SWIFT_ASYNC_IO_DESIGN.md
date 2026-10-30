@@ -22,6 +22,7 @@ the focused runtime tests while the remaining conversions are completed.
 | --- | --- | --- | --- |
 | Linux | myUDP, TCP, WebSocket, TLS WebSocket, QUIC outbound overlay | POSIX `DispatchSourceRead` or NIO inbound callback with incremental record buffers | `ObstacleBridgeLinuxOverlayTransportTests` |
 | Linux | local TCP/UDP service sockets | nonblocking listener plus `MSG_DONTWAIT` drain on the serial service owner | `ObstacleBridgeLinuxServiceSocketOwnerTests` |
+| Linux | in-process HTTP/SOCKS proxy listener admission | nonblocking listener plus readiness-owned accept-queue drain | `ObstacleBridgeLinuxProxyProviderTests.listenerReadinessDrainAdmitsEveryQueuedSOCKSClient` |
 | Linux | inline TUN | `DispatchSourceRead` plus nonblocking TUN descriptor | `ObstacleBridgeLinuxTunDeviceTests` |
 | Linux | helper control, packet, and event IPC | nonblocking listener/client `DispatchSourceRead` sources plus the shared incremental OBIP frame buffer | `ObstacleBridgeWorkerIPCTests.incrementalDecoderRetainsPartialFrameUntilReadinessDeliversItsRemainder`, `packetDeviceReceivesHelperPacketAndEventThroughReadinessSource` |
 | macOS | packaged TUN-helper control, packet, and event IPC | nonblocking accepted-client `DispatchSourceRead` sources plus the shared incremental OBIP frame buffer | `test_macos_tun_helper_package_skeleton_sources_exist` |
@@ -41,6 +42,7 @@ must be converted rather than retained indefinitely.
 | --- | --- | --- |
 | Linux TCP and TLS-WebSocket listener admission | framed SecureLink and HTTP-upgrade reads | listener-owned readiness state machine with incremental HTTP/WebSocket/OBIP buffers |
 | Linux foreground and native-child Admin web servers | live-WebSocket polling loops | ordinary HTTP requests use per-client readiness sources with bounded reassembly; replace live polling with a timer-driven live-topic scheduler |
+| Linux in-process HTTP/SOCKS proxy client parsing and relay | blocking per-connection reads | per-client readiness state machine with incremental HTTP/SOCKS buffers and queued write readiness |
 | Linux native peer/Admin worker IPC | `FileHandle` framed reads after bootstrap | descriptor readiness source with generation-fenced incremental OBIP decoder |
 | Linux TUN helper control IPC | synchronous request/reply reads | callback-based correlated control requests; preserve independent request deadline |
 | Desktop logging supervisor query | bounded poll/receive request path | descriptor readiness handling and callback completion for bounded queries |

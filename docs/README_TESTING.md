@@ -1012,6 +1012,8 @@ Diff-based Python and Swift runtime guards reject new blocking receive/read, syn
 
 Linux plain TCP and WebSocket live receive are readiness-driven after bootstrap: callback tests cover a peer-first record and TLS/QUIC echo paths, while their incremental decoders retain partial frame bytes and never complete a record with a blocking read or condition wait.
 
+The Linux in-process proxy listener is nonblocking and drains all queued accepts from one readiness notification; HTTP/SOCKS parsing and relay remain separately tracked as the next per-connection readiness conversion.
+
 ### First traceability mapping for the unit suite
 
 | Unit test file | Architectural component | Related requirement/supporting IDs | Defended invariant or contract | How to start |

@@ -683,6 +683,8 @@ Linux-native myUDP transitions from its bounded synchronous bootstrap exchange t
 
 Implementation note: the diff guards apply to every Python runtime and Swift product source root rather than a named test-file inventory. They reject newly added synchronous readiness waits, condition/future waits, `FileHandle.availableData`, and sleep polling as well as raw receives; only a line-local bounded dependency exception is admissible.
 
+Implementation note: the Linux in-process HTTP/SOCKS proxy listener is an `O_NONBLOCK` readiness owner and drains all pending accepts before its callback returns. Client parsing and bidirectional relay remain a separate incremental state-machine conversion; they must not use the listener callback as a synchronous fallback.
+
 Linux-native plain TCP similarly transitions after bootstrap to a POSIX readiness source plus an incremental length-prefixed frame decoder. Partial headers and bodies remain buffered for a later readability notification; the readiness callback shall never call a blocking read to complete a record. Plain WebSocket uses the same POSIX readiness source with incremental WebSocket framing. TLS WebSocket and QUIC expose their existing NIO inbound callbacks through equivalent incremental decoders; none of these post-bootstrap client receive owners may wait on a condition variable or socket read for a missing frame byte.
 
 Runtime Analysis excludes `apple_transport_payload_route` and `apple_transport_delivered_payload`: they are routing/delivery wrappers, not one actionable uninterrupted operation. Per-payload SecureLink handoff, ChannelMux dispatch, and TUN/TCP/UDP branch metrics remain eligible to identify the leading work.

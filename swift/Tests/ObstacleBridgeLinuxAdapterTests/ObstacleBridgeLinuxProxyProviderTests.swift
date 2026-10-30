@@ -6,6 +6,19 @@ import Glibc
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxProxyProviderTests {
+    @Test func listenerReadinessDrainAdmitsEveryQueuedSOCKSClient() throws {
+        let provider = ObstacleBridgeLinuxProxyProvider(configuration: .init(enabled: true, socks5Port: 0, httpEnabled: false, allowPrivateDestinations: true))
+        try provider.start(); defer { provider.stop() }
+        let port = try #require(provider.snapshot()["socks5_port"] as? Int)
+        let first = try connect(port: port); defer { _ = close(first) }
+        let second = try connect(port: port); defer { _ = close(second) }
+        try send(first, Data([5, 1, 0]))
+        try send(second, Data([5, 1, 0]))
+        #expect(try receive(first) == Data([5, 0]))
+        #expect(try receive(second) == Data([5, 0]))
+        #expect((provider.snapshot()["accepted_connections"] as? Int ?? 0) >= 2)
+    }
+
     @Test func listenersServeAuthenticationAndSOCKS5Negotiation() throws {
         let provider = ObstacleBridgeLinuxProxyProvider(configuration: .init(enabled: true, httpPort: 0, socks5Port: 0, credentials: ("operator", "token"), allowPrivateDestinations: true))
         try provider.start(); defer { provider.stop() }
