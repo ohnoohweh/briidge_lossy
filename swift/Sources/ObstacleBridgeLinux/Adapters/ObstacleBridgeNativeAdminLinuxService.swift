@@ -901,8 +901,8 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         return ""
     }
 
-    private func metaPayload() -> [String: Any] {
-        let status = try? parentRPC.call(method: "get_status_snapshot")
+    private func metaPayload(timeout: TimeInterval = 0.35) -> [String: Any] {
+        let status = try? parentRPC.call(method: "get_status_snapshot", timeout: timeout)
         let snapshot = status as? [String: Any] ?? [:]
         return [
             "app": "ObstacleBridgeLinux",
@@ -918,8 +918,8 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         ]
     }
 
-    private func tunRoutingPayload() -> [String: Any] {
-        let status = try? parentRPC.call(method: "get_status_snapshot")
+    private func tunRoutingPayload(timeout: TimeInterval = 0.35) -> [String: Any] {
+        let status = try? parentRPC.call(method: "get_status_snapshot", timeout: timeout)
         let snapshot = status as? [String: Any] ?? [:]
         let tun = snapshot["tun"] as? [Any] ?? []
         let helper = snapshot["tun_helper"] as? [String: Any] ?? [:]
@@ -977,12 +977,18 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     }
 
     private func livePayload(topic: String) -> [String: Any]? {
+        // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxTunDeviceTests
+        // A live session publishes its initial topic set in one readiness
+        // turn. Allow the parent a full refresh interval to answer each
+        // bounded call so a briefly busy supervisor cannot tear down the
+        // browser socket halfway through its handshake.
+        let timeout: TimeInterval = 1
         switch topic {
-        case "status": return (try? parentRPC.call(method: "get_status_snapshot")) as? [String: Any]
-        case "peers": return (try? parentRPC.call(method: "get_peer_connections_snapshot")) as? [String: Any]
-        case "connections": return (try? parentRPC.call(method: "get_connections_snapshot")) as? [String: Any]
-        case "meta": return metaPayload()
-        case "tun_routing": return tunRoutingPayload()
+        case "status": return (try? parentRPC.call(method: "get_status_snapshot", timeout: timeout)) as? [String: Any]
+        case "peers": return (try? parentRPC.call(method: "get_peer_connections_snapshot", timeout: timeout)) as? [String: Any]
+        case "connections": return (try? parentRPC.call(method: "get_connections_snapshot", timeout: timeout)) as? [String: Any]
+        case "meta": return metaPayload(timeout: timeout)
+        case "tun_routing": return tunRoutingPayload(timeout: timeout)
         default: return nil
         }
     }

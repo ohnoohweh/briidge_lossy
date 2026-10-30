@@ -708,7 +708,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
 
     private func readWebSocketOutput(from descriptor: Int32, initial: Data = Data(), until complete: (Data) -> Bool) throws -> Data {
         var output = initial
-        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
         guard setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
             throw POSIXError(.EINVAL)
         }
@@ -729,7 +729,10 @@ struct ObstacleBridgeLinuxTunDeviceTests {
     private func readSocketChunk(from descriptor: Int32) throws -> Data {
         var buffer = [UInt8](repeating: 0, count: 4096)
         let count = read(descriptor, &buffer, buffer.count)
-        guard count > 0 else { throw POSIXError(.EIO) }
+        guard count > 0 else {
+            if count < 0, errno == EAGAIN || errno == EWOULDBLOCK { throw POSIXError(.ETIMEDOUT) }
+            throw POSIXError(.EIO)
+        }
         return Data(buffer.prefix(Int(count)))
     }
 
