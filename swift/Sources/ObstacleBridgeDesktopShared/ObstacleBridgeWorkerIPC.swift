@@ -211,3 +211,28 @@ public enum ObstacleBridgeWorkerIPC {
         }
     }
 }
+
+/// Incrementally decodes a byte stream delivered by a readiness callback.
+///
+/// This type deliberately owns only framing state: callers confine an
+/// instance to one serial callback owner and decide how peer lifecycle errors
+/// are handled.  It therefore makes partial Unix-socket and pipe reads safe
+/// without turning an incomplete frame into a synchronous `readExactly` wait.
+public struct ObstacleBridgeWorkerIPCStreamDecoder {
+    private var buffered = Data()
+
+    public init() {}
+
+    public var bufferedByteCount: Int { buffered.count }
+
+    public mutating func append(_ bytes: Data) throws -> [ObstacleBridgeWorkerIPC.Frame] {
+        buffered.append(bytes)
+        var frames: [ObstacleBridgeWorkerIPC.Frame] = []
+        while true {
+            let decoded = try ObstacleBridgeWorkerIPC.decode(buffered)
+            guard let frame = decoded.0 else { return frames }
+            frames.append(frame)
+            buffered = decoded.1
+        }
+    }
+}

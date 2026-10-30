@@ -20,7 +20,7 @@ in this document are completed.
 | Linux | myUDP, TCP, WebSocket, TLS WebSocket, QUIC outbound overlay | POSIX `DispatchSourceRead` or NIO inbound callback with incremental record buffers | `ObstacleBridgeLinuxOverlayTransportTests` |
 | Linux | local TCP/UDP service sockets | nonblocking listener plus `MSG_DONTWAIT` drain on the serial service owner | `ObstacleBridgeLinuxServiceSocketOwnerTests` |
 | Linux | inline TUN | `DispatchSourceRead` plus nonblocking TUN descriptor | `ObstacleBridgeLinuxTunDeviceTests` |
-| Linux | long-lived helper packet/event IPC | `DispatchSourceRead` plus incremental OBIP frame buffer | `packetDeviceReceivesHelperPacketAndEventThroughReadinessSource` |
+| Linux | helper control, packet, and event IPC | nonblocking listener/client `DispatchSourceRead` sources plus the shared incremental OBIP frame buffer | `ObstacleBridgeWorkerIPCTests.incrementalDecoderRetainsPartialFrameUntilReadinessDeliversItsRemainder`, `packetDeviceReceivesHelperPacketAndEventThroughReadinessSource` |
 | macOS Python helper | `utun` packet device | asyncio descriptor readiness plus bounded nonblocking FIFO drain | `test_tun_helper_macos_backend.py` |
 | Linux and desktop | logging collector datagrams | `DispatchSourceRead` plus nonblocking bounded datagram drain | collector UDP record/query probe |
 | macOS | Network.framework overlay, proxy, Admin, and service sockets | Network.framework receive completion | Apple host/simulator adapter tests |

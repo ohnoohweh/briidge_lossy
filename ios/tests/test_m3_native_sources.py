@@ -14,6 +14,13 @@ def test_shared_worker_ipc_source_rejects_duplicate_control_members() -> None:
     assert "JSONSerialization.jsonObject" in common_ipc
 
 
+def test_shared_worker_ipc_source_exposes_incremental_readiness_framing() -> None:
+    common_ipc = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeWorkerIPC.swift").read_text(encoding="utf-8")
+    assert "struct ObstacleBridgeWorkerIPCStreamDecoder" in common_ipc
+    assert "mutating func append(_ bytes: Data)" in common_ipc
+    assert "ObstacleBridgeWorkerIPC.decode(buffered)" in common_ipc
+
+
 def test_shared_native_admin_child_source_uses_inherited_control_and_lifetime_descriptors() -> None:
     child = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeNativeAdminWorker.swift").read_text(encoding="utf-8")
     macos_service = (ROOT / "swift" / "Sources" / "ObstacleBridgeMacOS" / "ObstacleBridgeNativeAdminMacOSService.swift").read_text(encoding="utf-8")

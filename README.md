@@ -1661,7 +1661,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `78` | `1154` |
+| Python CLI/runtime, including macOS Python | `78` | `1166` |
 | macOS Swift app | `1` | `88` |
 | iOS app/extension | `32` | `216` |
 
@@ -1669,15 +1669,15 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `82/93 = 88.2%` | `91/93 = 97.8%` | `91/93 = 97.8%` |
-| macOS Swift app | `5/93 = 5.4%` | `9/93 = 9.7%` | `14/93 = 15.1%` |
-| iOS app/extension | `10/93 = 10.8%` | `26/93 = 28.0%` | `28/93 = 30.1%` |
+| Python CLI/runtime, including macOS Python | `82/94 = 87.2%` | `92/94 = 97.9%` | `92/94 = 97.9%` |
+| macOS Swift app | `5/94 = 5.3%` | `11/94 = 11.7%` | `16/94 = 17.0%` |
+| iOS app/extension | `10/94 = 10.6%` | `26/94 = 27.7%` | `28/94 = 29.8%` |
 
 #### Architecture traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `7/8 = 87.5%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
+| Python CLI/runtime, including macOS Python | `8/8 = 100.0%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
 | macOS Swift app | `1/8 = 12.5%` | `4/8 = 50.0%` | `4/8 = 50.0%` |
 | iOS app/extension | `4/8 = 50.0%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
 
@@ -1705,9 +1705,9 @@ Desktop-only process ownership is reviewed across macOS and Linux; iOS extension
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `82` | `0` | `82` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `88` | `0` | `88` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `34` | `34` |
-| Total parity-oriented evidence | Sum of the lanes above | `94` | `154` | `248` |
+| Total parity-oriented evidence | Sum of the lanes above | `100` | `154` | `254` |
 
 Important caveat:
 

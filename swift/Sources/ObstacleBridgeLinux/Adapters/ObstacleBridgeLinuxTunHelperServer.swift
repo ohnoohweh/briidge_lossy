@@ -43,11 +43,15 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     private let unauthenticatedClientIdleTimeout: TimeInterval
     private let backend: ObstacleBridgeLinuxTunHelperServerBackend
     private let onStop: (() -> Void)?
-    private let queue = DispatchQueue(label: "org.obstaclebridge.linux.tun-helper-server", attributes: .concurrent)
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxTunHelperAdapterTests
+    // One callback owner serializes connection framing and state transitions.
+    private let queue = DispatchQueue(label: "org.obstaclebridge.linux.tun-helper-server")
     private let watchdogQueue = DispatchQueue(label: "org.obstaclebridge.linux.tun-helper-server.watchdog")
     private let lock = NSLock()
     private let writerLock = NSLock()
     private var listener: Int32 = -1
+    private var listenerSource: DispatchSourceRead?
+    private var clientSources: [Int32: DispatchSourceRead] = [:]
     private var running = false
     private var authenticatedClients: Set<Int32> = []
     private var clientGenerations: [Int32: UInt64] = [:]
@@ -86,6 +90,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         let bound = withUnsafePointer(to: &address) { pointer in pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
         guard bound == 0, listen(fd, 16) == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxTunHelperAdapterError.connectFailed(code) }
         applySocketOwnership()
+        try setNonblocking(fd)
         listener = fd; running = true; hasAuthenticatedClient = false
         lastAuthenticatedActivityNanoseconds = DispatchTime.now().uptimeNanoseconds
         if authenticatedClientIdleTimeout > 0 {
@@ -95,7 +100,11 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
             watchdog.setEventHandler { [weak self] in self?.expireIdleHelperIfNeeded() }
             self.watchdog = watchdog; watchdog.resume()
         }
-        queue.async { [weak self] in self?.acceptLoop() }
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        source.setEventHandler { [weak self] in self?.acceptReadyClients() }
+        source.setCancelHandler { _ = close(fd) }
+        listenerSource = source
+        source.resume()
     }
 
     public func stop() {
@@ -104,22 +113,34 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         listener = -1; running = false
         let watchdog = self.watchdog
         self.watchdog = nil
+        let listenerSource = self.listenerSource
+        self.listenerSource = nil
+        let clientSources = Array(self.clientSources.values)
+        self.clientSources.removeAll()
+        self.clientStates.removeAll()
         lock.unlock()
         watchdog?.cancel()
-        if fd >= 0 { _ = shutdown(fd, Int32(SHUT_RDWR)); _ = close(fd) }
+        if fd >= 0 { _ = shutdown(fd, Int32(SHUT_RDWR)) }
+        listenerSource?.cancel()
+        clientSources.forEach { $0.cancel() }
         lock.lock(); authenticatedClients.removeAll(); clientGenerations.removeAll(); lock.unlock()
         _ = unlink(socketPath)
         backend.stop()
         onStop?()
     }
 
-    private func acceptLoop() {
+    private func acceptReadyClients() {
         while true {
             lock.lock(); let active = running; let fd = listener; lock.unlock()
             guard active, fd >= 0 else { return }
             let client = accept(fd, nil, nil)
-            guard client >= 0 else { continue }
-            queue.async { [weak self] in self?.handle(client: client) }
+            guard client >= 0 else {
+                if errno == EAGAIN || errno == EWOULDBLOCK { return }
+                return
+            }
+            do { try setNonblocking(client) }
+            catch { _ = close(client); continue }
+            register(client: client)
         }
     }
 
@@ -133,48 +154,102 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         _ = chmod(socketPath, uid == nil ? 0o600 : 0o660)
     }
 
-    private func handle(client: Int32) {
-        defer { lock.lock(); authenticatedClients.remove(client); clientGenerations.removeValue(forKey: client); lock.unlock(); _ = close(client) }
+    private final class ClientState {
+        let fd: Int32
+        var decoder = ObstacleBridgeWorkerIPCStreamDecoder()
         var authenticated = false
         var generation: UInt64 = 0
+        init(fd: Int32) { self.fd = fd }
+    }
+
+    private var clientStates: [Int32: ClientState] = [:]
+
+    private func register(client: Int32) {
+        let state = ClientState(fd: client)
+        let source = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
+        source.setEventHandler { [weak self, weak state] in
+            guard let self, let state else { return }
+            self.receiveReadyBytes(state)
+        }
+        source.setCancelHandler { _ = close(client) }
+        lock.lock(); clientStates[client] = state; clientSources[client] = source; lock.unlock()
+        source.resume()
+    }
+
+    private func receiveReadyBytes(_ state: ClientState) {
+        var buffer = [UInt8](repeating: 0, count: 8192)
         while true {
-            let timeoutMS = authenticated ? nil : Int32(min(30_000, max(100, unauthenticatedClientIdleTimeout * 1_000)))
-            guard let frame = try? readFrame(from: client, timeoutMS: timeoutMS) else { return }
-            if generation == 0 {
-                guard frame.kind == .hello,
-                      let negotiated = try? ObstacleBridgeWorkerIPC.negotiatedCapabilities(frame, supported: Self.helperCapabilities),
-                      negotiated.role == "tun-helper-client", Set(negotiated.capabilities) == Self.helperCapabilities else { return }
-                generation = frame.generation
-                lock.lock(); clientGenerations[client] = generation; lock.unlock()
+            // MSG_DONTWAIT keeps a stale readiness notification harmless even
+            // if another owner changes the descriptor's status flags.
+            let received = recv(state.fd, &buffer, buffer.count, Int32(MSG_DONTWAIT))
+            if received > 0 {
                 do {
-                    try writeAll(try ObstacleBridgeWorkerIPC.hello(generation: generation, role: "tun-helper", capabilities: Array(Self.helperCapabilities)), to: client)
-                    try sendControl("READY", ["capabilities": Self.helperCapabilities.sorted()], kind: .ready, generation: generation, to: client)
-                } catch { return }
+                    for frame in try state.decoder.append(Data(buffer[0..<Int(received)])) {
+                        try handle(frame: frame, state: state)
+                    }
+                } catch { closeClient(state.fd); return }
                 continue
             }
-            guard frame.generation == generation else { return }
-            switch frame.kind {
+            if received == 0 { closeClient(state.fd); return }
+            if errno == EAGAIN || errno == EWOULDBLOCK { return }
+            closeClient(state.fd); return
+        }
+    }
+
+    private func handle(frame: ObstacleBridgeWorkerIPC.Frame, state: ClientState) throws {
+        let client = state.fd
+        if state.generation == 0 {
+                guard frame.kind == .hello,
+                      let negotiated = try? ObstacleBridgeWorkerIPC.negotiatedCapabilities(frame, supported: Self.helperCapabilities),
+                      negotiated.role == "tun-helper-client", Set(negotiated.capabilities) == Self.helperCapabilities else { throw ObstacleBridgeWorkerIPC.Failure.invalidFrame }
+                state.generation = frame.generation
+                lock.lock(); clientGenerations[client] = state.generation; lock.unlock()
+                do {
+                    try writeAll(try ObstacleBridgeWorkerIPC.hello(generation: state.generation, role: "tun-helper", capabilities: Array(Self.helperCapabilities)), to: client)
+                    try sendControl("READY", ["capabilities": Self.helperCapabilities.sorted()], kind: .ready, generation: state.generation, to: client)
+                } catch { throw error }
+                return
+        }
+        guard frame.generation == state.generation else { throw ObstacleBridgeWorkerIPC.Failure.invalidFrame }
+        switch frame.kind {
             case .request:
-                guard let message = decodeControl(frame) else { try? sendError("bad_control_payload", "invalid common IPC control message", generation: generation, to: client); continue }
+                guard let message = decodeControl(frame) else { try? sendError("bad_control_payload", "invalid common IPC control message", generation: state.generation, to: client); return }
                 let operation = message.operation.uppercased()
                 if operation == "HELLO" {
-                    guard !authenticated else { try? sendError("already_authenticated", "HELLO is accepted only once", generation: generation, to: client); continue }
-                    guard message.payload["token"] as? String == sessionToken else { try? sendError("auth_failed", "invalid session token", generation: generation, to: client); continue }
-                    authenticated = true
+                    guard !state.authenticated else { try? sendError("already_authenticated", "HELLO is accepted only once", generation: state.generation, to: client); return }
+                    guard message.payload["token"] as? String == sessionToken else { try? sendError("auth_failed", "invalid session token", generation: state.generation, to: client); return }
+                    state.authenticated = true
                     lock.lock(); authenticatedClients.insert(client); hasAuthenticatedClient = true; lastAuthenticatedActivityNanoseconds = DispatchTime.now().uptimeNanoseconds; lock.unlock()
-                    try? sendControl("HELLO_OK", ["authenticated": true], generation: generation, to: client)
-                    continue
+                    try? sendControl("HELLO_OK", ["authenticated": true], generation: state.generation, to: client)
+                    return
                 }
-                guard authenticated else { try? sendError("not_authenticated", "HELLO required before helper commands", generation: generation, to: client); continue }
+                guard state.authenticated else { try? sendError("not_authenticated", "HELLO required before helper commands", generation: state.generation, to: client); return }
                 markAuthenticatedActivity()
-                handleControl(operation: operation, payload: message.payload, generation: generation, client: client)
+                handleControl(operation: operation, payload: message.payload, generation: state.generation, client: client)
             case .data:
-                guard authenticated else { try? sendError("not_authenticated", "HELLO required before helper packet writes", generation: generation, to: client); continue }
+                guard state.authenticated else { try? sendError("not_authenticated", "HELLO required before helper packet writes", generation: state.generation, to: client); return }
                 markAuthenticatedActivity()
-                do { try backend.writePacket(frame.payload) } catch { try? sendError("write_packet_failed", error.localizedDescription, generation: generation, to: client) }
+                do { try backend.writePacket(frame.payload) } catch { try? sendError("write_packet_failed", error.localizedDescription, generation: state.generation, to: client) }
             default:
-                try? sendError("unexpected_frame_kind", "\(frame.kind.rawValue)", generation: generation, to: client)
-            }
+                try? sendError("unexpected_frame_kind", "\(frame.kind.rawValue)", generation: state.generation, to: client)
+        }
+    }
+
+    private func closeClient(_ fd: Int32) {
+        lock.lock()
+        authenticatedClients.remove(fd)
+        clientGenerations.removeValue(forKey: fd)
+        clientStates.removeValue(forKey: fd)
+        let source = clientSources.removeValue(forKey: fd)
+        lock.unlock()
+        _ = shutdown(fd, Int32(SHUT_RDWR))
+        source?.cancel()
+    }
+
+    private func setNonblocking(_ fd: Int32) throws {
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.connectFailed(errno)
         }
     }
 
@@ -258,26 +333,5 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
             guard count > 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected }
             offset += Int(count)
         }
-    }
-    private func readFrame(from fd: Int32, timeoutMS: Int32? = nil) throws -> ObstacleBridgeWorkerIPC.Frame {
-        if let timeoutMS {
-            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-            guard poll(&descriptor, 1, timeoutMS) > 0, descriptor.revents & Int16(POLLIN) != 0 else {
-                throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected
-            }
-        }
-        let wireHeader = try readExactly(ObstacleBridgeWorkerIPC.headerBytes, from: fd)
-        let bodyLength: Int
-        do { bodyLength = try ObstacleBridgeWorkerIPC.frameSize(wireHeader) ?? 0 }
-        catch ObstacleBridgeWorkerIPC.Failure.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
-        catch { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("unknown frame kind") }
-        let decoded = try? ObstacleBridgeWorkerIPC.decode(wireHeader + (try readExactly(bodyLength, from: fd)))
-        guard let frame = decoded?.0, decoded?.1.isEmpty == true else { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("incomplete common IPC frame") }
-        return frame
-    }
-    private func readExactly(_ count: Int, from fd: Int32) throws -> Data {
-        var result = Data(); var buffer = [UInt8](repeating: 0, count: min(8192, max(1, count)))
-        while result.count < count { let received = read(fd, &buffer, min(buffer.count, count - result.count)); guard received > 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected }; result.append(buffer, count: Int(received)) }
-        return result
     }
 }

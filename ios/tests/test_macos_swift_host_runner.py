@@ -98,6 +98,8 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert "public static let maximumFrameBytes = 1_048_576" in common_ipc
     assert "ControlJSONScanner" in common_ipc
     assert "hasDuplicateObjectKey" in common_ipc
+    assert "ObstacleBridgeWorkerIPCStreamDecoder" in common_ipc
+    assert "ObstacleBridgeWorkerIPC.decode(buffered)" in common_ipc
     assert "nativeAdminChildControlArgument" in entrypoint
     assert 'nativeAdminChildControlArgument = "--admin-worker-control-fd"' in helper_service
     assert 'nativeAdminChildLogArgument = "--log-fd"' in helper_service

@@ -2071,6 +2071,9 @@ REQ-IO-001:
   # reads, covered by owner-loss and fragmented-frame Linux tests.
   # Linux/macOS native peer workers use the same nonblocking frame read with
   # an isolated child-process poll compatibility loop.
+  # Linux-native TUN-helper listener and accepted control clients likewise
+  # retain partial OBIP frames in a shared incremental decoder behind serial
+  # Dispatch read sources.
   # The myUDP exchange fallback retains only its configured bounded poll;
   # each datagram receive uses MSG_DONTWAIT before async ownership begins.
   unit_tests:
@@ -2087,3 +2090,4 @@ REQ-IO-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::tcpListenerPublishesOpenAndDataFrames
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::ownsBidirectionalNonBlockingPacketIO
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::packetDeviceReceivesHelperPacketAndEventThroughReadinessSource
+    - swift/Tests/ObstacleBridgeDesktopSharedTests/ObstacleBridgeWorkerIPCTests.swift::incrementalDecoderRetainsPartialFrameUntilReadinessDeliversItsRemainder
