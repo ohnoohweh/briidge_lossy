@@ -689,12 +689,32 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         }
         guard connected == 0 else { throw POSIXError(.ECONNREFUSED) }
         try writeAll(Data("GET /api/live HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nCookie: \(cookie)\r\n\r\n".utf8), to: client)
-        var output = try readSocketChunk(from: client)
-        output.append(try readSocketChunk(from: client))
+        var output = try readWebSocketOutput(from: client) { data in
+            let text = String(decoding: data, as: UTF8.self)
+            return text.contains("HTTP/1.1 101 Switching Protocols")
+                && text.contains("\"type\":\"hello\"")
+                && text.contains("\"type\":\"status\"")
+                && text.contains("\"type\":\"connections\"")
+                && text.contains("\"type\":\"meta\"")
+                && text.contains("\"type\":\"peers\"")
+        }
         let control = try JSONSerialization.data(withJSONObject: ["subscribe": ["peers"], "request": "peers"])
         try writeAll(maskedWebSocketTextFrame(control), to: client)
-        output.append(try readSocketChunk(from: client))
-        output.append(try readSocketChunk(from: client))
+        output = try readWebSocketOutput(from: client, initial: output) { data in
+            String(decoding: data, as: UTF8.self).components(separatedBy: "\"type\":\"peers\"").count >= 3
+        }
+        return output
+    }
+
+    private func readWebSocketOutput(from descriptor: Int32, initial: Data = Data(), until complete: (Data) -> Bool) throws -> Data {
+        var output = initial
+        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        guard setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            throw POSIXError(.EINVAL)
+        }
+        while !complete(output) {
+            output.append(try readSocketChunk(from: descriptor))
+        }
         return output
     }
 
