@@ -83,7 +83,12 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             for topic in topics.sorted() where now >= (nextDue[topic] ?? 0) {
                 guard let value = payload(topic) else { finish(); return }
                 enqueueJSON(["type": topic, "data": value])
-                nextDue[topic] = now + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxTunDeviceTests
+                // `payload` performs a bounded parent RPC. Schedule from the
+                // completion time, rather than the turn's stale entry time,
+                // so a busy supervisor cannot cause an immediate duplicate
+                // refresh on the next timer event.
+                nextDue[topic] = ProcessInfo.processInfo.systemUptime + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
             }
         }
 
