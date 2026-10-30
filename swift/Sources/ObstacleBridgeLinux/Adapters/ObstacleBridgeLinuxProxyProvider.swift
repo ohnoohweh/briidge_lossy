@@ -18,6 +18,120 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
     private var failed = 0
     private var boundHTTPPort = 0
     private var boundSOCKS5Port = 0
+    private var relays: [Int32: Relay] = [:]
+
+    /// Owns both directions of a proxied stream. Each descriptor is drained
+    /// only after Dispatch reports readiness; incomplete writes stay queued
+    /// behind a write source instead of parking a worker in `poll`.
+    private final class Relay: @unchecked Sendable {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxProxyProviderTests
+        private let client: Int32
+        private let remote: Int32
+        private let queue: DispatchQueue
+        private let finished: (Int32, Bool) -> Void
+        private var clientRead: DispatchSourceRead?
+        private var remoteRead: DispatchSourceRead?
+        private var clientWrite: DispatchSourceWrite?
+        private var remoteWrite: DispatchSourceWrite?
+        private var toClient = Data()
+        private var toRemote = Data()
+        private var clientInputOpen = true
+        private var remoteInputOpen = true
+        private var stopped = false
+
+        init(client: Int32, remote: Int32, finished: @escaping (Int32, Bool) -> Void) {
+            self.client = client
+            self.remote = remote
+            self.queue = DispatchQueue(label: "org.obstaclebridge.linux.proxy.relay.\(client)")
+            self.finished = finished
+        }
+
+        func start() {
+            queue.async { [weak self] in
+                guard let self else { return }
+                guard self.makeNonblocking(self.client), self.makeNonblocking(self.remote) else { self.finish(failed: true); return }
+                let clientRead = DispatchSource.makeReadSource(fileDescriptor: self.client, queue: self.queue)
+                let remoteRead = DispatchSource.makeReadSource(fileDescriptor: self.remote, queue: self.queue)
+                self.clientRead = clientRead; self.remoteRead = remoteRead
+                clientRead.setEventHandler { [weak self] in self?.drain(fromClient: true) }
+                remoteRead.setEventHandler { [weak self] in self?.drain(fromClient: false) }
+                clientRead.resume(); remoteRead.resume()
+            }
+        }
+
+        func stop() { queue.async { [weak self] in self?.finish(failed: false) } }
+
+        private func drain(fromClient: Bool) {
+            let source = fromClient ? client : remote
+            while true {
+                var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+                let count = recv(source, &buffer, buffer.count, Int32(MSG_DONTWAIT))
+                if count > 0 {
+                    if fromClient { toRemote.append(buffer, count: Int(count)); flush(toClient: false) }
+                    else { toClient.append(buffer, count: Int(count)); flush(toClient: true) }
+                    continue
+                }
+                if count < 0, errno == EINTR { continue }
+                if count < 0, errno == EAGAIN || errno == EWOULDBLOCK { return }
+                if count == 0 {
+                    if fromClient { clientInputOpen = false; clientRead?.cancel(); clientRead = nil; _ = shutdown(remote, Int32(SHUT_WR)) }
+                    else { remoteInputOpen = false; remoteRead?.cancel(); remoteRead = nil; _ = shutdown(client, Int32(SHUT_WR)) }
+                    finishIfDrained()
+                    return
+                }
+                finish(failed: true)
+                return
+            }
+        }
+
+        private func flush(toClient: Bool) {
+            var pending = toClient ? self.toClient : toRemote
+            let destination = toClient ? client : remote
+            while !pending.isEmpty {
+                let count = pending.withUnsafeBytes { send(destination, $0.baseAddress, pending.count, Int32(MSG_NOSIGNAL | MSG_DONTWAIT)) }
+                if count > 0 { pending.removeFirst(Int(count)); continue }
+                if count < 0, errno == EINTR { continue }
+                if count < 0, errno == EAGAIN || errno == EWOULDBLOCK {
+                    if toClient { self.toClient = pending; installWrite(toClient: true) }
+                    else { self.toRemote = pending; installWrite(toClient: false) }
+                    return
+                }
+                finish(failed: true)
+                return
+            }
+            if toClient { self.toClient = pending; clientWrite?.cancel(); clientWrite = nil }
+            else { self.toRemote = pending; remoteWrite?.cancel(); remoteWrite = nil }
+            finishIfDrained()
+        }
+
+        private func installWrite(toClient: Bool) {
+            if toClient, clientWrite != nil { return }
+            if !toClient, remoteWrite != nil { return }
+            let source = DispatchSource.makeWriteSource(fileDescriptor: toClient ? client : remote, queue: queue)
+            source.setEventHandler { [weak self] in self?.flush(toClient: toClient) }
+            if toClient { clientWrite = source } else { remoteWrite = source }
+            source.resume()
+        }
+
+        private func finishIfDrained() {
+            guard !clientInputOpen, !remoteInputOpen, toClient.isEmpty, toRemote.isEmpty else { return }
+            finish(failed: false)
+        }
+
+        private func finish(failed: Bool) {
+            guard !stopped else { return }
+            stopped = true
+            clientRead?.cancel(); remoteRead?.cancel(); clientWrite?.cancel(); remoteWrite?.cancel()
+            clientRead = nil; remoteRead = nil; clientWrite = nil; remoteWrite = nil
+            _ = close(client); _ = close(remote)
+            finished(client, failed)
+        }
+
+        private func makeNonblocking(_ descriptor: Int32) -> Bool {
+            let flags = fcntl(descriptor, F_GETFL)
+            return flags >= 0 && fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0
+        }
+    }
 
     public init(configuration: ObstacleBridgeLinuxProxyProviderConfiguration) { self.configuration = configuration }
 
@@ -27,7 +141,11 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
         if configuration.socks5Enabled { try install(port: configuration.socks5Port, socks: true) }
     }
 
-    public func stop() { listeners.forEach { $0.source.cancel() }; listeners.removeAll() }
+    public func stop() {
+        listeners.forEach { $0.source.cancel() }; listeners.removeAll()
+        let active = relays.values; relays.removeAll()
+        active.forEach { $0.stop() }
+    }
 
     public func snapshot() -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
@@ -62,14 +180,25 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
     }
 
     private func serve(client: Int32, socks: Bool) {
-        defer { _ = close(client) }
         do {
-            if socks { try serveSOCKS(client) } else { try serveHTTP(client) }
-            lock.lock(); completed += 1; lock.unlock()
-        } catch { lock.lock(); failed += 1; lock.unlock() }
+            let remote = try socks ? serveSOCKS(client) : serveHTTP(client)
+            let relay = Relay(client: client, remote: remote) { [weak self] descriptor, relayFailed in
+                guard let self else { return }
+                self.queue.async {
+                    self.relays.removeValue(forKey: descriptor)
+                    self.lock.lock()
+                    if relayFailed { self.failed += 1 } else { self.completed += 1 }
+                    self.lock.unlock()
+                }
+            }
+            queue.async { [weak self] in self?.relays[client] = relay; relay.start() }
+        } catch {
+            _ = close(client)
+            lock.lock(); failed += 1; lock.unlock()
+        }
     }
 
-    private func serveHTTP(_ client: Int32) throws {
+    private func serveHTTP(_ client: Int32) throws -> Int32 {
         let data = try readHeader(client)
         guard let text = String(data: data, encoding: .isoLatin1), let line = text.split(separator: "\r\n").first else { throw ProxyError.invalid }
         let bits = line.split(separator: " ", maxSplits: 2).map(String.init); guard bits.count == 3 else { throw ProxyError.invalid }
@@ -78,17 +207,17 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
         let destination: (String, Int)
         if bits[0].uppercased() == "CONNECT" { destination = try authority(bits[1], defaultPort: 443) }
         else { guard let url = URL(string: bits[1]), let host = url.host else { throw ProxyError.invalid }; destination = (host, url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80)) }
-        let remote = try connect(destination.0, destination.1); defer { _ = close(remote) }
+        let remote = try connect(destination.0, destination.1)
         if bits[0].uppercased() == "CONNECT" { try write(client, "HTTP/1.1 200 Connection Established\r\nProxy-Agent: ObstacleBridge\r\n\r\n") }
         else {
             let target = URL(string: bits[1]).flatMap { url -> String? in var r = url.path.isEmpty ? "/" : url.path; if let q = url.query { r += "?" + q }; return r } ?? bits[1]
             let filtered = text.split(separator: "\r\n").dropFirst().filter { !$0.lowercased().hasPrefix("proxy-authorization:") && !$0.lowercased().hasPrefix("proxy-connection:") }
             try write(remote, (["\(bits[0]) \(target) \(bits[2])"] + filtered.map(String.init)).joined(separator: "\r\n") + "\r\n\r\n")
         }
-        relay(client, remote)
+        return remote
     }
 
-    private func serveSOCKS(_ client: Int32) throws {
+    private func serveSOCKS(_ client: Int32) throws -> Int32 {
         let greeting = try readExactly(client, 2); guard greeting[0] == 5 else { throw ProxyError.invalid }
         let methods = try readExactly(client, Int(greeting[1])); let required = configuration.credentials != nil
         let method: UInt8 = required ? 2 : 0
@@ -97,45 +226,8 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
         let header = try readExactly(client, 4); guard header[0] == 5, header[1] == 1 else { try write(client, Data([5,7,0,1,0,0,0,0,0,0])); throw ProxyError.invalid }
         let host: String
         switch header[3] { case 1: host = try readExactly(client, 4).map(String.init).joined(separator: "."); case 3: host = String(data: try readExactly(client, Int(try readExactly(client, 1)[0])), encoding: .utf8) ?? ""; case 4: host = try readExactly(client, 16).withUnsafeBytes { inet_ntop(AF_INET6, $0.baseAddress, UnsafeMutablePointer<CChar>.allocate(capacity: 46), 46) }.map { String(cString: $0) } ?? ""; default: throw ProxyError.invalid }
-        let portData = try readExactly(client, 2); let remote = try connect(host, Int(portData[0]) << 8 | Int(portData[1])); defer { _ = close(remote) }
-        try write(client, Data([5,0,0,1,0,0,0,0,0,0])); relay(client, remote)
-    }
-
-    private func relay(_ left: Int32, _ right: Int32) {
-        let group = DispatchGroup()
-        for (from, to) in [(left, right), (right, left)] {
-            group.enter()
-            DispatchQueue.global().async {
-                defer { group.leave() }
-                var buffer = [UInt8](repeating: 0, count: 16_384)
-                while true {
-                    let count = recv(from, &buffer, buffer.count, Int32(MSG_DONTWAIT))
-                    if count == 0 { _ = shutdown(to, Int32(SHUT_WR)); return }
-                    if count < 0 {
-                        if errno == EINTR { continue }
-                        if errno == EAGAIN || errno == EWOULDBLOCK {
-                            var descriptor = pollfd(fd: from, events: Int16(POLLIN), revents: 0)
-                            _ = poll(&descriptor, 1, 1_000) // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded relay-worker compatibility wait pending per-client readiness state machine.
-                            continue
-                        }
-                        _ = shutdown(to, Int32(SHUT_WR)); return
-                    }
-                    var offset = 0
-                    while offset < Int(count) {
-                        let written = buffer.withUnsafeBytes { send(to, $0.baseAddress!.advanced(by: offset), Int(count) - offset, Int32(MSG_NOSIGNAL | MSG_DONTWAIT)) }
-                        if written > 0 { offset += Int(written); continue }
-                        if written < 0, errno == EINTR { continue }
-                        if written < 0, errno == EAGAIN || errno == EWOULDBLOCK {
-                            var descriptor = pollfd(fd: to, events: Int16(POLLOUT), revents: 0)
-                            guard poll(&descriptor, 1, 1_000) > 0 else { return } // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded relay-worker compatibility wait pending per-client readiness state machine.
-                            continue
-                        }
-                        return
-                    }
-                }
-            }
-        }
-        group.wait() // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded relay-worker lifetime join pending per-client readiness state machine.
+        let portData = try readExactly(client, 2); let remote = try connect(host, Int(portData[0]) << 8 | Int(portData[1]))
+        try write(client, Data([5,0,0,1,0,0,0,0,0,0])); return remote
     }
     private func readHeader(_ fd: Int32) throws -> Data { var result = Data(); while result.count < 65_536 { result.append(try readExactly(fd, 1)); if result.suffix(4) == Data("\r\n\r\n".utf8) { return result } }; throw ProxyError.invalid }
     /// Bounded parser compatibility path. The listener never delegates a

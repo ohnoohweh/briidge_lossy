@@ -61,7 +61,7 @@ rather than holding an HTTP worker in a polling loop.
 | --- | --- | --- |
 | Linux TCP and TLS-WebSocket listener admission | framed SecureLink and HTTP-upgrade reads | listener-owned readiness state machine with incremental HTTP/WebSocket/OBIP buffers |
 | Linux foreground Admin web server | live-WebSocket polling loops | ordinary HTTP requests use per-client readiness sources with bounded reassembly; replace live polling with a timer-driven live-topic scheduler |
-| Linux in-process HTTP/SOCKS proxy client parsing and relay | bounded `poll` compatibility waits with `MSG_DONTWAIT` reads | per-client readiness state machine with incremental HTTP/SOCKS buffers and queued write readiness |
+| Linux in-process HTTP/SOCKS proxy client parsing | bounded `poll` compatibility waits with `MSG_DONTWAIT` reads | per-client readiness state machine with incremental HTTP/SOCKS buffers; the duplex relay already owns nonblocking read/write readiness and bounded output queues |
 | Linux native Admin worker IPC | bounded parent-RPC request/reply reads after bootstrap | descriptor readiness source with generation-fenced incremental OBIP decoder and callback completion |
 | Linux TUN helper control IPC | synchronous request/reply reads | callback-based correlated control requests; preserve independent request deadline |
 | macOS XPC helper control | semaphore wait around XPC reply | async XPC command completion propagated to the caller's lifecycle owner |
