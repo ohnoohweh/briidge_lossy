@@ -34,6 +34,7 @@ public enum ObstacleBridgeLinuxTunHelperAdapterError: Error, Equatable, Localize
 /// Control requests intentionally remain on bounded independent exchanges;
 /// this connection only carries packet and EVENT fan-out.
 public final class ObstacleBridgeLinuxTunHelperPacketDevice: ObstacleBridgeLinuxPacketDevice, @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxTunHelperAdapterTests
     private let adapter: ObstacleBridgeLinuxTunHelperAdapter
     private let packetSink: (Data) -> Void
     private let eventSink: (String) -> Void

@@ -149,6 +149,7 @@ defer { close(socketFD) }
 defer { if lifetimeFD >= 0 { close(lifetimeFD) } }
 
 final class CollectorState: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_log_collector
     private let socketFD: Int32
     private let privateMode: Bool
     private let generation: UInt64

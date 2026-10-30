@@ -8,6 +8,7 @@ import NIOTLS
 /// kept below the existing WebSocket framing boundary so TLS never changes
 /// overlay, SecureLink, or ChannelMux byte ownership.
 final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSocketByteConnection, @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxOverlayTransportTests
     private final class TLSHandlerBox: @unchecked Sendable {
         let handler: NIOSSLClientHandler
         init(_ handler: NIOSSLClientHandler) { self.handler = handler }

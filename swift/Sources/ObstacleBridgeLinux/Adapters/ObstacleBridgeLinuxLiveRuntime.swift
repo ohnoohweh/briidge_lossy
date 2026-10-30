@@ -161,6 +161,7 @@ public enum ObstacleBridgeLinuxShutdownSignal: String, Sendable {
 }
 
 public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
     public var onDiagnostic: ((String, [String: String]) -> Void)?
     public var onDebugDiagnostic: ((String, [String: String]) -> Void)?

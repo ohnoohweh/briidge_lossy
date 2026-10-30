@@ -40,6 +40,7 @@ public struct ObstacleBridgeLinuxServiceSocketOwnerEpochReset: Equatable, Sendab
 /// callbacks and data-plane mutation run on one serial queue; no descriptor or
 /// channel state is touched by the overlay thread directly.
 public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxServiceSocketOwnerTests
     public typealias FrameSink = (ObstacleBridgeLinuxServiceSocketOwner, [ObstacleBridgeChannelMuxFrame]) -> Void
 
     private struct ChannelTraffic {

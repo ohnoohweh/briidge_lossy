@@ -66,6 +66,7 @@ public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
 /// session is explicit: callers must close it when their higher-level runtime
 /// decides the transport epoch has ended.
 public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests
     // The lower session's closures deliberately retain the client weakly to
     // avoid a client/session cycle. Keep the client alive for this configured
     // epoch so those closures remain usable after `connect` returns.

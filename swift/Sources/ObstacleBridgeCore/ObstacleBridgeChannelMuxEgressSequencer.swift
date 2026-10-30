@@ -26,6 +26,7 @@ public struct ObstacleBridgeChannelMuxEgressSource: Hashable, Sendable {
 /// appears at most once in the ready ring, so continuously ready traffic
 /// cannot regain the turn before every other ready source has had one record.
 public final class ObstacleBridgeChannelMuxEgressSequencer<Element>: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeChannelMuxEgressSequencerTests
     // Linux service owners and Apple framework callbacks may enqueue on a
     // different executor while a transport drain is in flight.  The owner
     // normally serializes those calls, but that is not a memory-safety

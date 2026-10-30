@@ -12,6 +12,7 @@ import Glibc
 /// authenticated API, sessions, configuration, and log-query parity remain
 /// outside this intentionally narrow surface.
 public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxTunDeviceTests
     private static let liveTopics = ["status", "connections", "peers", "tun_routing", "meta"]
     private static let initialLiveTopics = ["status", "connections", "peers", "meta"]
     private struct WebSocketFrame {

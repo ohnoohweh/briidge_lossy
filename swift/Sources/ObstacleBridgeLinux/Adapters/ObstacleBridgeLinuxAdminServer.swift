@@ -31,6 +31,7 @@ public enum ObstacleBridgeLinuxAdminServerError: Error, Equatable, LocalizedErro
 /// Minimal Linux-native Admin HTTP surface. It owns no transport state and
 /// reads only the runtime's redacted status projection.
 public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxAdminServerTests
     private let statusProvider: () -> ObstacleBridgeLinuxRuntimeStatus
     private let peersProvider: () -> [(identity: String, snapshot: ObstacleBridgeLinuxPeerSnapshot)]
     private let connectionsProvider: () -> [String: Any]

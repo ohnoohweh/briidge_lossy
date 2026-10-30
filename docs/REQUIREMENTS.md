@@ -683,6 +683,8 @@ Linux-native myUDP transitions from its bounded synchronous bootstrap exchange t
 
 Implementation note: the diff guards apply to every Python runtime and Swift product source root rather than a named test-file inventory. They reject newly added synchronous readiness waits, condition/future waits, `FileHandle.availableData`, and sleep polling as well as raw receives; only a line-local bounded dependency exception is admissible.
 
+Implementation note: an accompanying Swift concurrency guard rejects a changed mutable collection in an `@unchecked Sendable` product owner unless that diff records its lock, actor, or serial-executor boundary and the named exercising test. The current audited owner matrix and its stress-testing gap are maintained in [Swift unchecked-sendable concurrency coverage](SWIFT_CONCURRENCY_COVERAGE.md).
+
 Implementation note: the Linux in-process HTTP/SOCKS proxy listener is an `O_NONBLOCK` readiness owner and drains all pending accepts before its callback returns. Client parsing and bidirectional relay remain a separate incremental state-machine conversion; they must not use the listener callback as a synchronous fallback.
 
 Until that per-client owner is delivered, parsing and relay use only `MSG_DONTWAIT` receives with an explicit bounded compatibility wait; no proxy request or relay path may enter a blocking `read` or `recv`.

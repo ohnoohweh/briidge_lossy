@@ -24,6 +24,7 @@ public enum ObstacleBridgeNativeAdminWorker {
     /// Serialized parent-owned state access for a native Admin child. The
     /// inherited control descriptor remains the only RPC transport.
     public final class ParentRPC: @unchecked Sendable {
+        // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeWorkerIPCTests
         private static let methods: Set<String> = [
             "get_status_snapshot", "get_peer_connections_snapshot", "get_connections_snapshot",
             "get_config_snapshot", "get_onboarding_config_snapshot", "get_config_schema_snapshot", "get_debug_logs", "fetch_logs",
