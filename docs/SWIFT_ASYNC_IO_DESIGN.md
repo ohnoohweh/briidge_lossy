@@ -31,6 +31,9 @@ the focused runtime tests while the remaining conversions are completed.
 | macOS | Network.framework overlay, proxy, Admin, and service sockets | Network.framework receive completion | Apple host/simulator adapter tests |
 | macOS | `utun` packet device | `DispatchSourceRead` plus `O_NONBLOCK` descriptor | macOS adapter tests |
 | iOS | packet tunnel and Network.framework transport | `NEPacketTunnelFlow`/Network.framework callbacks | iOS extension tests and device qualification |
+| Python | threaded mTLS telemetry HTTP request body | dependency-owned buffered reader with a five-second socket deadline | `test_mtls_ingest_accepts_matching_client_identity` |
+
+Concurrency ownership is checked independently of the I/O mechanism. Any changed source file containing an `@unchecked Sendable` owner needs a same-diff `OBSTACLEBRIDGE-CONCURRENCY` marker that identifies its lock, actor, or serial owner and its regression test. This deliberately covers every `swift/Sources` product directory, including iOS sources that are compiled by the Apple product build but cannot run under host Thread Sanitizer. The macOS CI lane runs every host-runnable SwiftPM test target with Thread Sanitizer.
 
 ## Remaining conversion work
 

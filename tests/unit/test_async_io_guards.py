@@ -44,3 +44,29 @@ def test_python_guard_rejects_new_wait_without_exception(monkeypatch) -> None:
         ("src/obstacle_bridge/bridge.py", 10, "ready.wait()"),
     ])
     assert len(guard.validate(["--staged"])) == 1
+
+
+def test_swift_concurrency_guard_covers_every_product_owner(monkeypatch, tmp_path) -> None:
+    guard = _load("check_swift_concurrency_guard")
+    source = tmp_path / "swift" / "Sources" / "ObstacleBridgeiOS" / "PacketTunnelProvider.swift"
+    source.parent.mkdir(parents=True)
+    source.write_text("final class Owner: @unchecked Sendable { var state = 0 }", encoding="utf-8")
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    errors = guard.validate({
+        "swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift": ["state += 1"],
+    })
+    assert len(errors) == 1
+
+
+def test_swift_concurrency_guard_requires_usable_evidence(monkeypatch, tmp_path) -> None:
+    guard = _load("check_swift_concurrency_guard")
+    source = tmp_path / "swift" / "Sources" / "ObstacleBridgeiOS" / "PacketTunnelProvider.swift"
+    source.parent.mkdir(parents=True)
+    source.write_text("final class Owner: @unchecked Sendable { var state = 0 }", encoding="utf-8")
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    assert guard.validate({
+        "swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift": [
+            "// OBSTACLEBRIDGE-CONCURRENCY: serial; test=PacketTunnelProviderTests",
+            "state += 1",
+        ],
+    }) == []

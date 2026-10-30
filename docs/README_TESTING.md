@@ -1014,6 +1014,10 @@ Linux plain TCP and WebSocket live receive are readiness-driven after bootstrap:
 
 The Linux in-process proxy listener is nonblocking and drains all queued accepts from one readiness notification. Its parser and relay use `MSG_DONTWAIT` reads under an explicit bounded compatibility wait while the per-client readiness/queued-write conversion remains tracked.
 
+The threaded mTLS telemetry collector bounds its dependency-owned buffered HTTP-body read to five seconds and reports timeout rather than permitting an incomplete request to occupy a handler indefinitely.
+
+The Swift concurrency guard applies to every changed product source containing `@unchecked Sendable`, including iOS Network Extension sources. Its marker names the synchronization owner and regression test; CI additionally runs every host-runnable SwiftPM target under Thread Sanitizer while the macOS product build compiles the Apple-only sources.
+
 ### First traceability mapping for the unit suite
 
 | Unit test file | Architectural component | Related requirement/supporting IDs | Defended invariant or contract | How to start |

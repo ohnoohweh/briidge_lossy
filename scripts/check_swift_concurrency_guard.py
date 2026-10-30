@@ -11,11 +11,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SWIFT_SOURCE = "swift/Sources/"
 UNCHECKED = "@unchecked Sendable"
-MUTABLE_COLLECTION = re.compile(r"\bvar\s+\w+.*(?:\[|Set<|Dictionary<)|\.\s*(?:append|remove|insert|updateValue)\s*\(|\w+\s*\[[^]]+\]\s*=")
 EVIDENCE = "OBSTACLEBRIDGE-CONCURRENCY:"
-# This guard cannot retroactively require markers for PR edits that predate
-# its introduction. New collection mutations after this commit are gated.
-POLICY_BASELINE = "2aba4ed4"
+EVIDENCE_FORMAT = re.compile(
+    r"OBSTACLEBRIDGE-CONCURRENCY:\s*(?:lock|actor|serial)\b.*\btest=\S+"
+)
+# This expanded rule cannot retroactively require evidence from earlier PR
+# work. Every Swift product-source change after this adoption point is gated.
+POLICY_BASELINE = "c4e994c4"
 
 def effective_base(base_ref: str) -> str:
     if subprocess.run(["git", "merge-base", "--is-ancestor", base_ref, POLICY_BASELINE], cwd=ROOT).returncode == 0:
@@ -37,12 +39,18 @@ def validate(changes: dict[str, list[str]]) -> list[str]:
     for path, added in changes.items():
         if not path.startswith(SWIFT_SOURCE) or not path.endswith(".swift"):
             continue
-        source = (ROOT / path).read_text(encoding="utf-8")
-        if UNCHECKED not in source or not any(MUTABLE_COLLECTION.search(line) for line in added):
+        source_path = ROOT / path
+        if not source_path.exists():
+            continue
+        source = source_path.read_text(encoding="utf-8")
+        if UNCHECKED not in source:
             continue
         evidence = "\n".join(added)
-        if EVIDENCE not in evidence:
-            errors.append(f"{path}: changed mutable collection in an @unchecked Sendable owner requires a changed-line {EVIDENCE} lock|actor|serial; test=<concurrency test> marker.")
+        if not EVIDENCE_FORMAT.search(evidence):
+            errors.append(
+                f"{path}: changes to a source containing an @unchecked Sendable owner require a changed-line "
+                f"{EVIDENCE} lock|actor|serial; test=<concurrency test> marker."
+            )
     return errors
 
 def main() -> int:

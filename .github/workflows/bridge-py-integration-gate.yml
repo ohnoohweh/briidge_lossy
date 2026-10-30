@@ -452,8 +452,12 @@ jobs:
         # macOS runner's CPUs without allowing an unbounded compiler fan-out.
         run: pytest -vv --timeout=120 -n 3 -m "not slow" tests/unit/test_channel_mux_swift_parity.py ios/tests --ignore=ios/tests/test_macos_swift_host_runner.py
 
-      - name: Qualify shared Swift collection concurrency
-        run: swift test --sanitize=thread --filter ObstacleBridgeChannelMuxEgressSequencerTests
+      - name: Qualify every SwiftPM concurrency owner with Thread Sanitizer
+        # This exercises every executable/library test target that SwiftPM can
+        # run on macOS. The product app build above compiles the remaining
+        # iOS/Network Extension sources; their changed @unchecked Sendable
+        # owners are covered by the repository-wide diff guard.
+        run: swift test --sanitize=thread
 
       - name: Qualify PXY-3C proxy collector matrix (macOS)
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py

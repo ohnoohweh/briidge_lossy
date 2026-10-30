@@ -2085,6 +2085,9 @@ REQ-IO-001:
   # The myUDP exchange fallback retains only its configured bounded poll;
   # each datagram receive uses MSG_DONTWAIT before async ownership begins.
   unit_tests:
+    - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_covers_every_product_owner
+    - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_requires_usable_evidence
+    - tests/unit/test_telemetry.py::test_mtls_ingest_rejects_incomplete_body_with_timeout
     - tests/unit/test_admin_worker.py::test_admin_worker_timeout_fences_late_reply
     - tests/unit/test_ws_payload_mode.py::test_open_ws_proxy_socket_blocking_establishes_connect_tunnel
     - tests/unit/test_tun_helper_linux_backend.py::test_open_write_read_and_stop_round_trip

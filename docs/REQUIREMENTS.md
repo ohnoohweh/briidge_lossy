@@ -689,6 +689,10 @@ Implementation note: the Linux in-process HTTP/SOCKS proxy listener is an `O_NON
 
 Until that per-client owner is delivered, parsing and relay use only `MSG_DONTWAIT` receives with an explicit bounded compatibility wait; no proxy request or relay path may enter a blocking `read` or `recv`.
 
+Telemetry ingestion uses the dependency-owned buffered reader of `BaseHTTPRequestHandler`; that bounded fallback sets a five-second socket deadline and reports an HTTP 408 for an incomplete request body, so a slow TLS client cannot indefinitely occupy a threaded handler.
+
+Every changed Swift source that contains an `@unchecked Sendable` owner must add a same-diff synchronization-evidence marker naming its lock, actor, or serial owner and a concurrency test. The repository-wide rule applies equally to Core, Linux, macOS, and iOS source paths. CI runs all executable SwiftPM test targets under Thread Sanitizer; the macOS product build compiles Apple-only product sources and the diff guard covers each changed unchecked owner that is outside the host-runnable SwiftPM graph.
+
 Linux-native plain TCP similarly transitions after bootstrap to a POSIX readiness source plus an incremental length-prefixed frame decoder. Partial headers and bodies remain buffered for a later readability notification; the readiness callback shall never call a blocking read to complete a record. Plain WebSocket uses the same POSIX readiness source with incremental WebSocket framing. TLS WebSocket and QUIC expose their existing NIO inbound callbacks through equivalent incremental decoders; none of these post-bootstrap client receive owners may wait on a condition variable or socket read for a missing frame byte.
 
 Runtime Analysis excludes `apple_transport_payload_route` and `apple_transport_delivered_payload`: they are routing/delivery wrappers, not one actionable uninterrupted operation. Per-payload SecureLink handoff, ChannelMux dispatch, and TUN/TCP/UDP branch metrics remain eligible to identify the leading work.
