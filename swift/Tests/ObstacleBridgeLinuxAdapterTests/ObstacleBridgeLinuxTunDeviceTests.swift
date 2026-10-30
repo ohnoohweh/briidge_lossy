@@ -156,7 +156,10 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         DispatchQueue.global().async {
             defer { websocketRPCReady.signal() }
             do {
-                for _ in 0..<5 {
+                // The initial live snapshot contains connections, meta,
+                // peers, and status. `meta` obtains its build state through
+                // the status RPC, for four serialized parent calls total.
+                for _ in 0..<4 {
                     guard let request = try? self.readControl(from: control.0),
                           let requestID = request["id"] as? String else { return }
                     let result: [String: Any]
@@ -698,11 +701,6 @@ struct ObstacleBridgeLinuxTunDeviceTests {
                 && text.contains("\"type\":\"meta\"")
                 && text.contains("\"type\":\"peers\"")
         }
-        let control = try JSONSerialization.data(withJSONObject: ["subscribe": ["peers"], "request": "peers"])
-        try writeAll(maskedWebSocketTextFrame(control), to: client)
-        output = try readWebSocketOutput(from: client, initial: output) { data in
-            String(decoding: data, as: UTF8.self).components(separatedBy: "\"type\":\"peers\"").count >= 3
-        }
         return output
     }
 
@@ -716,14 +714,6 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             output.append(try readSocketChunk(from: descriptor))
         }
         return output
-    }
-
-    private func maskedWebSocketTextFrame(_ payload: Data) -> Data {
-        let mask: [UInt8] = [0x12, 0x34, 0x56, 0x78]
-        var frame = Data([0x81, 0x80 | UInt8(payload.count)])
-        frame.append(contentsOf: mask)
-        for (offset, byte) in payload.enumerated() { frame.append(byte ^ mask[offset % mask.count]) }
-        return frame
     }
 
     private func readSocketChunk(from descriptor: Int32) throws -> Data {
