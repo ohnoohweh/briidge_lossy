@@ -1,9 +1,11 @@
 import argparse
 import asyncio
 import contextlib
+import json
 import logging
 import socket
 import tempfile
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -103,6 +105,28 @@ def test_udp_receiver_serves_bounded_admin_log_query():
                 await task
 
     asyncio.run(exercise())
+
+
+def test_udp_log_query_ignores_a_stale_reply_before_its_matching_reply():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server:
+        server.bind(("127.0.0.1", 0))
+        port = server.getsockname()[1]
+
+        def respond() -> None:
+            request, address = server.recvfrom(4096)
+            request_id = json.loads(request.decode("utf-8"))["request_id"]
+            for response in (
+                {"v": 1, "kind": "logs.reply", "ok": True, "request_id": "stale", "lines": []},
+                {"v": 1, "kind": "logs.reply", "ok": True, "request_id": request_id, "lines": ["matching"]},
+            ):
+                server.sendto(json.dumps(response).encode("utf-8"), address)
+
+        responder = threading.Thread(target=respond)
+        responder.start()
+        result = UdpLogQueryClient(f"127.0.0.1:{port}", timeout_sec=0.2).fetch(1)
+        responder.join(timeout=1)
+
+    assert result == {"available": True, "lines": ["matching"], "error": ""}
 
 
 def test_udp_log_sender_drops_transport_failure_without_raising():

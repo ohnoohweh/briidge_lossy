@@ -1166,8 +1166,7 @@ What the admin web shows:
 | `--telemetry-collector-revocations` | `/var/lib/obstaclebridge/telemetry-ingest/revocations.json` | Revoked client-certificate serial list path. |
 | `--debug-stderr` | `False` | mirror DEBUG lines to stderr (default: off) |
 
-The optional private UDP logger is isolated best-effort diagnostics only. The
-Python Runner additionally provides a bounded, allowlisted local event
+The optional private UDP logger is isolated best-effort diagnostics only. Its bounded Admin query correlates each UDP reply with an opaque request ID, so delayed replies cannot be mistaken for a newer snapshot. The Python Runner additionally provides a bounded, allowlisted local event
 producer, crash-safe spool, single-flight background uploader, and mTLS-required
 reference ingest process. The worker emits a startup load sample and repeats it
 every 15 seconds; empty drains are no-ops and one background flush owns

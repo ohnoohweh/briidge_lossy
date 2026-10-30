@@ -11,6 +11,8 @@ import json
 import logging
 import select
 import socket
+import time
+import uuid
 from typing import Any, Optional, Tuple
 
 LOG_WIRE_VERSION = 1
@@ -111,8 +113,9 @@ class UdpLogQueryClient:
     def fetch(self, limit: int) -> dict[str, Any]:
         """Return a status payload; receiver and transport errors are data."""
         requested_limit = max(1, min(int(limit), 1000))
+        request_id = uuid.uuid4().hex
         request = json.dumps(
-            {"v": LOG_WIRE_VERSION, "kind": "logs.query", "limit": requested_limit},
+            {"v": LOG_WIRE_VERSION, "kind": "logs.query", "limit": requested_limit, "request_id": request_id},
             separators=(",", ":"),
         ).encode("utf-8")
         try:
@@ -120,20 +123,25 @@ class UdpLogQueryClient:
                 sock.setblocking(False)
                 sock.connect(self._address)
                 sock.send(request)
-                readable, _, _ = select.select([sock], [], [], self.timeout_sec)
-                if not readable:
-                    return {"available": False, "lines": [], "error": "logger unavailable"}
-                data = sock.recv(DEFAULT_MAX_DATAGRAM_BYTES)
-            payload = json.loads(data.decode("utf-8"))
-            if (
-                not isinstance(payload, dict)
-                or payload.get("v") != LOG_WIRE_VERSION
-                or payload.get("kind") != "logs.reply"
-                or not payload.get("ok")
-                or not isinstance(payload.get("lines"), list)
-            ):
-                raise ValueError("invalid logger response")
-            return {"available": True, "lines": [str(line) for line in payload["lines"]], "error": ""}
+                deadline = time.monotonic() + self.timeout_sec
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return {"available": False, "lines": [], "error": "logger unavailable"}
+                    readable, _, _ = select.select([sock], [], [], remaining)  # OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded caller-owned UDP Admin-query compatibility socket
+                    if not readable:
+                        return {"available": False, "lines": [], "error": "logger unavailable"}
+                    payload = json.loads(sock.recv(DEFAULT_MAX_DATAGRAM_BYTES).decode("utf-8"))  # OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: socket is readable and the datagram is bounded
+                    if (
+                        not isinstance(payload, dict)
+                        or payload.get("v") != LOG_WIRE_VERSION
+                        or payload.get("kind") != "logs.reply"
+                        or not payload.get("ok")
+                        or payload.get("request_id") != request_id
+                        or not isinstance(payload.get("lines"), list)
+                    ):
+                        continue
+                    return {"available": True, "lines": [str(line) for line in payload["lines"]], "error": ""}
         except Exception:
             return {"available": False, "lines": [], "error": "logger unavailable"}
 
