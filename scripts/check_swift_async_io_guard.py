@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject newly introduced blocking Swift receive operations in runtime code."""
+"""Reject newly introduced blocking Swift receive operations and waits."""
 
 from __future__ import annotations
 
@@ -13,6 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PREFIX = "swift/Sources/"
 RECEIVE_CALL = re.compile(r"\b(?:read|recv|recvfrom)\s*\(")
+BLOCKING_WAIT = re.compile(
+    r"(?:\b(?:poll|select)\s*\(|\.wait\s*\(|\bFileHandle\b.*\.availableData\b|\bThread\.sleep\s*\()"
+)
 NONBLOCKING = re.compile(r"\b(?:MSG_DONTWAIT|O_NONBLOCK)\b")
 EXCEPTION = "OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION:"
 
@@ -49,6 +52,12 @@ def validate(diff_args: list[str]) -> list[str]:
                 f"{path}:{line_number}: new blocking receive call is forbidden. "
                 "Use a readiness/framework callback and MSG_DONTWAIT, or document the bounded "
                 f"bootstrap exception on this line with {EXCEPTION} <reason>."
+            )
+        if BLOCKING_WAIT.search(line) and EXCEPTION not in line:
+            errors.append(
+                f"{path}:{line_number}: new synchronous wait is forbidden. "
+                "Use a readiness/framework callback, or document the bounded "
+                f"dependency exception on this line with {EXCEPTION} <reason>."
             )
     return errors
 

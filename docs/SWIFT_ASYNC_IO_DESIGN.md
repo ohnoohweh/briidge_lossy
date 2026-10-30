@@ -9,9 +9,12 @@ readiness source before its descriptor or channel is released.
 
 `scripts/check_swift_async_io_guard.py` is required in pull-request CI. It
 rejects newly added Swift `read`, `recv`, and `recvfrom` calls unless the call
-is nonblocking or carries an inline, bounded-bootstrap exception marker. The
-guard is diff-based so it prevents regression while the remaining conversions
-in this document are completed.
+is nonblocking or carries an inline, bounded-bootstrap exception marker. It
+also rejects synchronous `poll`/`select`, condition/future waits,
+`FileHandle.availableData`, and sleep-poll additions without that marker. The
+guard is diff-based and applies to every Swift product source root, including
+iOS, macOS, Linux, and shared code, so it prevents recurrence in files outside
+the focused runtime tests while the remaining conversions are completed.
 
 ## Delivered boundaries
 

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PREFIX = "src/obstacle_bridge/"
 # asyncio stream reads are explicitly awaited and therefore remain allowed.
 BLOCKING_WAIT = re.compile(
-    r"(?:\.(?:recv|recvfrom|recv_into)\s*\(|\bos\.read\s*\(|\bselect\.select\s*\(|\btime\.sleep\s*\()"
+    r"(?:\.(?:recv|recvfrom|recv_into)\s*\(|\bos\.read\s*\(|\bselect\.select\s*\(|\btime\.sleep\s*\(|\.wait\s*\()"
 )
 AWAITED = re.compile(r"\bawait\s+[^#]*(?:\.read\s*\(|\.recv\s*\()")
 NONBLOCKING = re.compile(r"\b(?:MSG_DONTWAIT|O_NONBLOCK)\b")

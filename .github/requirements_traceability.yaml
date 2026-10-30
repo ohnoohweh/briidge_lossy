@@ -1130,6 +1130,8 @@ REQ-LIFE-010:
     - tests/unit/test_swift_tun_helper.py::test_darwin_selector_builds_packaged_helper_when_identity_is_stale
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_builds_and_launches_macos_swift_protocol_v1_helper
     - ios/tests/test_macos_swift_host_runner.py::test_macos_tun_helper_package_skeleton_sources_exist
+    - tests/unit/test_async_io_guards.py::test_swift_guard_rejects_waits_in_every_product_source
+    - tests/unit/test_async_io_guards.py::test_python_guard_rejects_new_wait_without_exception
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunPingTests.swift::protocolV1FramesAndControlsRemainPythonCompatible
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::nativeSwiftHelperFullTunnelRetainsEveryKernelConnectedLocalLAN
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::privilegedNativeSwiftHelperQualifiesTunRouteDNSAndHookLifecycle
