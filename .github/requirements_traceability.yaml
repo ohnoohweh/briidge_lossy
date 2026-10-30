@@ -2077,6 +2077,10 @@ REQ-IO-001:
   # The shared native Admin lifetime owner is a nonblocking Dispatch read
   # source and its deadline-bounded control frames use nonblocking POSIX
   # reads, covered by owner-loss and fragmented-frame Linux tests.
+  # Its Linux-native live WebSocket sessions transfer to per-client
+  # nonblocking read/write sources with bounded partial frames and a
+  # timer-driven topic scheduler; the native Admin socketpair test exercises
+  # handshake, masked controls, snapshots, and owner-loss teardown.
   # The Linux native peer worker changes from its bounded bootstrap to a
   # serial descriptor-readiness owner with shared incremental OBIP framing.
   # The macOS child keeps its documented isolated-process compatibility wait.

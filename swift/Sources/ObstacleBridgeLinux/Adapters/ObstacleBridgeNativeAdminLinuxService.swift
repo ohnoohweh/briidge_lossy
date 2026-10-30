@@ -21,6 +21,183 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         let final: Bool
         let consumed: Int
     }
+
+    /// One live browser connection. All mutable state belongs to `queue`.
+    /// The independent timer drives subscriptions while the read and optional
+    /// write sources own socket readiness and partial frames/writes.
+    private final class LiveSession: @unchecked Sendable {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxTunDeviceTests
+        private let client: Int32
+        private let queue: DispatchQueue
+        private let payload: (String) -> [String: Any]?
+        private let finished: (Int32) -> Void
+        private var topics: Set<String>
+        private var nextDue: [String: TimeInterval] = [:]
+        private var receiveBuffer = Data()
+        private var pendingWrite = Data()
+        private var closeAfterWrite = false
+        private var readSource: DispatchSourceRead?
+        private var writeSource: DispatchSourceWrite?
+        private var timer: DispatchSourceTimer?
+        private var stopped = false
+
+        init(client: Int32, requestedTopic: String?, handshake: Data, payload: @escaping (String) -> [String: Any]?, finished: @escaping (Int32) -> Void) {
+            self.client = client
+            self.queue = DispatchQueue(label: "org.obstaclebridge.linux.native-admin.live.\(client)")
+            self.payload = payload
+            self.finished = finished
+            if let requestedTopic, ObstacleBridgeNativeAdminLinuxService.liveTopics.contains(requestedTopic) {
+                self.topics = [requestedTopic]
+            } else {
+                self.topics = Set(ObstacleBridgeNativeAdminLinuxService.initialLiveTopics)
+            }
+            self.pendingWrite = handshake
+        }
+
+        func start() {
+            queue.async { [weak self] in self?.startOwned() }
+        }
+
+        func stop() {
+            queue.async { [weak self] in self?.finish() }
+        }
+
+        private func startOwned() {
+            let flags = fcntl(client, F_GETFL)
+            guard flags >= 0, fcntl(client, F_SETFL, flags | O_NONBLOCK) == 0 else { finish(); return }
+            let read = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
+            readSource = read
+            read.setEventHandler { [weak self] in self?.drainInput() }
+            read.resume()
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            self.timer = timer
+            timer.setEventHandler { [weak self] in self?.publishDueTopics() }
+            timer.schedule(deadline: .now(), repeating: .milliseconds(100), leeway: .milliseconds(20))
+            timer.resume()
+            let intervals = Dictionary(uniqueKeysWithValues: ObstacleBridgeNativeAdminLinuxService.liveTopics.map { ($0, ObstacleBridgeAdminLiveTopicPolicyPort.interval($0)) })
+            enqueueJSON(["type": "hello", "topics": Array(topics).sorted(), "intervals_sec": intervals])
+        }
+
+        private func publishDueTopics() {
+            let now = ProcessInfo.processInfo.systemUptime
+            for topic in topics.sorted() where now >= (nextDue[topic] ?? 0) {
+                guard let value = payload(topic) else { finish(); return }
+                enqueueJSON(["type": topic, "data": value])
+                nextDue[topic] = now + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
+            }
+        }
+
+        private func drainInput() {
+            while true {
+                var bytes = [UInt8](repeating: 0, count: 16 * 1024)
+                let count = recv(client, &bytes, bytes.count, Int32(MSG_DONTWAIT))
+                if count > 0 {
+                    receiveBuffer.append(bytes, count: Int(count))
+                    consumeFrames()
+                    continue
+                }
+                if count < 0, errno == EINTR { continue }
+                if count < 0, errno == EAGAIN || errno == EWOULDBLOCK { return }
+                finish()
+                return
+            }
+        }
+
+        private func consumeFrames() {
+            while let frame = parseFrame(receiveBuffer) {
+                receiveBuffer.removeSubrange(0..<frame.consumed)
+                guard frame.final else { finish(); return }
+                switch frame.opcode {
+                case 0x1:
+                    guard let object = try? JSONSerialization.jsonObject(with: frame.payload) as? [String: Any] else { continue }
+                    topics = ObstacleBridgeAdminLiveTopicPolicyPort.topicsForControlMessage(subscribe: object["subscribe"], activeTabs: object["active_tabs"] as? [Any], currentTopics: topics)
+                        .intersection(ObstacleBridgeNativeAdminLinuxService.liveTopics)
+                    for topic in ObstacleBridgeAdminLiveTopicPolicyPort.parseTopics(object["request"]).sorted() {
+                        guard let value = payload(topic) else { finish(); return }
+                        enqueueJSON(["type": topic, "data": value])
+                        nextDue[topic] = ProcessInfo.processInfo.systemUptime + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
+                    }
+                case 0x8:
+                    enqueueFrame(opcode: 0x8, payload: Data())
+                    finish(afterPendingWrites: true)
+                    return
+                case 0x9:
+                    enqueueFrame(opcode: 0xA, payload: frame.payload)
+                default:
+                    continue
+                }
+            }
+            if receiveBuffer.count > 16 * 1024 { finish() }
+        }
+
+        private func enqueueJSON(_ value: [String: Any]) {
+            guard let body = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { finish(); return }
+            enqueueFrame(opcode: 0x1, payload: body)
+        }
+
+        private func enqueueFrame(opcode: UInt8, payload: Data) {
+            guard !stopped, payload.count <= Int(UInt16.max) else { finish(); return }
+            var frame = Data([0x80 | opcode])
+            if payload.count < 126 { frame.append(UInt8(payload.count)) }
+            else { frame.append(126); var length = UInt16(payload.count).bigEndian; frame.append(Data(bytes: &length, count: 2)) }
+            frame.append(payload)
+            pendingWrite.append(frame)
+            flushOutput()
+        }
+
+        private func flushOutput() {
+            while !pendingWrite.isEmpty {
+                let count = pendingWrite.withUnsafeBytes { write(client, $0.baseAddress, pendingWrite.count) }
+                if count > 0 { pendingWrite.removeFirst(Int(count)); continue }
+                if count < 0, errno == EINTR { continue }
+                if count < 0, errno == EAGAIN || errno == EWOULDBLOCK { installWriteSource(); return }
+                finish()
+                return
+            }
+            writeSource?.cancel()
+            writeSource = nil
+            if closeAfterWrite { finish() }
+        }
+
+        private func installWriteSource() {
+            guard writeSource == nil else { return }
+            let source = DispatchSource.makeWriteSource(fileDescriptor: client, queue: queue)
+            writeSource = source
+            source.setEventHandler { [weak self] in self?.flushOutput() }
+            source.resume()
+        }
+
+        private func finish(afterPendingWrites: Bool = false) {
+            guard !stopped else { return }
+            if afterPendingWrites, !pendingWrite.isEmpty {
+                closeAfterWrite = true
+                return
+            }
+            stopped = true
+            timer?.cancel(); timer = nil
+            readSource?.cancel(); readSource = nil
+            writeSource?.cancel(); writeSource = nil
+            _ = close(client)
+            finished(client)
+        }
+
+        private func parseFrame(_ data: Data) -> WebSocketFrame? {
+            guard data.count >= 2 else { return nil }
+            let first = data[data.startIndex], second = data[data.startIndex + 1]
+            let final = (first & 0x80) != 0, opcode = first & 0x0F
+            var index = 2, length = Int(second & 0x7F)
+            if length == 126 {
+                guard data.count >= index + 2 else { return nil }
+                length = (Int(data[data.startIndex + index]) << 8) | Int(data[data.startIndex + index + 1]); index += 2
+            } else if length == 127 { return nil }
+            guard (second & 0x80) != 0, data.count >= index + 4 else { return nil }
+            let mask = Array(data[(data.startIndex + index)..<(data.startIndex + index + 4)]); index += 4
+            guard length <= 16 * 1024, data.count >= index + length else { return nil }
+            var payload = Array(data[(data.startIndex + index)..<(data.startIndex + index + length)])
+            for offset in payload.indices { payload[offset] ^= mask[offset % 4] }
+            return .init(opcode: opcode, payload: Data(payload), final: final, consumed: index + length)
+        }
+    }
     private let parentRPC: ObstacleBridgeNativeAdminWorker.ParentRPC
     private let security: ObstacleBridgeLinuxAdminSecurity
     private let controlToken: String
@@ -35,6 +212,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     private var source: DispatchSourceRead?
     private var clientSources: [Int32: DispatchSourceRead] = [:]
     private var clientRequests: [Int32: Data] = [:]
+    private var liveSessions: [Int32: LiveSession] = [:]
     public private(set) var port: Int = 0
 
     public init(arguments: [String: Any], parentRPC: ObstacleBridgeNativeAdminWorker.ParentRPC) throws {
@@ -71,6 +249,9 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             source.cancel()
             _ = close(client)
         }
+        let sessions = liveSessions
+        liveSessions.removeAll()
+        for session in sessions.values { session.stop() }
         listener = -1
         port = 0
     }
@@ -201,7 +382,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
                 writeResponse(client, status: "401 Unauthorized", body: Data("{\"ok\":false,\"authenticated\":false,\"error\":\"authentication required\"}".utf8))
                 return
             }
-            serveLiveWebSocket(client, target: target, key: headers["sec-websocket-key"] ?? "", version: headers["sec-websocket-version"] ?? "")
+            startLiveWebSocket(client, target: target, key: headers["sec-websocket-key"] ?? "", version: headers["sec-websocket-version"] ?? "")
             return
         }
         if method == "GET", let staticResponse = staticResponse(path: path) {
@@ -762,59 +943,32 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         controlToken.isEmpty || headers["authorization"] == "Bearer \(controlToken)"
     }
 
-    private func serveLiveWebSocket(_ client: Int32, target: String, key: String, version: String) {
+    /// Transfers a browser WebSocket to a descriptor-readiness owner.  The
+    /// request worker returns immediately; periodic topic publication is a
+    /// timer event rather than a bounded `poll` loop occupying a worker.
+    private func startLiveWebSocket(_ client: Int32, target: String, key: String, version: String) {
         guard !key.isEmpty, version == "13" else {
             writeResponse(client, status: "400 Bad Request", body: Data("{\"error\":\"invalid websocket handshake\"}".utf8))
             return
         }
+        let liveClient = dup(client)
+        guard liveClient >= 0 else { return }
+        let requestedTopic = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(liveTopic(target: target))
         let accept = Data(Insecure.SHA1.hash(data: Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8))).base64EncodedString()
         let handshake = Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n".utf8)
-        guard handshake.withUnsafeBytes({ write(client, $0.baseAddress, handshake.count) == handshake.count }) else { return }
-        var topics = Set(Self.initialLiveTopics)
-        if let requested = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(liveTopic(target: target)) {
-            topics = Self.liveTopics.contains(requested) ? [requested] : []
-        }
-        var nextDue: [String: TimeInterval] = [:]
-        let intervals = Dictionary(uniqueKeysWithValues: Self.liveTopics.map { ($0, ObstacleBridgeAdminLiveTopicPolicyPort.interval($0)) })
-        guard sendLiveJSON(client, value: ["type": "hello", "topics": Array(topics).sorted(), "intervals_sec": intervals]) else { return }
-        var receiveBuffer = Data()
-        while true {
-            let now = ProcessInfo.processInfo.systemUptime
-            for topic in topics.sorted() where now >= (nextDue[topic] ?? 0) {
-                guard let payload = livePayload(topic: topic),
-                      sendLiveJSON(client, value: ["type": topic, "data": payload])
-                else { return }
-                nextDue[topic] = now + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
+        let session = LiveSession(
+            client: liveClient,
+            requestedTopic: requestedTopic,
+            handshake: handshake,
+            payload: { [weak self] topic in self?.livePayload(topic: topic) },
+            finished: { [weak self] descriptor in
+                self?.queue.async { self?.liveSessions.removeValue(forKey: descriptor) }
             }
-            var descriptor = pollfd(fd: client, events: Int16(POLLIN), revents: 0)
-            let ready = poll(&descriptor, 1, 250)
-            guard ready >= 0 else { return }
-            guard ready > 0 else { continue }
-            var buffer = [UInt8](repeating: 0, count: 16 * 1024)
-            let count = recv(client, &buffer, buffer.count, Int32(MSG_DONTWAIT))
-            if count < 0, (errno == EAGAIN || errno == EWOULDBLOCK) { continue }
-            if count < 0, errno == EINTR { continue }
-            guard count > 0 else { return }
-            receiveBuffer.append(buffer, count: Int(count))
-            while let frame = parseWebSocketFrame(receiveBuffer) {
-                receiveBuffer.removeSubrange(0..<frame.consumed)
-                guard frame.final else { return }
-                switch frame.opcode {
-                case 0x1:
-                    guard let object = try? JSONSerialization.jsonObject(with: frame.payload) as? [String: Any] else { continue }
-                    topics = ObstacleBridgeAdminLiveTopicPolicyPort.topicsForControlMessage(subscribe: object["subscribe"], activeTabs: object["active_tabs"] as? [Any], currentTopics: topics)
-                        .intersection(Self.liveTopics)
-                    for topic in ObstacleBridgeAdminLiveTopicPolicyPort.parseTopics(object["request"]).sorted() {
-                        guard let payload = livePayload(topic: topic),
-                              sendLiveJSON(client, value: ["type": topic, "data": payload])
-                        else { return }
-                        nextDue[topic] = ProcessInfo.processInfo.systemUptime + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
-                    }
-                case 0x8: _ = sendWebSocketFrame(client, opcode: 0x8, payload: Data()); return
-                case 0x9: guard sendWebSocketFrame(client, opcode: 0xA, payload: frame.payload) else { return }
-                default: continue
-                }
-            }
+        )
+        queue.async { [weak self] in
+            guard let self else { session.stop(); return }
+            self.liveSessions[liveClient] = session
+            session.start()
         }
     }
 

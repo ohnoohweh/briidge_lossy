@@ -52,10 +52,15 @@ bootstrap before installing a serial nonblocking descriptor-readiness owner.
 That owner retains partial common-OBIP frames in the shared incremental decoder
 and generation-fences every post-bootstrap data and control frame.
 
+The Linux native Admin child transfers each authenticated live WebSocket to a
+per-client nonblocking read owner. It retains partial masked frames, queues
+partial writes behind write readiness, and uses an independent topic timer
+rather than holding an HTTP worker in a polling loop.
+
 | Boundary | Current synchronous operation | Required replacement |
 | --- | --- | --- |
 | Linux TCP and TLS-WebSocket listener admission | framed SecureLink and HTTP-upgrade reads | listener-owned readiness state machine with incremental HTTP/WebSocket/OBIP buffers |
-| Linux foreground and native-child Admin web servers | live-WebSocket polling loops | ordinary HTTP requests use per-client readiness sources with bounded reassembly; replace live polling with a timer-driven live-topic scheduler |
+| Linux foreground Admin web server | live-WebSocket polling loops | ordinary HTTP requests use per-client readiness sources with bounded reassembly; replace live polling with a timer-driven live-topic scheduler |
 | Linux in-process HTTP/SOCKS proxy client parsing and relay | bounded `poll` compatibility waits with `MSG_DONTWAIT` reads | per-client readiness state machine with incremental HTTP/SOCKS buffers and queued write readiness |
 | Linux native Admin worker IPC | bounded parent-RPC request/reply reads after bootstrap | descriptor readiness source with generation-fenced incremental OBIP decoder and callback completion |
 | Linux TUN helper control IPC | synchronous request/reply reads | callback-based correlated control requests; preserve independent request deadline |

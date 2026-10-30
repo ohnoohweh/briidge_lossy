@@ -683,6 +683,8 @@ Linux-native myUDP transitions from its bounded synchronous bootstrap exchange t
 
 Implementation note: the diff guards apply to every Python runtime and Swift product source root rather than a named test-file inventory. They reject newly added synchronous readiness waits, condition/future waits, `FileHandle.availableData`, and sleep polling as well as raw receives; only a line-local bounded dependency exception is admissible.
 
+Implementation note: the Linux native Admin child transfers authenticated live WebSocket sessions from the request worker to a per-client nonblocking read/write readiness owner. Partial masked input and partial output remain bounded on that owner, and an independent timer schedules snapshot topics without a `poll` loop occupying an HTTP worker.
+
 Implementation note: an accompanying Swift concurrency guard rejects a changed mutable collection in an `@unchecked Sendable` product owner unless that diff records its lock, actor, or serial-executor boundary and the named exercising test. The current audited owner matrix and its stress-testing gap are maintained in [Swift unchecked-sendable concurrency coverage](SWIFT_CONCURRENCY_COVERAGE.md).
 
 Implementation note: the desktop logging supervisor owns the parent datagram descriptor through a retained nonblocking read source after its bounded bootstrap exchange. Its Admin log queries are request-ID-correlated callback completions with an independent deadline and worker-generation fence; accepted records coalesce an asynchronous bounded-snapshot refresh so the synchronous projection returns its last completed value without waiting or issuing one query per record.
