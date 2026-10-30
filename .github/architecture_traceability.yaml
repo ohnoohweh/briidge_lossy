@@ -864,6 +864,8 @@ ARC-CMP-004:
 ARC-CMP-005:
   # Native collector coverage includes bounded cold-process readiness retries
   # for the public UDP query probe on macOS CI hardware.
+  # Keep-open Linux Swift proxy peers also tolerate their intended accept-poll
+  # turns while the foreground worker graph reaches readiness.
   # The WebAdmin configuration renderer preserves UDP logging endpoints as
   # direct text values, independently of per-component log-level controls.
   # Admin status resilience includes the minimal live-session fallback used

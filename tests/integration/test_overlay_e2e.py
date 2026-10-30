@@ -246,7 +246,21 @@ class LinuxSwiftSecureLinkPeer:
                 if self.transport == 'myudp':
                     self._serve_myudp(listener)
                 else:
-                    connection, _ = listener.accept()
+                    # Keep-open peers deliberately remain available while a
+                    # foreground runtime starts its worker graph. A short
+                    # accept timeout is a polling turn, not a failed peer;
+                    # otherwise a slow CI startup records a teardown error
+                    # even when the test never requires an overlay connect.
+                    while True:
+                        try:
+                            connection, _ = listener.accept()
+                            break
+                        except socket.timeout:
+                            if self.keep_open and not self._closing.is_set():
+                                continue
+                            if self._closing.is_set():
+                                return
+                            raise
                     with connection:
                         connection.settimeout(0.25 if self.keep_open else 5.0)
                         self._serve_stream(connection)
@@ -538,6 +552,15 @@ class LinuxSwiftSecureLinkPeer:
         plaintext = ChaCha20Poly1305(client_to_server).decrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), application[20:], application[:20])
         response = self._header(4, session_id, 2)
         send(response + ChaCha20Poly1305(server_to_client).encrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), b'python-e2e:' + plaintext, response))
+
+
+def test_linux_swift_keep_open_peer_accept_poll_exits_cleanly() -> None:
+    peer = LinuxSwiftSecureLinkPeer("tcp", b"keep-open-poll", keep_open=True)
+    try:
+        # Cross at least one short accept polling turn without connecting.
+        time.sleep(0.35)
+    finally:
+        peer.close()
 
 
 def test_linux_swift_myudp_reference_peer_waits_for_response_drain(monkeypatch: pytest.MonkeyPatch) -> None:
