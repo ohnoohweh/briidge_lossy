@@ -1284,6 +1284,8 @@ ARC-IO-001:
     - tests/unit/test_swift_concurrency_guard.py::test_accepts_lock_marker_with_named_test
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_covers_every_product_owner
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_requires_usable_evidence
+    # Also verifies coalesced cache warming after accepted records, so Admin
+    # can project completed logs without reintroducing a synchronous receive.
     - tests/unit/test_native_log_supervisor.py::test_native_log_supervisor_query_uses_readiness_callback_not_polling
     - tests/unit/test_linux_native_peer_worker.py::test_linux_native_peer_worker_uses_readiness_decoder_after_bootstrap
     - tests/unit/test_telemetry.py::test_mtls_ingest_rejects_incomplete_body_with_timeout

@@ -2086,7 +2086,8 @@ REQ-IO-001:
   # The myUDP exchange fallback retains only its configured bounded poll;
   # each datagram receive uses MSG_DONTWAIT before async ownership begins.
   # Desktop logging query replies are drained by a retained nonblocking read
-  # source and complete request-ID-correlated callbacks or their deadline.
+  # source and complete request-ID-correlated callbacks or their deadline;
+  # accepted records coalesce cache warming for nonblocking Admin projection.
   unit_tests:
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_covers_every_product_owner
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_requires_usable_evidence

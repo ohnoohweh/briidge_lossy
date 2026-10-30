@@ -19,7 +19,8 @@ def test_native_log_supervisor_query_uses_readiness_callback_not_polling():
     source = (ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift").read_text()
     query_surface = source.split("    public func fetch(limit: Int)", 1)[1].split("    public func status()", 1)[0]
 
-    assert "fetchAsync(limit: limit)" in query_surface
+    assert "requestSnapshotRefresh(limit: limit)" in query_surface
+    assert "snapshotRefreshPending" in query_surface
     assert "DispatchSource.makeReadSource" in query_surface
     assert "pendingQueries" in query_surface
     assert "let count = recv(fd, &bytes, bytes.count, Int32(MSG_DONTWAIT))" in source
