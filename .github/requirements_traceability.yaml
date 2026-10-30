@@ -2088,6 +2088,8 @@ REQ-IO-001:
   # Desktop logging query replies are drained by a retained nonblocking read
   # source and complete request-ID-correlated callbacks or their deadline;
   # accepted records coalesce cache warming for nonblocking Admin projection.
+  # The public native collector readiness test allows a bounded cold-process
+  # startup budget without extending any individual UDP query deadline.
   unit_tests:
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_covers_every_product_owner
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_requires_usable_evidence

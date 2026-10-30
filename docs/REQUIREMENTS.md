@@ -687,6 +687,8 @@ Implementation note: an accompanying Swift concurrency guard rejects a changed m
 
 Implementation note: the desktop logging supervisor owns the parent datagram descriptor through a retained nonblocking read source after its bounded bootstrap exchange. Its Admin log queries are request-ID-correlated callback completions with an independent deadline and worker-generation fence; accepted records coalesce an asynchronous bounded-snapshot refresh so the synchronous projection returns its last completed value without waiting or issuing one query per record.
 
+Implementation note: the public native log collector is exercised through a bounded UDP readiness probe that permits cold Swift-process startup on the supported macOS CI hardware without turning an individual Admin-query datagram into an unbounded wait.
+
 Implementation note: the Linux in-process HTTP/SOCKS proxy listener is an `O_NONBLOCK` readiness owner and drains all pending accepts before its callback returns. Client parsing and bidirectional relay remain a separate incremental state-machine conversion; they must not use the listener callback as a synchronous fallback.
 
 Until that per-client owner is delivered, parsing and relay use only `MSG_DONTWAIT` receives with an explicit bounded compatibility wait; no proxy request or relay path may enter a blocking `read` or `recv`.
