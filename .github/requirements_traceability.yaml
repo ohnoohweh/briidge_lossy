@@ -2084,6 +2084,8 @@ REQ-IO-001:
   # read source for every accepted client.
   # The myUDP exchange fallback retains only its configured bounded poll;
   # each datagram receive uses MSG_DONTWAIT before async ownership begins.
+  # Desktop logging query replies are drained by a retained nonblocking read
+  # source and complete request-ID-correlated callbacks or their deadline.
   unit_tests:
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_covers_every_product_owner
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_requires_usable_evidence
@@ -2093,6 +2095,7 @@ REQ-IO-001:
     - tests/unit/test_tun_helper_linux_backend.py::test_open_write_read_and_stop_round_trip
     - tests/unit/test_tun_helper_macos_backend.py::test_open_write_read_and_stop_wraps_utun_frames
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input
+    - tests/unit/test_native_log_supervisor.py::test_native_log_supervisor_query_uses_readiness_callback_not_polling
     - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpDuplexSessionUsesReadinessCallbacksAfterBootstrap

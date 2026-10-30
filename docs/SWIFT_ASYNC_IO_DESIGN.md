@@ -41,6 +41,12 @@ The following boundaries are intentionally not described as fallbacks: their
 underlying POSIX, NIO, or XPC dependency has an asynchronous boundary, so they
 must be converted rather than retained indefinitely.
 
+The desktop logging supervisor retains a nonblocking datagram read source for
+log-query replies. Queries are request-ID correlated, completed by a callback
+or an independent deadline, and fenced by the active worker generation; the
+synchronous Admin projection returns its most recently completed bounded
+snapshot while requesting a refresh and never waits for the collector.
+
 | Boundary | Current synchronous operation | Required replacement |
 | --- | --- | --- |
 | Linux TCP and TLS-WebSocket listener admission | framed SecureLink and HTTP-upgrade reads | listener-owned readiness state machine with incremental HTTP/WebSocket/OBIP buffers |
@@ -48,7 +54,6 @@ must be converted rather than retained indefinitely.
 | Linux in-process HTTP/SOCKS proxy client parsing and relay | bounded `poll` compatibility waits with `MSG_DONTWAIT` reads | per-client readiness state machine with incremental HTTP/SOCKS buffers and queued write readiness |
 | Linux native peer/Admin worker IPC | `FileHandle` framed reads after bootstrap | descriptor readiness source with generation-fenced incremental OBIP decoder |
 | Linux TUN helper control IPC | synchronous request/reply reads | callback-based correlated control requests; preserve independent request deadline |
-| Desktop logging supervisor query | bounded poll/receive request path | descriptor readiness handling and callback completion for bounded queries |
 | macOS XPC helper control | semaphore wait around XPC reply | async XPC command completion propagated to the caller's lifecycle owner |
 
 No remaining row above is a permitted synchronous fallback: each boundary owns a

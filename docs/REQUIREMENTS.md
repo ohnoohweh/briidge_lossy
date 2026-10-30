@@ -685,6 +685,8 @@ Implementation note: the diff guards apply to every Python runtime and Swift pro
 
 Implementation note: an accompanying Swift concurrency guard rejects a changed mutable collection in an `@unchecked Sendable` product owner unless that diff records its lock, actor, or serial-executor boundary and the named exercising test. The current audited owner matrix and its stress-testing gap are maintained in [Swift unchecked-sendable concurrency coverage](SWIFT_CONCURRENCY_COVERAGE.md).
 
+Implementation note: the desktop logging supervisor owns the parent datagram descriptor through a retained nonblocking read source after its bounded bootstrap exchange. Its Admin log queries are request-ID-correlated callback completions with an independent deadline and worker-generation fence; the synchronous projection returns its last completed bounded snapshot while refresh remains asynchronous.
+
 Implementation note: the Linux in-process HTTP/SOCKS proxy listener is an `O_NONBLOCK` readiness owner and drains all pending accepts before its callback returns. Client parsing and bidirectional relay remain a separate incremental state-machine conversion; they must not use the listener callback as a synchronous fallback.
 
 Until that per-client owner is delivered, parsing and relay use only `MSG_DONTWAIT` receives with an explicit bounded compatibility wait; no proxy request or relay path may enter a blocking `read` or `recv`.
