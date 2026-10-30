@@ -1397,6 +1397,8 @@ REQ-MUX-008:
 
 REQ-MUX-009:
   # Includes Linux hook coverage for exact excluded-route snapshotting so
+  # Required Linux and macOS gates execute the Core concurrent egress test,
+  # preventing an unchecked native collection trap from reaching devices.
   # full-tunnel installs preserve pre-existing local subnet ownership. Swift
   # epoch-resync coverage also verifies a recovered TUN OPEN advances its
   # ChannelMux connection sequence.

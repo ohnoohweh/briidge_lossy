@@ -141,6 +141,10 @@ jobs:
         run: |
           OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
           swift test --filter ObstacleBridgeLinuxRuntimeConfigurationTests
+          # An unchecked Swift Set/Dictionary race traps at runtime. Exercise
+          # the compiled Core concurrent enqueue/drain regression before any
+          # device build is tested.
+          swift test --filter ObstacleBridgeChannelMuxEgressSequencerTests
           # The shared Desktop target carries the stale-reply retirement rule
           # used by the native Admin child.  Keep it in the Linux host-local
           # qualification lane with the packaged Admin and helper probes.
@@ -447,6 +451,9 @@ jobs:
         # The remaining probes each invoke swiftc.  Three workers use the
         # macOS runner's CPUs without allowing an unbounded compiler fan-out.
         run: pytest -vv --timeout=120 -n 3 -m "not slow" tests/unit/test_channel_mux_swift_parity.py ios/tests --ignore=ios/tests/test_macos_swift_host_runner.py
+
+      - name: Qualify shared Swift collection concurrency
+        run: swift test --sanitize=thread --filter ObstacleBridgeChannelMuxEgressSequencerTests
 
       - name: Qualify PXY-3C proxy collector matrix (macOS)
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py

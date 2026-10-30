@@ -12,6 +12,8 @@
 
 ARC-CMP-001:
   # The independent myUDP peer remains bound through the client's post-reply
+  # Required Linux and macOS gates execute the Core concurrent egress test
+  # because native collection traps are process-fatal rather than recoverable.
   # CONTROL/IDLE acknowledgement; repeated-loss has a bounded receive window.
   # The shared basic overlay catalog uses this boundary in Python/Python and
   # Python/Linux-native process pairings, including native service byte rows.
