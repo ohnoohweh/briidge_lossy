@@ -177,6 +177,8 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     }
 
     private func receiveReadyBytes(_ state: ClientState) {
+        // Keep the desktop helper ABI aligned with the packaged macOS helper:
+        // complete only shared-decoder frames obtained from readiness bytes.
         var buffer = [UInt8](repeating: 0, count: 8192)
         while true {
             // MSG_DONTWAIT keeps a stale readiness notification harmless even

@@ -629,7 +629,10 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "ObstacleBridgeMacOSProtocolV1TunHelperServer" in helper_main
     assert "ObstacleBridgeWorkerIPC.negotiatedCapabilities" in protocol_server
     assert "ObstacleBridgeWorkerIPC.decodeControl" in protocol_server
-    assert "ObstacleBridgeWorkerIPC.frameSize" in protocol_server
+    assert "ObstacleBridgeWorkerIPCStreamDecoder" in protocol_server
+    assert "DispatchSource.makeReadSource(fileDescriptor: fd" in protocol_server
+    assert "recv(state.fd, &buffer, buffer.count, MSG_DONTWAIT)" in protocol_server
+    assert "readExactly(" not in protocol_server
     assert "ownerLossAcceptPollMilliseconds" in protocol_server
     assert "obstacleBridgeUnixSocketPathBytes(socketPath, capacity:" in protocol_server
     assert "destination.initialize(repeating: 0, count: bytes.count)" in protocol_server

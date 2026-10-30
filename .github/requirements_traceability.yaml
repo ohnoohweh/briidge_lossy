@@ -2074,6 +2074,8 @@ REQ-IO-001:
   # Linux-native TUN-helper listener and accepted control clients likewise
   # retain partial OBIP frames in a shared incremental decoder behind serial
   # Dispatch read sources.
+  # The packaged macOS helper uses the same decoder and nonblocking Dispatch
+  # read source for every accepted client.
   # The myUDP exchange fallback retains only its configured bounded poll;
   # each datagram receive uses MSG_DONTWAIT before async ownership begins.
   unit_tests:
@@ -2091,3 +2093,4 @@ REQ-IO-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::ownsBidirectionalNonBlockingPacketIO
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::packetDeviceReceivesHelperPacketAndEventThroughReadinessSource
     - swift/Tests/ObstacleBridgeDesktopSharedTests/ObstacleBridgeWorkerIPCTests.swift::incrementalDecoderRetainsPartialFrameUntilReadinessDeliversItsRemainder
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_tun_helper_package_skeleton_sources_exist
