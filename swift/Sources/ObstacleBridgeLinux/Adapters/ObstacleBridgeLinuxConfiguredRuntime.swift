@@ -181,6 +181,15 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// bootstrap handshake. SecureLink remains the sole owner of protected
     /// records; only socket waiting moves out of the receive worker.
     public func startAsyncReceiveOwner(_ handler: @escaping (Result<Data?, Error>) -> Void) {
+        // The synchronous authentication exchange can receive the peer's
+        // first protected application record while completing its transcript.
+        // Hand that retained record to the long-lived owner before arming the
+        // lower readiness source; the worker will re-arm us for subsequent
+        // records without a blocking compatibility read.
+        if let payload = takeHandshakeDeliveredPayload() {
+            handler(.success(payload))
+            return
+        }
         lowerSession.startAsyncReceive { [weak self] result in
             guard let self else { return }
             do {

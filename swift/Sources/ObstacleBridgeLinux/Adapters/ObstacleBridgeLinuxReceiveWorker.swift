@@ -39,8 +39,8 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
 
     public func start() {
         lock.lock(); guard stopped else { lock.unlock(); return }; stopped = false; lock.unlock()
-        if let asyncReceive {
-            asyncReceive { [weak self] result in self?.receiveAsyncResult(result) }
+        if asyncReceive != nil {
+            armAsyncReceive()
         } else {
             reader.async { [weak self] in self?.readLoop() }
         }
@@ -78,11 +78,20 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
         switch result {
         case .success(let data):
             if let data { enqueue(data) }
+            armAsyncReceive()
         case .failure(let error):
             let reason = error.localizedDescription
             lock.lock(); let reportFailure = !stopped; if reportFailure { failure = reason }; lock.unlock()
             if reportFailure { onFailure(epoch, reason) }
         }
+    }
+
+    /// The callback supplied by a lower transport completes one record. Keep
+    /// exactly one request armed for the lifetime of this receive owner.
+    private func armAsyncReceive() {
+        lock.lock(); let shouldContinue = !stopped; lock.unlock()
+        guard shouldContinue, let asyncReceive else { return }
+        asyncReceive { [weak self] result in self?.receiveAsyncResult(result) }
     }
 
     private func enqueue(_ data: Data) {
