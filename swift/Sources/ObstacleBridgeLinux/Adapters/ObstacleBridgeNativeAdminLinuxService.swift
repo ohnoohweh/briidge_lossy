@@ -983,20 +983,6 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         }
     }
 
-    private func sendLiveJSON(_ client: Int32, value: [String: Any]) -> Bool {
-        guard let body = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return false }
-        return sendWebSocketFrame(client, opcode: 0x1, payload: body)
-    }
-
-    private func sendWebSocketFrame(_ client: Int32, opcode: UInt8, payload: Data) -> Bool {
-        guard payload.count <= Int(UInt16.max) else { return false }
-        var frame = Data([0x80 | opcode])
-        if payload.count < 126 { frame.append(UInt8(payload.count)) }
-        else { frame.append(126); var length = UInt16(payload.count).bigEndian; frame.append(Data(bytes: &length, count: 2)) }
-        frame.append(payload)
-        return frame.withUnsafeBytes { write(client, $0.baseAddress, frame.count) == frame.count }
-    }
-
     private func parseWebSocketFrame(_ data: Data) -> WebSocketFrame? {
         guard data.count >= 2 else { return nil }
         let first = data[data.startIndex], second = data[data.startIndex + 1]
