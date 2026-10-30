@@ -171,6 +171,10 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         }
         guard bindResult == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxAdminServerError.bindFailure(code) }
         guard listen(fd, 16) == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxAdminServerError.listenFailure(code) }
+        let listenerFlags = fcntl(fd, F_GETFL)
+        guard listenerFlags >= 0, fcntl(fd, F_SETFL, listenerFlags | O_NONBLOCK) == 0 else {
+            let code = errno; _ = close(fd); throw ObstacleBridgeLinuxAdminServerError.socketFailure(code)
+        }
         var actual = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         _ = withUnsafeMutablePointer(to: &actual) { pointer in pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }
         self.listener = fd
@@ -193,20 +197,26 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     }
 
     private func acceptReadyClient() {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxAdminServerTests
         guard listener >= 0 else { return }
-        let client = accept(listener, nil, nil)
-        guard client >= 0 else { return }
-        let flags = fcntl(client, F_GETFL)
-        guard flags >= 0, fcntl(client, F_SETFL, flags | O_NONBLOCK) == 0 else {
-            _ = close(client)
-            return
+        while true {
+            let client = accept(listener, nil, nil)
+            if client < 0 {
+                if errno == EINTR { continue }
+                return
+            }
+            let flags = fcntl(client, F_GETFL)
+            guard flags >= 0, fcntl(client, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                _ = close(client)
+                continue
+            }
+            let source = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
+            clientSources[client] = source
+            source.setEventHandler { [weak self] in self?.readClientRequest(client) }
+            source.setCancelHandler { _ = close(client) }
+            source.resume()
+            readClientRequest(client)
         }
-        let source = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
-        clientSources[client] = source
-        source.setEventHandler { [weak self] in self?.readClientRequest(client) }
-        source.setCancelHandler { _ = close(client) }
-        source.resume()
-        readClientRequest(client)
     }
 
     /// Keeps partial HTTP frames under the accepted descriptor's readiness
