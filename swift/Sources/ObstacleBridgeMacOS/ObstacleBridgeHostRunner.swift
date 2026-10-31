@@ -209,6 +209,9 @@ final class ObstacleBridgeHostRunner {
     private var cachedPeersSnapshot: [[String: Any]] = []
     private var cachedMetaSnapshot: [String: Any] = [:]
     private var cachedTunRoutingSnapshot: [String: Any] = [:]
+    /// Admin requests and the periodic cache publisher can both build a peer
+    /// snapshot. Keep rate-history mutation serialized across those queues.
+    private let peerTrafficRateLock = NSLock()
     private var peerTrafficRateState: [String: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)] = [:]
     private var overlayDisconnectedAt: TimeInterval?
     private var secureLinkSnapshotSessionID: UInt64 = 0
@@ -1764,7 +1767,7 @@ final class ObstacleBridgeHostRunner {
                 "frames_from_securelink": myudpProtocolStats["frames_from_securelink"] ?? 0,
             ]
         }
-        return [peer]
+        return [ObstacleBridgeAdminSnapshotSupport.canonicalPeerEnvelope(peer)]
     }
 
     private func peerTrafficTotals(from connections: [String: Any]) -> (rxBytes: Int, txBytes: Int) {
@@ -1790,6 +1793,8 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func trafficSnapshot(peerID: String, rxBytes rawRXBytes: Int, txBytes rawTXBytes: Int) -> [String: Any] {
+        peerTrafficRateLock.lock()
+        defer { peerTrafficRateLock.unlock() }
         let now = Date().timeIntervalSince1970
         var rxBytes = max(0, rawRXBytes)
         var txBytes = max(0, rawTXBytes)
@@ -2660,15 +2665,19 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func listeningRows(protocol protocolName: String) -> [[String: Any]] {
-        (ownServerSpecs + Array(catalogServiceSpecs.values))
+        let ownRows = ownServerSpecs
             .filter { $0.listenProtocol == protocolName && $0.targetProtocol == protocolName }
-            .map { listeningRow(for: $0, protocol: protocolName) }
+            .map { listeningRow(for: $0, protocol: protocolName, catalog: ObstacleBridgeRuntimeConfig.ownServiceCatalog) }
+        let remoteRows = catalogServiceSpecs.values
+            .filter { $0.listenProtocol == protocolName && $0.targetProtocol == protocolName }
+            .map { listeningRow(for: $0, protocol: protocolName, catalog: ObstacleBridgeRuntimeConfig.remoteServiceCatalog) }
+        return ownRows + remoteRows
     }
 
-    private func listeningRow(for spec: ObstacleBridgeNativeServiceSpec, protocol protocolName: String) -> [String: Any] {
+    private func listeningRow(for spec: ObstacleBridgeNativeServiceSpec, protocol protocolName: String, catalog: String) -> [String: Any] {
         var row: [String: Any] = [
             "protocol": protocolName,
-            "role": "server",
+            "role": ObstacleBridgeAdminSnapshotSupport.serviceConnectionRole(catalog: catalog),
             "state": "listening",
             "chan_id": NSNull(),
             "svc_id": spec.svcID,
@@ -2677,6 +2686,7 @@ final class ObstacleBridgeHostRunner {
             "local": ["host": spec.listenBind, "port": spec.listenPort],
             "local_port": spec.listenPort,
             "remote_destination": ["host": spec.targetHost, "port": spec.targetPort],
+            "catalog": catalog,
             "stats": ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0],
         ]
         if protocolName == "tun" {

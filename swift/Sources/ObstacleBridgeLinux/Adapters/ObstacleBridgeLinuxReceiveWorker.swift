@@ -7,15 +7,17 @@ public struct ObstacleBridgeLinuxReceiveWorkerSnapshot: Equatable, Sendable {
     public let receivedFrames: Int
     public let droppedFrames: Int
     public let queueDepth: Int
+    public let lastReceivedUnixTS: TimeInterval?
     public let failureReason: String?
 }
 
-/// One blocking reader for one lower-transport epoch. The worker never invokes
-/// its sink on the reader queue: a bounded handoff queue keeps descriptor reads
-/// isolated from ChannelMux processing and cancellation is epoch-scoped.
+/// One receive owner for one lower-transport epoch. POSIX stream transports
+/// use its reader queue; readiness-driven transports supply callbacks. In both
+/// cases a bounded handoff queue keeps ChannelMux processing isolated.
 public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
     private let epoch: UInt64
     private let receive: () throws -> Data
+    private let asyncReceive: ((@escaping (Result<Data?, Error>) -> Void) -> Void)?
     private let cancelReceive: () -> Void
     private let sink: (UInt64, Data) -> Void
     private let onFailure: (UInt64, String) -> Void
@@ -29,14 +31,19 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
     private var received = 0
     private var dropped = 0
     private var failure: String?
+    private var lastReceivedUnixTS: TimeInterval?
 
-    public init(epoch: UInt64, capacity: Int = 128, receive: @escaping () throws -> Data, cancelReceive: @escaping () -> Void, sink: @escaping (UInt64, Data) -> Void, onFailure: @escaping (UInt64, String) -> Void = { _, _ in }) {
-        self.epoch = epoch; self.capacity = max(1, capacity); self.receive = receive; self.cancelReceive = cancelReceive; self.sink = sink; self.onFailure = onFailure
+    public init(epoch: UInt64, capacity: Int = 128, receive: @escaping () throws -> Data, asyncReceive: ((@escaping (Result<Data?, Error>) -> Void) -> Void)? = nil, cancelReceive: @escaping () -> Void, sink: @escaping (UInt64, Data) -> Void, onFailure: @escaping (UInt64, String) -> Void = { _, _ in }) {
+        self.epoch = epoch; self.capacity = max(1, capacity); self.receive = receive; self.asyncReceive = asyncReceive; self.cancelReceive = cancelReceive; self.sink = sink; self.onFailure = onFailure
     }
 
     public func start() {
         lock.lock(); guard stopped else { lock.unlock(); return }; stopped = false; lock.unlock()
-        reader.async { [weak self] in self?.readLoop() }
+        if asyncReceive != nil {
+            armAsyncReceive()
+        } else {
+            reader.async { [weak self] in self?.readLoop() }
+        }
     }
 
     public func stop() {
@@ -46,7 +53,7 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
 
     public func snapshot() -> ObstacleBridgeLinuxReceiveWorkerSnapshot {
         lock.lock(); defer { lock.unlock() }
-        return .init(epoch: epoch, state: stopped ? "stopped" : (failure == nil ? "running" : "failed"), receivedFrames: received, droppedFrames: dropped, queueDepth: queued.count, failureReason: failure)
+        return .init(epoch: epoch, state: stopped ? "stopped" : (failure == nil ? "running" : "failed"), receivedFrames: received, droppedFrames: dropped, queueDepth: queued.count, lastReceivedUnixTS: lastReceivedUnixTS, failureReason: failure)
     }
 
     private func readLoop() {
@@ -65,10 +72,33 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
         }
     }
 
+    private func receiveAsyncResult(_ result: Result<Data?, Error>) {
+        lock.lock(); let isStopped = stopped; lock.unlock()
+        guard !isStopped else { return }
+        switch result {
+        case .success(let data):
+            if let data { enqueue(data) }
+            armAsyncReceive()
+        case .failure(let error):
+            let reason = error.localizedDescription
+            lock.lock(); let reportFailure = !stopped; if reportFailure { failure = reason }; lock.unlock()
+            if reportFailure { onFailure(epoch, reason) }
+        }
+    }
+
+    /// The callback supplied by a lower transport completes one record. Keep
+    /// exactly one request armed for the lifetime of this receive owner.
+    private func armAsyncReceive() {
+        lock.lock(); let shouldContinue = !stopped; lock.unlock()
+        guard shouldContinue, let asyncReceive else { return }
+        asyncReceive { [weak self] result in self?.receiveAsyncResult(result) }
+    }
+
     private func enqueue(_ data: Data) {
         lock.lock(); defer { lock.unlock() }
         guard !stopped else { return }
         received += 1
+        lastReceivedUnixTS = Date().timeIntervalSince1970
         guard queued.count < capacity else { dropped += 1; return }
         queued.append(data)
         guard !dispatching else { return }

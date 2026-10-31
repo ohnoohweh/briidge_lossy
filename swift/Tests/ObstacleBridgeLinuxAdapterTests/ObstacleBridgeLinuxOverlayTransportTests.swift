@@ -61,12 +61,40 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try session.receive() == Data("python:swift-second".utf8))
     }
 
+    @Test func tcpDuplexSessionUsesReadinessCallbacksAfterBootstrap() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-duplex")
+        defer { peer.stop() }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .tcp)
+        let session = try client.openSession(); defer { session.close() }
+        let received = DispatchSemaphore(value: 0)
+        let value = LockedData()
+        session.startAsyncReceive { result in
+            if case .success(let payload) = result { value.store(payload); received.signal() }
+        }
+        #expect(received.wait(timeout: .now() + 2) == .success)
+        #expect(value.load() == Data("python-first".utf8))
+    }
+
     @Test func webSocketDuplexSessionReceivesPeerFrameBeforeLocalSend() throws {
         let peer = try PythonOverlayPeer(mode: "ws-duplex")
         defer { peer.stop() }
         let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .ws, wsPath: "/overlay")
         let session = try client.openSession(); defer { session.close() }
         #expect(try session.receive() == Data("python-first".utf8))
+    }
+
+    @Test func webSocketDuplexSessionUsesReadinessCallbacksAfterBootstrap() throws {
+        let peer = try PythonOverlayPeer(mode: "ws-duplex")
+        defer { peer.stop() }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .ws, wsPath: "/overlay")
+        let session = try client.openSession(); defer { session.close() }
+        let received = DispatchSemaphore(value: 0)
+        let value = LockedData()
+        session.startAsyncReceive { result in
+            if case .success(let payload) = result { value.store(payload); received.signal() }
+        }
+        #expect(received.wait(timeout: .now() + 2) == .success)
+        #expect(value.load() == Data("python-first".utf8))
     }
 
     @Test func myudpDuplexSessionReceivesPeerFrameAfterAddressRegistration() throws {
@@ -76,6 +104,21 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         let session = try client.openSession(); defer { session.close() }
         try session.send(Data("register".utf8))
         #expect(try session.receive() == Data("python-first".utf8))
+    }
+
+    @Test func myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap() throws {
+        let peer = try PythonOverlayPeer(mode: "myudp-duplex")
+        defer { peer.stop() }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .myudp)
+        let session = try client.openSession(); defer { session.close() }
+        let received = DispatchSemaphore(value: 0)
+        let value = LockedData()
+        session.startAsyncReceive { result in
+            if case .success(let payload) = result { value.store(payload); received.signal() }
+        }
+        try session.send(Data("register".utf8))
+        #expect(received.wait(timeout: .now() + 2) == .success)
+        #expect(value.load() == Data("python-first".utf8))
     }
 
     @Test func webSocketUpgradeAndBinaryFrameRoundTripAgainstPythonPeer() throws {
@@ -102,6 +145,22 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         )
         #expect(try client.roundTrip(Data("swift-linux-wss".utf8)) == Data("swift-linux-wss".utf8))
         #expect(client.snapshot.state == "connected")
+    }
+
+    @Test func tlsWebSocketSessionUsesNIOCallbacksAfterBootstrap() throws {
+        let peer = try PythonOverlayPeer(mode: "wss")
+        defer { peer.stop() }
+        guard let trustRootsPath = peer.trustRootsPath else { throw OverlayTestError.peerDidNotStart }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "localhost", port: peer.port, transport: .ws, wsPath: "/overlay", wsTLS: true, wsTrustRootsPath: trustRootsPath, wsProxy: .init(mode: .off))
+        let session = try client.openSession(); defer { session.close() }
+        let received = DispatchSemaphore(value: 0)
+        let value = LockedData()
+        session.startAsyncReceive { result in
+            if case .success(let payload) = result { value.store(payload); received.signal() }
+        }
+        try session.send(Data("swift-linux-wss-async".utf8))
+        #expect(received.wait(timeout: .now() + 3) == .success)
+        #expect(value.load() == Data("swift-linux-wss-async".utf8))
     }
 
     @Test func tlsWebSocketRejectsUntrustedPythonPeer() throws {
@@ -148,6 +207,21 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         )
         #expect(try client.roundTrip(Data("swift-linux-quic".utf8)) == Data("python:swift-linux-quic".utf8))
         #expect(client.snapshot.state == "connected")
+    }
+
+    @Test func quicReliableStreamUsesNIOCallbacksAfterBootstrap() throws {
+        let peer = try PythonOverlayPeer(mode: "quic")
+        defer { peer.stop() }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .quic, quicALPN: "hq-29", quicInsecure: true)
+        let session = try client.openSession(); defer { session.close() }
+        let received = DispatchSemaphore(value: 0)
+        let value = LockedData()
+        session.startAsyncReceive { result in
+            if case .success(let payload) = result { value.store(payload); received.signal() }
+        }
+        try session.send(Data("swift-linux-quic-async".utf8))
+        #expect(received.wait(timeout: .now() + 5) == .success)
+        #expect(value.load() == Data("python:swift-linux-quic-async".utf8))
     }
 
     @Test func myudpDataFrameRoundTripsAgainstPythonPeer() throws {
@@ -367,6 +441,8 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(compressed.compressOutputBytesTotal < 256)
         #expect(compressed.compressedInputBytesReceivedTotal > 0)
         #expect(compressed.compressedOutputBytesReceivedTotal == 256)
+        #expect(compressed.decompressOKTotal == 1)
+        #expect(compressed.decompressFailTotal == 1)
         #expect(compressed.rejectedFramesTotal == 1)
         #expect(compressed.rejectedBytesTotal == 4)
         // A malformed compressed record is rejected at the Core boundary;
@@ -791,10 +867,9 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
 }
 
 final class PythonOverlayPeer {
-    // Swift Testing schedules this suite concurrently. Eight peer processes
-    // stay below Foundation's pipe pressure while allowing short-lived
-    // transport tests to start within their lifecycle deadlines instead of
-    // waiting behind unrelated Python peers.
+    // Other transport suites can run concurrently. Eight peer processes stay
+    // below Foundation's pipe pressure while allowing short-lived tests to
+    // start within their lifecycle deadlines.
     private static let launchSlots = DispatchSemaphore(value: 8)
     let process: Process
     let port: Int
@@ -1143,12 +1218,12 @@ final class PythonOverlayPeer {
             s.close()
             """
         }
-        if mode == "myudp-securelink" || mode == "myudp-secure-mux" || mode == "myudp-securelink-duplex" || mode == "myudp-securelink-mux-duplex" || mode == "myudp-securelink-close-after-ack" || mode == "myudp-securelink-silent" || mode == "myudp-securelink-malformed" || mode == "myudp-securelink-replay" || mode == "myudp-securelink-rekey" {
+        if mode == "myudp-securelink" || mode == "myudp-secure-mux" || mode == "myudp-secure-mux-stream" || mode == "myudp-securelink-duplex" || mode == "myudp-securelink-mux-duplex" || mode == "myudp-securelink-close-after-ack" || mode == "myudp-securelink-silent" || mode == "myudp-securelink-malformed" || mode == "myudp-securelink-replay" || mode == "myudp-securelink-rekey" {
             return """
             import hashlib, hmac, socket, struct
             from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
             MODE = "\(mode)"
-            PREFIX = \(mode == "myudp-secure-mux" ? "b''" : "b'python:'")
+            PREFIX = \(mode == "myudp-secure-mux" || mode == "myudp-secure-mux-stream" ? "b''" : "b'python:'")
             s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
             def recv():
                 while True:
@@ -1168,6 +1243,9 @@ final class PythonOverlayPeer {
             proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); send(header(2,sid,0)+sn+b'\\x01'+proof,counter,peer)
             salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
             client_proof,counter,peer=recv(); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); send(ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack),counter,peer)
+            # The portable peer-address protocol is lower than SecureLink.
+            # Consume it before any protected application/rekey fixture data.
+            address_request,counter,peer=recv(); assert address_request==b'OBPA\\x02\\x01\\x00'; send(b'OBPA\\x02\\x02\\x04\\x7f\\x00\\x00\\x01'+(443).to_bytes(2,'big'),counter,peer)
             if MODE == 'myudp-securelink-malformed':
                 send(header(4,sid+1,2)+bytes(16),counter+1,peer)
             elif MODE == 'myudp-securelink-replay':
@@ -1191,6 +1269,9 @@ final class PythonOverlayPeer {
                 first_plain=b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello' if MODE.endswith('mux-duplex') else b'python-first'
                 first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),first_plain,first),3,peer)
                 app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,3); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),b'python:'+plain,response),4,peer)
+            elif MODE == 'myudp-secure-mux-stream':
+                app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),plain,response),counter,peer)
+                app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(3).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,3); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),plain,response),counter,peer)
             else:
                 app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),PREFIX+plain,response),counter,peer)
             if MODE not in ('myudp-securelink-close-after-ack', 'myudp-securelink-silent'):
@@ -1276,6 +1357,7 @@ final class PythonOverlayPeer {
                 proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); write(c,header(2,sid,0)+sn+b'\\x01'+proof)
                 salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
                 client_proof=read(c); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); write(c,ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack))
+                address_request=read(c); assert address_request==b'OBPA\\x02\\x01\\x00'; write(c,b'OBPA\\x02\\x02\\x04\\x7f\\x00\\x00\\x01'+(443).to_bytes(2,'big'))
                 if epoch == 0:
                     stale_header=header(4,sid,2); stale=stale_header+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'retired',stale_header)
                 if SILENT and epoch == 0:
@@ -1370,6 +1452,9 @@ final class PythonOverlayPeer {
             material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
             client_proof=read_payload(); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''
             ack=header(4,sid,1); write_payload(ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack))
+            # Peer-address discovery crosses the lower transport after the
+            # protected handshake, before the fixture's application controls.
+            address_request=read_payload(); assert address_request==b'OBPA\\x02\\x01\\x00'; write_payload(b'OBPA\\x02\\x02\\x04\\x7f\\x00\\x00\\x01'+(443).to_bytes(2,'big'))
             if MODE.endswith('malformed'):
                 write_payload(header(4,sid+1,2)+bytes(16))
             elif MODE.endswith('replay'):
@@ -1453,3 +1538,10 @@ final class PythonOverlayPeer {
 }
 
 private enum OverlayTestError: Error { case peerDidNotStart }
+
+private final class LockedData: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Data?
+    func store(_ value: Data) { lock.lock(); self.value = value; lock.unlock() }
+    func load() -> Data? { lock.lock(); defer { lock.unlock() }; return value }
+}

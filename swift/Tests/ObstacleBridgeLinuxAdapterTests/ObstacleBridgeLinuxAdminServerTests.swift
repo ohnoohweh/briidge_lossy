@@ -7,6 +7,25 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxAdminServerTests {
+    @Test func statusEmbedsCoreAdminUIForTheSharedHomeTab() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: 1
+        ))
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: [
+            "admin_web": [
+                "admin_web_first_tab": "status",
+                "admin_web_security_advisor_disable": false,
+            ],
+        ])
+        try server.start(); defer { server.stop() }
+        let status = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/status") as? [String: Any])
+        let adminUI = try #require(status["admin_ui"] as? [String: Any])
+        #expect(adminUI["home_tab_enabled"] as? Bool == true)
+        #expect(adminUI["first_tab"] as? String == "status")
+        #expect(adminUI["platform"] as? String == "linux-swift")
+        #expect(status["security_advisor"] as? [String: Any] != nil)
+    }
+
     @Test func logsEndpointReturnsBoundedRedactedNativeDiagnostics() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let server = ObstacleBridgeLinuxAdminServer(
@@ -16,7 +35,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
         try server.start(); defer { server.stop() }
         let payload = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/logs?limit=1") as? [String: Any])
         #expect(payload["ok"] as? Bool == true)
-        #expect(payload["logger_available"] as? Bool == true)
+        #expect(payload["available"] as? Bool == true)
         #expect(payload["lines"] as? [String] == ["failed reason=timeout"])
     }
 
@@ -333,6 +352,10 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(meta["admin_web_name"] as? String == "Linux Admin")
         #expect((meta["build"] as? [String: Any])?["available"] as? Bool == true)
         #expect((meta["build"] as? [String: Any])?["commit"] as? String == "01234567")
+        let status = try #require(try await getJSON(base + "/api/status") as? [String: Any])
+        #expect(status["app"] as? String == "ObstacleBridgeLinux")
+        #expect(status["admin_web_name"] as? String == "Linux Admin")
+        #expect(status["uptime_sec"] as? Int != nil)
         let profiles = try #require(try await getJSON(base + "/api/onboarding/connection-profiles") as? [String: Any])
         let profile = try #require((profiles["profiles"] as? [[String: Any]])?.first)
         #expect(profile["transport"] as? String == "tcp")
@@ -370,6 +393,16 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(status["overlay_transport"] as? String == "tcp")
         #expect(status["transport_state"] as? String == "disconnected")
         #expect(status["app_ready"] as? Bool == false)
+        #expect(status["runtime_owner"] as? String == "ObstacleBridgeLinux")
+        #expect(status["runtime_mode"] as? String == "linux-swift")
+        #expect(status["bootstrap_state"] as? [String: Any] != nil)
+        #expect(status["transport_runtime"] as? [String: Any] != nil)
+        let adminUI = try #require(status["admin_ui"] as? [String: Any])
+        #expect(adminUI["home_tab_enabled"] as? Bool == true)
+        #expect(adminUI["first_tab"] as? String == "home")
+        #expect(adminUI["platform"] as? String == "linux-swift")
+        #expect(status["security_advisor"] as? [String: Any] != nil)
+        #expect(status["compress_layer"] as? [String: Any] != nil)
         #expect((status["logging_worker"] as? [String: Any])?["state"] as? String == "off")
         let layers = status["connection_layers"] as? [[String: Any]]
         #expect(layers?.count == 2)
@@ -394,11 +427,16 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let rows = peers["peers"] as? [[String: Any]]
         #expect(rows?.first?["configured_candidates"] as? [String] == ["first.example", "second.example"])
         #expect(rows?.first?["failure_reason"] is NSNull)
+        #expect(rows?.first?["traffic"] as? [String: Any] != nil)
+        #expect(rows?.first?["open_connections"] as? [String: Any] != nil)
+        #expect(rows?.first?["secure_link"] as? [String: Any] != nil)
+        #expect(rows?.first?["compress_layer"] as? [String: Any] != nil)
         let connections = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/connections") as? [String: Any])
         #expect((connections["tcp"] as? [[String: Any]])?.isEmpty == true)
         #expect((connections["udp"] as? [[String: Any]])?.isEmpty == true)
         let live = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/live?topic=status") as? [String: Any])
         #expect(live["overlay_transport"] as? String == "tcp")
+        #expect(live["runtime_metrics"] as? [String: Any] != nil)
         #expect(ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(" PeErS ") == "peers")
         #expect(ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic("unknown") == nil)
         // The shared browser opens `/api/live` without a query string, then
@@ -502,10 +540,25 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let row = try #require(peers.first)
         let secureLink = try #require(row["secure_link"] as? [String: Any])
         let compression = try #require(row["compression_layer"] as? [String: Any])
+        let webCompression = try #require(row["compress_layer"] as? [String: Any])
+        let connectionLayers = try #require(row["connection_layers"] as? [[String: Any]])
         #expect(row["peer_id"] as? String == "configured-peer")
+        #expect(row["id"] as? String == "configured-peer")
         #expect(row["transport"] as? String == "tcp")
+        #expect(row["connected"] as? Bool == true)
+        #expect(row["connected_since_unix_ts"] as? TimeInterval != nil)
+        #expect((row["peer"] as? [String: Any])?["host"] as? String == "127.0.0.1")
         #expect(row["connection_epoch"] as? Int == 1)
         #expect(row["app_ready"] as? Bool == true)
+        #expect(connectionLayers.contains { ($0["layer"] as? String) == "transport" && ($0["connected"] as? Bool) == true })
+        #expect(connectionLayers.contains { ($0["layer"] as? String) == "secure_link" && ($0["connected"] as? Bool) == true })
+        #expect(connectionLayers.contains { ($0["layer"] as? String) == "compression" && ($0["connected"] as? Bool) == false })
+        #expect(secureLink["enabled"] as? Bool == true)
+        #expect(secureLink["mode"] as? String == "psk")
+        #expect(secureLink["rekey_in_progress"] as? Bool == false)
+        #expect(secureLink["frames_from_client_passed_total"] as? UInt64 == 1)
+        #expect(secureLink["frames_to_client_passed_total"] as? UInt64 == 1)
+        #expect(secureLink["connected_since_unix_ts"] as? TimeInterval != nil)
         #expect(secureLink["authenticated"] as? Bool == true)
         #expect(secureLink["state"] as? String == "authenticated")
         #expect(secureLink["session_id"] as? UInt64 == 77)
@@ -515,6 +568,8 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(secureLink["protected_frames_received_total"] as? UInt64 == 1)
         #expect(secureLink["authenticated_generations_total"] as? UInt64 == 1)
         #expect(compression["enabled"] as? Bool == false)
+        #expect(webCompression["enabled"] as? Bool == false)
+        #expect(webCompression["decompress_fail_total"] as? UInt64 == 0)
         #expect(compression["algorithm"] as? String == "zlib")
         #expect(compression["compressed_frames_sent_total"] as? UInt64 == 0)
         #expect(compression["compressed_output_bytes_sent_total"] as? UInt64 == 0)
@@ -546,7 +601,34 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(compression["compress_applied_total"] as? UInt64 == 1)
         #expect(compression["compressed_frames_sent_total"] as? UInt64 == 1)
         #expect(compression["compressed_frames_received_total"] as? UInt64 == 1)
+        #expect(compression["decompress_ok_total"] as? UInt64 == 1)
+        #expect(compression["decompress_fail_total"] as? UInt64 == 0)
         #expect((compression["compressed_output_bytes_sent_total"] as? UInt64 ?? 256) < 256)
+    }
+
+    @Test func myudpPeerProjectionExposesLiveTransportTelemetry() async throws {
+        let peer = try PythonOverlayPeer(mode: "myudp-securelink")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .myudp, host: "127.0.0.1", port: peer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8)
+        ))
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime)
+        try server.start()
+        defer { server.stop(); runtime.disconnect() }
+
+        let session = try runtime.connect(sessionID: 79, clientNonce: Data(repeating: 9, count: 32))
+        #expect(try session.send(Data("telemetry".utf8)) == Data("python:telemetry".utf8))
+        let peersDocument = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [String: Any])
+        let peers = try #require(peersDocument["peers"] as? [[String: Any]])
+        let row = try #require(peers.first)
+        let myudp = try #require(row["myudp"] as? [String: Any])
+
+        #expect(row["connected_since_unix_ts"] as? TimeInterval != nil)
+        #expect(myudp["batch_datagrams_sent"] as? UInt64 ?? 0 > 0)
+        #expect(myudp["batch_datagrams_received"] as? UInt64 ?? 0 > 0)
+        #expect(row["rtt_est_ms"] as? UInt64 != nil)
+        #expect(row["transmit_delay_est_ms"] as? UInt64 != nil)
     }
 
     @Test func myudpListenerAdminProjectsEachAuthenticatedPeerWithoutPSK() async throws {

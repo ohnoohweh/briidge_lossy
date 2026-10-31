@@ -15,6 +15,19 @@ pytestmark = pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason=
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_native_log_supervisor_query_uses_readiness_callback_not_polling():
+    source = (ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift").read_text()
+    query_surface = source.split("    public func fetch(limit: Int)", 1)[1].split("    public func status()", 1)[0]
+
+    assert "requestSnapshotRefresh(limit: limit)" in query_surface
+    assert "snapshotRefreshPending" in query_surface
+    assert "DispatchSource.makeReadSource" in query_surface
+    assert "pendingQueries" in query_surface
+    assert "let count = recv(fd, &bytes, bytes.count, Int32(MSG_DONTWAIT))" in source
+    assert "waitReadable(" not in query_surface
+    assert "poll(" not in query_surface
+
+
 @pytest.fixture(scope="module")
 def native_log_binaries(tmp_path_factory):
     swiftc = shutil.which("swiftc")

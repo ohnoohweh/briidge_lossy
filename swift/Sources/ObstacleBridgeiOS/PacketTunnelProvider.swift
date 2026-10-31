@@ -88,6 +88,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var proxyProviderLastError = ""
     private var providerStartedAt = Date().timeIntervalSince1970
     private var runtimeReloadInProgress = false
+    /// The cache publisher and an on-demand admin request can both calculate
+    /// traffic rates, so serialize access to the rate-history state.
+    private let peerTrafficRateLock = NSLock()
     private var peerTrafficRateState: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)?
     private var secureLinkConnectedSinceUnixTS: Int?
     private var secureLinkLastAuthenticatedUnixTS: Int?
@@ -2008,7 +2011,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             preferredKind: transport
         )
         let myudpProtocolStats = myudpRuntime["protocol_stats"] as? [String: Any] ?? [:]
-        return [[
+        let peer: [String: Any] = [
             "id": 1,
             "transport": transport,
             "state": state,
@@ -2053,7 +2056,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "frames_to_securelink": myudpProtocolStats["frames_to_securelink"] ?? 0,
                 "frames_from_securelink": myudpProtocolStats["frames_from_securelink"] ?? 0,
             ],
-        ]]
+        ]
+        return [ObstacleBridgeAdminSnapshotSupport.canonicalPeerEnvelope(peer)]
     }
 
     private func adminTransportConnectedState(bridgeSnapshot: [String: Any]) -> Bool {
@@ -2596,6 +2600,9 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             rxBytes += adminIntValue(stats["rx_bytes"])
             txBytes += adminIntValue(stats["tx_bytes"])
         }
+
+        peerTrafficRateLock.lock()
+        defer { peerTrafficRateLock.unlock() }
 
         let now = Date().timeIntervalSince1970
         var rxRate = 0.0

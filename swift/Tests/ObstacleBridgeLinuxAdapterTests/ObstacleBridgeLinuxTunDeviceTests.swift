@@ -95,7 +95,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 7,
         ]), to: control.0)
         #expect(try readControl(from: control.0)["kind"] as? String == "worker.hello")
-        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_username": "admin", "admin_web_password": "secret", "admin_web_token": "control", "admin_web_name": "native-test", "overlay_transport": "tcp", "dashboard": true, "telemetry_spool_directory": "/tmp/obstaclebridge-telemetry"], "log_root_level": 0]), to: control.0)
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_username": "admin", "admin_web_password": "secret", "admin_web_token": "control", "admin_web_name": "native-test", "admin_web_dir": testAdminWebDirectory(), "overlay_transport": "tcp", "dashboard": true, "telemetry_spool_directory": "/tmp/obstaclebridge-telemetry"], "log_root_level": 0]), to: control.0)
         let request = try readControl(from: control.0)
         #expect(request["kind"] as? String == "admin.call")
         #expect(request["id"] as? String == "bootstrap-status")
@@ -156,7 +156,10 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         DispatchQueue.global().async {
             defer { websocketRPCReady.signal() }
             do {
-                for _ in 0..<5 {
+                // The initial live snapshot contains connections, meta,
+                // peers, and status. `meta` obtains its build state through
+                // the status RPC, for four serialized parent calls total.
+                for _ in 0..<4 {
                     guard let request = try? self.readControl(from: control.0),
                           let requestID = request["id"] as? String else { return }
                     let result: [String: Any]
@@ -511,6 +514,50 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(stopped.wait(timeout: .now() + 1) == .success)
     }
 
+    @Test func nativeAdminChildReassemblesFragmentedHTTPRequestWithoutBlockingReceive() throws {
+        let control = try makeSocketPair()
+        let lifetime = try makeSocketPair()
+        let childControl = dup(control.1)
+        let childLifetime = dup(lifetime.1)
+        guard childControl >= 0, childLifetime >= 0 else { throw POSIXError(.EMFILE) }
+        close(control.1); close(lifetime.1)
+        defer { close(control.0); close(lifetime.0) }
+        let stopped = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            defer { stopped.signal() }
+            try? ObstacleBridgeNativeAdminWorker.run(
+                controlFD: childControl,
+                lifetimeFD: childLifetime,
+                generation: 17,
+                serviceFactory: { arguments, parentRPC in
+                    let service = try ObstacleBridgeNativeAdminLinuxService(arguments: arguments, parentRPC: parentRPC)
+                    return .init(port: service.port, stop: { service.stop() })
+                }
+            )
+        }
+
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .hello, generation: 17, value: [
+            "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 17,
+        ]), to: control.0)
+        #expect(try readControl(from: control.0)["kind"] as? String == "worker.hello")
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 17, value: [
+            "v": 1, "kind": "admin.start", "args": ["admin_web_bind": "127.0.0.1", "admin_web_port": 0, "admin_web_name": "native-test", "admin_web_dir": testAdminWebDirectory()], "log_root_level": 0,
+        ]), to: control.0)
+        let bootstrap = try readControl(from: control.0)
+        #expect(bootstrap["method"] as? String == "get_status_snapshot")
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 17, value: [
+            "v": 1, "kind": "admin.reply", "id": "bootstrap-status", "ok": true, "result": [String: Any](),
+        ]), to: control.0)
+        let ready = try readControl(from: control.0)
+        let port = (ready["port"] as? NSNumber)?.intValue ?? 0
+        #expect(port > 0)
+        let index = try fragmentedNativeAdminHTTPRequest(port: port)
+        #expect(String(data: index, encoding: .utf8)?.contains("HTTP/1.1 200 OK") == true)
+        #expect(String(data: index, encoding: .utf8)?.contains("<!doctype html>") == true)
+        close(lifetime.0)
+        #expect(stopped.wait(timeout: .now() + 1) == .success)
+    }
+
     @Test func nativeAdminChildBoundsBootstrapStatusReplyWait() throws {
         let control = try makeSocketPair()
         let lifetime = try makeSocketPair()
@@ -593,6 +640,45 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         }
     }
 
+    private func testAdminWebDirectory() -> String {
+        var directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        for _ in 0..<6 {
+            let candidate = directory.appendingPathComponent("admin_web", isDirectory: true)
+            if FileManager.default.fileExists(atPath: candidate.appendingPathComponent("index.html").path) {
+                return candidate.path
+            }
+            directory.deleteLastPathComponent()
+        }
+        return "./admin_web"
+    }
+
+    private func fragmentedNativeAdminHTTPRequest(port: Int) throws -> Data {
+        let client = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        guard client >= 0 else { throw POSIXError(.EMFILE) }
+        defer { close(client) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(UInt16(port).bigEndian)
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard connected == 0 else { throw POSIXError(.ECONNREFUSED) }
+        let request = Data("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".utf8)
+        let split = request.count / 2
+        try writeAll(request.prefix(split), to: client)
+        usleep(20_000)
+        try writeAll(request.suffix(from: split), to: client)
+        var result = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = read(client, &buffer, buffer.count)
+            guard count >= 0 else { throw POSIXError(.EIO) }
+            if count == 0 { return result }
+            result.append(buffer, count: Int(count))
+        }
+    }
+
     private func nativeAdminWebSocketRequest(port: Int, cookie: String) throws -> Data {
         let client = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
         guard client >= 0 else { throw POSIXError(.EMFILE) }
@@ -606,27 +692,37 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         }
         guard connected == 0 else { throw POSIXError(.ECONNREFUSED) }
         try writeAll(Data("GET /api/live HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nCookie: \(cookie)\r\n\r\n".utf8), to: client)
-        var output = try readSocketChunk(from: client)
-        output.append(try readSocketChunk(from: client))
-        let control = try JSONSerialization.data(withJSONObject: ["subscribe": ["peers"], "request": "peers"])
-        try writeAll(maskedWebSocketTextFrame(control), to: client)
-        output.append(try readSocketChunk(from: client))
-        output.append(try readSocketChunk(from: client))
+        var output = try readWebSocketOutput(from: client) { data in
+            let text = String(decoding: data, as: UTF8.self)
+            return text.contains("HTTP/1.1 101 Switching Protocols")
+                && text.contains("\"type\":\"hello\"")
+                && text.contains("\"type\":\"status\"")
+                && text.contains("\"type\":\"connections\"")
+                && text.contains("\"type\":\"meta\"")
+                && text.contains("\"type\":\"peers\"")
+        }
         return output
     }
 
-    private func maskedWebSocketTextFrame(_ payload: Data) -> Data {
-        let mask: [UInt8] = [0x12, 0x34, 0x56, 0x78]
-        var frame = Data([0x81, 0x80 | UInt8(payload.count)])
-        frame.append(contentsOf: mask)
-        for (offset, byte) in payload.enumerated() { frame.append(byte ^ mask[offset % mask.count]) }
-        return frame
+    private func readWebSocketOutput(from descriptor: Int32, initial: Data = Data(), until complete: (Data) -> Bool) throws -> Data {
+        var output = initial
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        guard setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            throw POSIXError(.EINVAL)
+        }
+        while !complete(output) {
+            output.append(try readSocketChunk(from: descriptor))
+        }
+        return output
     }
 
     private func readSocketChunk(from descriptor: Int32) throws -> Data {
         var buffer = [UInt8](repeating: 0, count: 4096)
         let count = read(descriptor, &buffer, buffer.count)
-        guard count > 0 else { throw POSIXError(.EIO) }
+        guard count > 0 else {
+            if count < 0, errno == EAGAIN || errno == EWOULDBLOCK { throw POSIXError(.ETIMEDOUT) }
+            throw POSIXError(.EIO)
+        }
         return Data(buffer.prefix(Int(count)))
     }
 
@@ -660,6 +756,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             let result = output.withUnsafeMutableBytes { bytes in
                 read(descriptor, bytes.baseAddress!.advanced(by: offset), count - offset)
             }
+            if result < 0 && errno == EINTR { continue }
             guard result > 0 else { throw POSIXError(.EIO) }
             offset += result
         }

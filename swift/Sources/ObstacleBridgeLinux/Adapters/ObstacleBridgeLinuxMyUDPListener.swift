@@ -210,6 +210,9 @@ public final class ObstacleBridgeLinuxMyUDPPSKListener: @unchecked Sendable {
         let server: ObstacleBridgeSecureLinkPSKServer
         let lock = NSLock()
         let available = DispatchSemaphore(value: 0)
+        /// Peer-address discovery is a lower-transport control protocol.  It
+        /// must be consumed before SecureLink sees application ciphertext.
+        let peerAddressRuntime = ObstacleBridgePeerAddressProtocolRuntime(clientMode: false)
         var authenticated = false
         var closed = false
         var payloads: [Data] = []
@@ -301,6 +304,18 @@ public final class ObstacleBridgeLinuxMyUDPPSKListener: @unchecked Sendable {
         }
         lock.unlock()
         if box.authenticated {
+            let endpoint = Self.endpoint(from: record.peerIdentity)
+            let peerAddress = box.peerAddressRuntime.handleInboundFrame(
+                record.payload,
+                observedPeerHost: endpoint?.host,
+                observedPeerPort: endpoint?.port
+            )
+            if peerAddress.consumed {
+                for reply in peerAddress.emittedFrames {
+                    try listener.send(reply, to: record.peerIdentity, epoch: epoch)
+                }
+                return
+            }
             if !box.append(record.payload) { remove(box, epoch: epoch) }
             return
         }
@@ -352,5 +367,18 @@ public final class ObstacleBridgeLinuxMyUDPPSKListener: @unchecked Sendable {
         lock.unlock()
         box.close()
         listener.withdraw(peerIdentity: box.identity, epoch: epoch)
+    }
+
+    /// `ObstacleBridgeLinuxMyUDPListener` currently binds IPv4 sockets, whose
+    /// numeric peer identity is `address:port`.  Preserve the endpoint as two
+    /// facts for the Core-owned peer-address reply instead of rebuilding its
+    /// wire format in this adapter.
+    private static func endpoint(from identity: String) -> (host: String, port: Int)? {
+        guard let separator = identity.lastIndex(of: ":"),
+              let port = Int(identity[identity.index(after: separator)...]),
+              (1...65_535).contains(port)
+        else { return nil }
+        let host = String(identity[..<separator])
+        return host.isEmpty ? nil : (host, port)
     }
 }

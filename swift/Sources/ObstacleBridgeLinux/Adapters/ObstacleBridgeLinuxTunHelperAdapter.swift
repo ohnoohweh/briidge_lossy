@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 import ObstacleBridgeCore
 import ObstacleBridgeDesktopShared
 #if os(Linux)
@@ -33,13 +34,18 @@ public enum ObstacleBridgeLinuxTunHelperAdapterError: Error, Equatable, Localize
 /// Control requests intentionally remain on bounded independent exchanges;
 /// this connection only carries packet and EVENT fan-out.
 public final class ObstacleBridgeLinuxTunHelperPacketDevice: ObstacleBridgeLinuxPacketDevice, @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxTunHelperAdapterTests
     private let adapter: ObstacleBridgeLinuxTunHelperAdapter
     private let packetSink: (Data) -> Void
     private let eventSink: (String) -> Void
     private let lock = NSLock()
+    private let receiveQueue = DispatchQueue(label: "org.obstaclebridge.linux.tun-helper-packet-readiness")
     private var fd: Int32 = -1
     private var running = false
     private var generation: UInt64 = 0
+    private var readSource: DispatchSourceRead?
+    private var receiveBuffer = Data()
+    private var receiveBufferGeneration: UInt64 = 0
 
     public init(adapter: ObstacleBridgeLinuxTunHelperAdapter, packetSink: @escaping (Data) -> Void, eventSink: @escaping (String) -> Void = { _ in }) {
         self.adapter = adapter; self.packetSink = packetSink; self.eventSink = eventSink
@@ -52,7 +58,10 @@ public final class ObstacleBridgeLinuxTunHelperPacketDevice: ObstacleBridgeLinux
         let selectedGeneration = UInt64.random(in: 1...UInt64.max)
         do { try adapter.authenticate(on: connected, generation: selectedGeneration) } catch { _ = close(connected); throw error }
         generation = selectedGeneration; fd = connected; running = true
-        DispatchQueue.global().async { [weak self] in self?.receiveLoop() }
+        let source = DispatchSource.makeReadSource(fileDescriptor: connected, queue: receiveQueue)
+        readSource = source
+        source.setEventHandler { [weak self] in self?.drainReadable() }
+        source.resume()
     }
 
     public func writePacket(_ packet: Data) throws {
@@ -62,22 +71,72 @@ public final class ObstacleBridgeLinuxTunHelperPacketDevice: ObstacleBridgeLinux
     }
 
     public func stop() {
-        lock.lock(); let active = fd; fd = -1; generation = 0; running = false; lock.unlock()
+        lock.lock()
+        let active = fd
+        let source = readSource
+        fd = -1; generation = 0; running = false; readSource = nil
+        lock.unlock()
+        source?.cancel()
         if active >= 0 { _ = shutdown(active, Int32(SHUT_RDWR)); _ = close(active) }
     }
 
-    private func receiveLoop() {
+    /// The packet endpoint stays active for the TUN lifetime. It must never
+    /// hold a worker thread inside a stream read: Dispatch reports readiness,
+    /// `MSG_DONTWAIT` drains what is already present, and this owner retains
+    /// incomplete OBIP records until their remaining bytes arrive.
+    private func drainReadable() {
         while true {
             lock.lock(); let active = running ? fd : -1; let activeGeneration = generation; lock.unlock()
-            guard active >= 0, let frame = try? adapter.readFrame(from: active), frame.generation == activeGeneration else { stop(); return }
-            switch frame.kind {
-            case .data: packetSink(frame.payload)
-            case .event:
-                if let value = try? ObstacleBridgeWorkerIPC.decodeControl(frame), let payload = value["payload"] as? [String: Any], let detail = payload["detail"] as? String { eventSink(detail) }
-            default: continue
+            guard active >= 0 else { return }
+            var bytes = [UInt8](repeating: 0, count: 16_384)
+            let received = recv(active, &bytes, bytes.count, Int32(MSG_DONTWAIT))
+            if received > 0 {
+                if receiveBufferGeneration != activeGeneration {
+                    receiveBuffer.removeAll(keepingCapacity: false)
+                    receiveBufferGeneration = activeGeneration
+                }
+                receiveBuffer.append(bytes, count: Int(received))
+                guard consumeBufferedFrames(expectedGeneration: activeGeneration) else { stop(); return }
+                continue
             }
+            if received < 0, (errno == EAGAIN || errno == EWOULDBLOCK) { return }
+            if received < 0, errno == EINTR { continue }
+            stop()
+            return
         }
     }
+
+    private func consumeBufferedFrames(expectedGeneration: UInt64) -> Bool {
+        while receiveBuffer.count >= ObstacleBridgeWorkerIPC.headerBytes {
+            let header = Data(receiveBuffer.prefix(ObstacleBridgeWorkerIPC.headerBytes))
+            let bodyLength: Int
+            do {
+                guard let parsedLength = try ObstacleBridgeWorkerIPC.frameSize(header),
+                      parsedLength <= ObstacleBridgeLinuxTunHelperAdapter.maximumFrameBytes else { return false }
+                bodyLength = parsedLength
+            } catch {
+                return false
+            }
+            guard receiveBuffer.count >= ObstacleBridgeWorkerIPC.headerBytes + bodyLength else { return true }
+            let length = ObstacleBridgeWorkerIPC.headerBytes + bodyLength
+            let wire = Data(receiveBuffer.prefix(length))
+            receiveBuffer.removeFirst(length)
+            guard let decoded = try? ObstacleBridgeWorkerIPC.decode(wire), let frame = decoded.0,
+                  decoded.1.isEmpty, frame.generation == expectedGeneration else { return false }
+            switch frame.kind {
+            case .data:
+                packetSink(frame.payload)
+            case .event:
+                if let value = try? ObstacleBridgeWorkerIPC.decodeControl(frame),
+                   let payload = value["payload"] as? [String: Any], let detail = payload["detail"] as? String {
+                    eventSink(detail)
+                }
+            default:
+                continue
+            }
+            }
+        return true
+        }
 }
 
 /// Unix-domain-socket client for the common OBIP helper protocol. Every bounded
@@ -288,9 +347,23 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
     private func readExactly(_ count: Int, from fd: Int32) throws -> Data {
         var output = Data(); output.reserveCapacity(count)
         var buffer = [UInt8](repeating: 0, count: min(8192, max(1, count)))
+        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(timeoutMilliseconds) * 1_000_000
         while output.count < count {
-            let received = read(fd, &buffer, min(buffer.count, count - output.count))
-            guard received > 0 else { if errno == EAGAIN || errno == EWOULDBLOCK { throw ObstacleBridgeLinuxTunHelperAdapterError.timeout }; throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected }
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now < deadline else { throw ObstacleBridgeLinuxTunHelperAdapterError.timeout }
+            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let remaining = Int32(min(UInt64(Int32.max), max(1, (deadline - now) / 1_000_000)))
+            let ready = poll(&descriptor, 1, remaining)
+            if ready < 0, errno == EINTR { continue }
+            guard ready > 0, descriptor.revents & Int16(POLLIN) != 0 else {
+                if ready == 0 { throw ObstacleBridgeLinuxTunHelperAdapterError.timeout }
+                throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected
+            }
+            // A readiness event may be stale after a helper teardown.  Never
+            // enter a blocking stream read on the control-exchange thread.
+            let received = recv(fd, &buffer, min(buffer.count, count - output.count), Int32(MSG_DONTWAIT))
+            if received < 0, errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
+            guard received > 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected }
             output.append(buffer, count: Int(received))
         }
         return output

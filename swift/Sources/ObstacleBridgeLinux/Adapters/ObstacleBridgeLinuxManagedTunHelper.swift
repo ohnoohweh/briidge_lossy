@@ -41,7 +41,10 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
     /// helper's `SUDO_UID`/`SUDO_GID`, which the helper uses to return the
     /// authenticated Unix socket to this invoking account.
     static func launchCommand(executable: String, socketPath: String, sessionToken: String, elevated: Bool) -> (path: String, arguments: [String]) {
-        let helperArguments = ["--tun-helper-server", socketPath, sessionToken, "--idle-sec", "30"]
+        // The foreground owns this child for its full lifetime.  The IPC
+        // adapter opens short-lived authenticated connections, so an idle
+        // server watchdog would otherwise tear down a healthy TUN and routes.
+        let helperArguments = ["--tun-helper-server", socketPath, sessionToken, "--idle-sec", "0"]
         if elevated {
             // Interactive authorization is completed while the foreground
             // command owns the terminal. The delayed helper launch must never

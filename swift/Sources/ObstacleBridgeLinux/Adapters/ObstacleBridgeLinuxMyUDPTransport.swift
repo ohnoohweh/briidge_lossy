@@ -30,11 +30,16 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private var deliveredPayloads: [Data] = []
     private let stateLock = NSLock()
     private let receiveLock = NSLock()
+    private let synchronousReceiveWaitMS: Int32
+    private let readinessQueue = DispatchQueue(label: "org.obstaclebridge.linux.myudp.readiness")
+    private var readSource: DispatchSourceRead?
+    private var timerSource: DispatchSourceTimer?
 
     /// `nextDataCounter` is an injectable Core seed for deterministic
     /// rollover qualification; normal runtime construction uses `1`.
     public init(host: String, port: Int, timeoutMilliseconds: Int = 1_000, nextDataCounter: UInt16 = 1) throws {
         peerRuntime = .init(nextCounter: Int(nextDataCounter))
+        synchronousReceiveWaitMS = Int32(max(1, min(Int(Int32.max), timeoutMilliseconds)))
         // Configured IPv6 literals commonly retain URI brackets. `getaddrinfo`
         // accepts the literal itself, not its URI presentation.
         let resolvedHost: String
@@ -57,8 +62,6 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             let fd = socket(row.pointee.ai_family, row.pointee.ai_socktype, row.pointee.ai_protocol)
             if fd >= 0 {
                 if connect(fd, row.pointee.ai_addr, row.pointee.ai_addrlen) == 0 {
-                    var timeout = timeval(tv_sec: timeoutMilliseconds / 1_000, tv_usec: (timeoutMilliseconds % 1_000) * 1_000)
-                    _ = withUnsafePointer(to: &timeout) { setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, $0, socklen_t(MemoryLayout<timeval>.size)) }
                     opened = fd
                     break
                 }
@@ -133,7 +136,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             }
             stateLock.unlock()
             var buffer = [UInt8](repeating: 0, count: 1_452)
-            let received = recv(descriptor, &buffer, buffer.count, 0)
+            let received = recv(descriptor, &buffer, buffer.count, Int32(MSG_DONTWAIT))
             guard received > 0 else {
                 let code = errno
                 // A receive timeout is the owner’s timer cadence, not a
@@ -142,7 +145,8 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                 // Treating EAGAIN as fatal caused an otherwise healthy quiet
                 // myUDP epoch to reconnect before its first local service
                 // connection could be accepted.
-                if code == EAGAIN || code == EWOULDBLOCK || code == ETIMEDOUT {
+                if code == EAGAIN || code == EWOULDBLOCK {
+                    if try waitForSynchronousReceive() { continue }
                     try serviceTimers()
                     continue
                 }
@@ -165,7 +169,89 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         }
     }
 
+    /// Compatibility path for `exchange()` callers that have no event-loop
+    /// owner. The runtime never uses it after `startAsyncReceive()` installs
+    /// its Dispatch read source. Frame reads remain MSG_DONTWAIT even here.
+    private func waitForSynchronousReceive() throws -> Bool {
+        var pollDescriptor = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+        while true {
+            let result = poll(&pollDescriptor, 1, synchronousReceiveWaitMS) // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded synchronous myUDP bootstrap fallback without an event loop
+            if result < 0 && errno == EINTR { continue }
+            if result == 0 { return false }
+            guard result > 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
+            if pollDescriptor.revents & Int16(POLLIN) != 0 { return true }
+            if pollDescriptor.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 {
+                throw ObstacleBridgeLinuxMyUDPError.ioFailure(ECONNRESET)
+            }
+        }
+    }
+
+    /// Switches the established session from bootstrap reads to readiness-driven
+    /// operation. The source and timer share one queue, preserving datagram and
+    /// timer-effect order without leaving a thread blocked in `recv`.
+    public func startAsyncReceive(_ handler: @escaping (Result<Data, Error>) -> Void) throws {
+        receiveLock.lock()
+        defer { receiveLock.unlock() }
+        guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
+        guard readSource == nil else { return }
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno)
+        }
+        let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: readinessQueue)
+        source.setEventHandler { [weak self] in self?.drainReadyDatagrams(handler) }
+        let timer = DispatchSource.makeTimerSource(queue: readinessQueue)
+        timer.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100), leeway: .milliseconds(10))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            do { try self.serviceTimers() }
+            catch { handler(.failure(error)) }
+        }
+        readSource = source; timerSource = timer
+        source.resume(); timer.resume()
+    }
+
+    private func drainReadyDatagrams(_ handler: @escaping (Result<Data, Error>) -> Void) {
+        while true {
+            var buffer = [UInt8](repeating: 0, count: 1_452)
+            // Dispatch readiness can be stale after close or an adjacent
+            // drain.  The asynchronous owner must never enter a blocking
+            // datagram read from this callback.
+            let received = recv(descriptor, &buffer, buffer.count, Int32(MSG_DONTWAIT))
+            if received <= 0 {
+                let code = errno
+                if code == EAGAIN || code == EWOULDBLOCK { return }
+                handler(.failure(ObstacleBridgeLinuxMyUDPError.ioFailure(code)))
+                return
+            }
+            do {
+                for payload in try acceptInboundWire(Data(buffer.prefix(Int(received)))) {
+                    handler(.success(payload))
+                }
+            } catch {
+                handler(.failure(error))
+                return
+            }
+        }
+    }
+
+    private func acceptInboundWire(_ wire: Data) throws -> [Data] {
+        stateLock.lock()
+        let now = DispatchTime.now().uptimeNanoseconds
+        let effect: ObstacleBridgeUdpOverlayPeerRuntime.InboundWireSnapshot
+        do { effect = try peerRuntime.receiveWire(wire, nowNS: now) }
+        catch { stateLock.unlock(); throw ObstacleBridgeLinuxMyUDPError.invalidReply }
+        deliveredPayloads.append(contentsOf: effect.deliveredPayloads)
+        let payloads = deliveredPayloads
+        deliveredPayloads.removeAll(keepingCapacity: true)
+        stateLock.unlock()
+        try execute(effect.emittedFrames)
+        return payloads
+    }
+
     public func close() {
+        readSource?.cancel(); readSource = nil
+        timerSource?.cancel(); timerSource = nil
         if descriptor >= 0 {
             let active = descriptor
             descriptor = -1
@@ -182,6 +268,24 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         stateLock.lock()
         defer { stateLock.unlock() }
         try execute(peerRuntime.tick(nowNS: DispatchTime.now().uptimeNanoseconds))
+    }
+
+    public func protocolStatsSnapshot() -> [String: UInt64] {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return peerRuntime.protocolStatsSnapshot().reduce(into: [:]) { result, entry in
+            if let value = entry.value as? Int { result[entry.key] = UInt64(max(0, value)) }
+            else if let value = entry.value as? UInt64 { result[entry.key] = value }
+            else if let value = entry.value as? Double { result[entry.key] = UInt64(max(0, value.rounded())) }
+        }
+    }
+
+    /// Counts the frame at the myUDP/SecureLink boundary, rather than at an
+    /// application worker. This includes handshake, rekey, and protected
+    /// application frames just as the Apple transport owner does.
+    func recordSecureLinkBoundaryFrame(direction: String) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        peerRuntime.recordSecureLinkBoundaryFrame(direction: direction)
     }
 
     private func sendWire(_ wire: Data) throws {

@@ -436,7 +436,7 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
         }
     }
 
-    func protocolStatsSnapshot() -> [String: Any] {
+    public func protocolStatsSnapshot() -> [String: Any] {
         let core = peerEngine.snapshot()
         return [
             "buffered_frames": core.waitingRecordCount,
@@ -458,10 +458,19 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
             "stream_decode_errors": streamDecodeErrors,
             "frames_to_securelink": framesToSecureLink,
             "frames_from_securelink": framesFromSecureLink,
+            // This monotonic timestamp advances for every accepted myUDP
+            // record, including CONTROL/IDLE traffic that has no application
+            // payload.  Admin "Last incoming" is a transport metric.
+            "last_rx_wall_ns": lastRxWallNS,
+            "rtt_est_ms": rttEstMS,
+            "transmit_delay_est_ms": transmitDelayEstMS,
         ]
     }
 
-    func recordSecureLinkBoundaryFrame(direction: String) {
+    /// Records one frame crossing the myUDP/SecureLink boundary. Platform
+    /// transport owners call this at their shared framing boundary so the
+    /// Admin counter is independent of application payload delivery.
+    public func recordSecureLinkBoundaryFrame(direction: String) {
         if direction == "to_securelink" {
             framesToSecureLink &+= 1
         } else {

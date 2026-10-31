@@ -183,6 +183,11 @@ def test_python_admin_worker_updates_runner_and_serves_concurrent_requests(monke
                     if message.get("type") == "status":
                         break
                 assert message["type"] == "status"
+                # The shared Runtime Analysis tab consumes this bounded
+                # projection from live status frames. Swift must keep the
+                # same field rather than replacing the initial snapshot with
+                # a metrics-less live update.
+                assert isinstance(message["data"].get("runtime_metrics"), dict)
         finally:
             await worker.stop()
     asyncio.run(exercise())

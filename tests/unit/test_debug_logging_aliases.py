@@ -1,5 +1,7 @@
 import argparse
 import asyncio
+import contextlib
+import json
 import logging
 import socket
 import tempfile
@@ -83,28 +85,48 @@ def test_log_file_moves_previous_session_to_lastsession_on_start():
 
 
 def test_udp_receiver_serves_bounded_admin_log_query():
-    receiver = UdpLogReceiver("127.0.0.1:0")
-    port = receiver._socket.getsockname()[1]
-    from obstacle_bridge import bridge_debug_logging
+    async def exercise() -> None:
+        receiver = UdpLogReceiver("127.0.0.1:0")
+        port = receiver._socket.getsockname()[1]
+        task = asyncio.create_task(receiver.serve())
+        from obstacle_bridge import bridge_debug_logging
 
-    original_ring = bridge_debug_logging.DEBUG_LOG_RING
-    bridge_debug_logging.DEBUG_LOG_RING = type(original_ring)(["first", "last"], maxlen=original_ring.maxlen)
-    try:
-        receiver._socket.setblocking(True)
+        original_ring = bridge_debug_logging.DEBUG_LOG_RING
+        bridge_debug_logging.DEBUG_LOG_RING = type(original_ring)(["first", "last"], maxlen=original_ring.maxlen)
+        try:
+            await asyncio.sleep(0)
+            assert await asyncio.to_thread(UdpLogQueryClient("127.0.0.1:%s" % port, timeout_sec=0.2).fetch, 1) == {
+                "available": True, "lines": ["last"], "error": ""
+            }
+        finally:
+            bridge_debug_logging.DEBUG_LOG_RING = original_ring
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
-        def serve_one():
-            data, address = receiver._socket.recvfrom(receiver.max_datagram_bytes)
-            receiver.handle_datagram(data, address)
+    asyncio.run(exercise())
 
-        thread = threading.Thread(target=serve_one)
-        thread.start()
-        assert UdpLogQueryClient("127.0.0.1:%s" % port, timeout_sec=0.2).fetch(limit=1) == {
-            "available": True, "lines": ["last"], "error": ""
-        }
-        thread.join(timeout=1)
-    finally:
-        bridge_debug_logging.DEBUG_LOG_RING = original_ring
-        receiver._socket.close()
+
+def test_udp_log_query_ignores_a_stale_reply_before_its_matching_reply():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server:
+        server.bind(("127.0.0.1", 0))
+        port = server.getsockname()[1]
+
+        def respond() -> None:
+            request, address = server.recvfrom(4096)
+            request_id = json.loads(request.decode("utf-8"))["request_id"]
+            for response in (
+                {"v": 1, "kind": "logs.reply", "ok": True, "request_id": "stale", "lines": []},
+                {"v": 1, "kind": "logs.reply", "ok": True, "request_id": request_id, "lines": ["matching"]},
+            ):
+                server.sendto(json.dumps(response).encode("utf-8"), address)
+
+        responder = threading.Thread(target=respond)
+        responder.start()
+        result = UdpLogQueryClient(f"127.0.0.1:{port}", timeout_sec=0.2).fetch(1)
+        responder.join(timeout=1)
+
+    assert result == {"available": True, "lines": ["matching"], "error": ""}
 
 
 def test_udp_log_sender_drops_transport_failure_without_raising():

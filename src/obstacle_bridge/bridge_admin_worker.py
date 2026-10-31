@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import os
+import select
 import shutil
 import socket
 import sys
@@ -58,11 +59,49 @@ async def _read_frame(reader: asyncio.StreamReader, generation: int = 1) -> dict
     return value
 
 
-def _read_socket_frame(sock: socket.socket, generation: int = 1) -> dict[str, Any]:
+def _wait_socket_ready(sock: socket.socket, *, writable: bool, deadline: float) -> None:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Admin worker control deadline elapsed")
+    readable, writable_sockets, _ = select.select(  # OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded synchronous Admin-Web compatibility facade
+        [] if writable else [sock],
+        [sock] if writable else [],
+        [],
+        remaining,
+    )
+    if not readable and not writable_sockets:
+        raise TimeoutError("Admin worker control deadline elapsed")
+
+
+def _send_socket_frame(sock: socket.socket, payload: bytes, *, deadline: float) -> None:
+    offset = 0
+    while offset < len(payload):
+        try:
+            sent = sock.send(payload[offset:])
+        except (BlockingIOError, InterruptedError):
+            _wait_socket_ready(sock, writable=True, deadline=deadline)
+            continue
+        if sent <= 0:
+            raise EOFError("Admin worker control closed")
+        offset += sent
+
+
+def _read_socket_frame(sock: socket.socket, generation: int = 1, *, deadline: float) -> dict[str, Any]:
+    """Read a parent-side Admin IPC frame without blocking a request thread.
+
+    ``_RemoteRunner`` retains a synchronous facade because legacy Admin-Web
+    handlers invoke it from a non-async call stack.  That facade is the only
+    compatibility boundary: descriptor operations stay nonblocking and this
+    helper waits through ``select`` only until the request deadline.
+    """
     def read_exact(size: int) -> bytes:
         result = bytearray()
         while len(result) < size:
-            chunk = sock.recv(size - len(result))
+            try:
+                chunk = sock.recv(size - len(result))  # O_NONBLOCK readiness owner
+            except (BlockingIOError, InterruptedError):
+                _wait_socket_ready(sock, writable=False, deadline=deadline)
+                continue
             if not chunk:
                 raise EOFError("Admin worker control closed")
             result.extend(chunk)
@@ -72,6 +111,34 @@ def _read_socket_frame(sock: socket.socket, generation: int = 1) -> dict[str, An
     if size is None or size > MAX_FRAME:
         raise ValueError("invalid Admin worker frame size")
     decoded = try_decode_frame(header + read_exact(size))
+    if decoded is None or decoded[1] or decoded[0].generation != generation:
+        raise ValueError("invalid Admin worker frame")
+    value = decode_control(decoded[0])
+    if value.get("v") != 1:
+        raise ValueError("invalid Admin worker frame")
+    return value
+
+
+async def _read_socket_frame_async(
+    sock: socket.socket, generation: int = 1
+) -> dict[str, Any]:
+    """Read one inherited control frame through the event-loop readiness owner."""
+    loop = asyncio.get_running_loop()
+
+    async def read_exact(size: int) -> bytes:
+        result = bytearray()
+        while len(result) < size:
+            chunk = await loop.sock_recv(sock, size - len(result))
+            if not chunk:
+                raise EOFError("Admin worker control closed")
+            result.extend(chunk)
+        return bytes(result)
+
+    header = await read_exact(20)
+    size = frame_size(header)
+    if size is None or size > MAX_FRAME:
+        raise ValueError("invalid Admin worker frame size")
+    decoded = try_decode_frame(header + await read_exact(size))
     if decoded is None or decoded[1] or decoded[0].generation != generation:
         raise ValueError("invalid Admin worker frame")
     value = decode_control(decoded[0])
@@ -109,10 +176,13 @@ class _RemoteRunner:
             if self._failed or remaining <= 0:
                 raise TimeoutError("Admin worker runner unavailable")
             request_id = uuid.uuid4().hex
-            self._socket.settimeout(remaining)
-            self._socket.sendall(_encode({"v": 1, "kind": "admin.call", "id": request_id,
-                                         "method": method, "args": args, "kwargs": kwargs, "deadline": deadline}, self._generation))
-            reply = _read_socket_frame(self._socket, self._generation)
+            # Legacy Admin-Web handlers are synchronous.  Keep their bounded
+            # facade, but never let a kernel-blocking control read occupy the
+            # handler thread; all descriptor I/O below is readiness-driven.
+            self._socket.setblocking(False)
+            _send_socket_frame(self._socket, _encode({"v": 1, "kind": "admin.call", "id": request_id,
+                                                       "method": method, "args": args, "kwargs": kwargs, "deadline": deadline}, self._generation), deadline=deadline)
+            reply = _read_socket_frame(self._socket, self._generation, deadline=deadline)
             if reply.get("kind") != "admin.reply" or reply.get("id") != request_id:
                 raise ValueError("invalid Admin runner reply")
             if not reply.get("ok"):
@@ -150,12 +220,14 @@ async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None, ge
             or lifetime.family != socket.AF_UNIX or lifetime.type != socket.SOCK_STREAM
             or control_fd == lifetime_fd):
         raise ValueError("invalid Admin worker sockets")
-    control.settimeout(5.0)
-    hello = _read_socket_frame(control, generation)
+    control.setblocking(False)
+    lifetime.setblocking(False)
+    loop = asyncio.get_running_loop()
+    hello = await asyncio.wait_for(_read_socket_frame_async(control, generation), 5.0)
     if hello != {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": generation}:
         raise ValueError("invalid Admin worker hello")
-    control.sendall(_encode({"v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": generation}, generation))
-    bootstrap = _read_socket_frame(control, generation)
+    await loop.sock_sendall(control, _encode({"v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": generation}, generation))
+    bootstrap = await asyncio.wait_for(_read_socket_frame_async(control, generation), 5.0)
     if bootstrap.get("kind") != "admin.start" or not isinstance(bootstrap.get("args"), dict):
         raise ValueError("invalid Admin worker startup")
     args = argparse.Namespace(**bootstrap["args"])
@@ -171,23 +243,22 @@ async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None, ge
     swap_admin_log_query_client(proxy)
     ui = AdminWebUI(args, proxy)
     stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-
-    def watch_owner():
+    async def watch_owner() -> None:
         with contextlib.suppress(OSError):
-            lifetime.recv(1)
-        with contextlib.suppress(RuntimeError):
-            loop.call_soon_threadsafe(stop.set)
+            await loop.sock_recv(lifetime, 1)
+        stop.set()
 
-    watcher = threading.Thread(target=watch_owner, name="admin-worker-lifetime", daemon=True)
-    watcher.start()
+    owner_task = asyncio.create_task(watch_owner(), name="admin-worker-lifetime")
     try:
         await ui.start()
         sockets = ui.server.sockets if ui.server else []
         port = sockets[0].getsockname()[1] if sockets else 0
-        control.sendall(_encode({"v": 1, "kind": "admin.ready", "implementation": "python", "port": port}, generation))
+        await loop.sock_sendall(control, _encode({"v": 1, "kind": "admin.ready", "implementation": "python", "port": port}, generation))
         await stop.wait()
     finally:
+        owner_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await owner_task
         await ui.stop()
         lifetime.close()
         control.close()

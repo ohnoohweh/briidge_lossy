@@ -12,6 +12,8 @@
 
 ARC-CMP-001:
   # The independent myUDP peer remains bound through the client's post-reply
+  # Required Linux and macOS gates execute the Core concurrent egress test
+  # because native collection traps are process-fatal rather than recoverable.
   # CONTROL/IDLE acknowledgement; repeated-loss has a bounded receive window.
   # The shared basic overlay catalog uses this boundary in Python/Python and
   # Python/Linux-native process pairings, including native service byte rows.
@@ -29,8 +31,15 @@ ARC-CMP-001:
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_worker_e2e_python_http_https_and_socks5
   unit_tests:
+    - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_stream_egress_round_robins_one_message_per_source
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxEgressSequencerTests.swift::allMuxMessageTypesSharePersistentSourceTurns
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxEgressSequencerTests.swift::concurrentEnqueueAndDrainProtectsNativeSetStorage
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayConnectionPolicyTests.swift::projectsAndUpdatesConnectionState
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxChannelIDAllocationTests.swift::splitsMaximumMyUDPRecordAtTheChannelMuxWireBoundary
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebSocketOverlayRuntimeTests.swift::clientLayerAdapterRequestsAndProjectsObservedPublicEndpoint
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebSocketOverlayRuntimeTests.swift::udpPeerRuntimeEmitsAndDeliversPortableRecordEffects
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::myudpSecureLinkBoundaryCountersCoverHandshakeAndPeerAddressDiscovery
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::peerTrafficAggregationUsesOwnedConnectionRows
     - tests/unit/test_connection_lifecycle.py::test_event_snapshot_round_trip_preserves_state_epoch_and_reason
     - tests/unit/test_connection_lifecycle.py::test_event_normalizes_legacy_connected_snapshot
     - tests/unit/test_connection_lifecycle.py::test_event_rejects_negative_epoch
@@ -89,6 +98,7 @@ ARC-CMP-001:
     - tests/unit/test_ws_payload_mode.py::test_connect_reports_proxy_negotiation_failures_as_failed
     - tests/unit/test_ws_payload_mode.py::test_proxy_uri_credentials_are_separated_from_endpoint_and_encoded_for_basic_auth
     - tests/unit/test_ws_payload_mode.py::test_manual_proxy_uri_credentials_are_forwarded_as_basic_authorization
+    - tests/unit/test_ws_payload_mode.py::test_open_ws_proxy_socket_blocking_establishes_connect_tunnel
     - tests/unit/test_ws_payload_mode.py::test_connect_proxy_open_timeout_cancels_without_asyncio_callback_error
     - tests/unit/test_ws_payload_mode.py::test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight
     - tests/unit/test_ws_payload_mode.py::test_proxy_multi_ws_peer_uses_resolved_candidate_for_lookup_and_connect
@@ -123,6 +133,7 @@ ARC-CMP-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerRejectsAmbiguousOwnServiceBindsButAdmitsPeerPublishedCatalog
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_overlay_shares_throttled_downstream_bandwidth
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_listener_adopts_client_payload_mode_from_upgrade_request
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_ws_peer
@@ -134,6 +145,8 @@ ARC-CMP-002:
   # Swift parity compiles Core directly; no SessionCodec compatibility fixture
   # participates in this component boundary.
   unit_tests:
+    - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
+    - tests/unit/test_debug_logging_aliases.py::test_udp_log_query_ignores_a_stale_reply_before_its_matching_reply
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpListenerRejectsDelayedStaleEpochForSameEndpoint
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpListenerAuthenticatesIndependentPeersBeforeExposingSessions
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerBoundsAuthenticatedPeerAdmission
@@ -176,6 +189,7 @@ ARC-CMP-002:
     - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_counter_rollover_keeps_stream_delivery_contiguous
     - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_epoch_reset_clears_queued_and_partial_stream_state
     - tests/unit/test_myudp_processing_repro.py::test_lost_multi_chunk_batch_recovers_with_per_chunk_retransmits
+    - tests/unit/test_myudp_processing_repro.py::test_unconfirmed_retransmit_sweep_yields_between_bounded_fifo_batches
     - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_reports_stream_and_batch_budgets
     - tests/unit/test_connection_snapshots.py::test_myudp_stats_expose_stream_batch_budget_and_diagnostics
     - ios/tests/test_myudp2_swift_codec.py::test_swift_myudp2_batch_codec_and_stream_receive_state
@@ -276,6 +290,7 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_connect_then_local_data_matches_python
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_then_local_eof_matches_python
     - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_tcp_backpressure_is_demand_driven_and_cancelled_on_close
+    - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_tcp_inbound_channels_are_scoped_to_authenticated_peer
     - ios/tests/test_ios_shared_tcp_transport_owner.py::test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound_paths
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::boundedBinaryCodecAndServiceWireFormatsRoundTrip
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::controlChunksMatchPythonLayoutAndRemainBounded
@@ -444,6 +459,9 @@ ARC-CMP-004:
   # Python and native macOS/Linux TUN helpers use generation-fenced OBIP
   # HELLO/READY, request/response/event/data frames; the Linux shared gate
   # runs the local authenticated-owner-loss helper qualification.
+  # The Python Linux native-helper TUN descriptor is likewise event-loop
+  # readiness-owned and drains bounded FIFO packet batches between awaits; the
+  # Python macOS utun helper uses the same asyncio readiness-owned FIFO model.
   # Native peer-worker evidence includes bounded private-descriptor admission;
   # Linux executable qualification remains a CI-host responsibility.
   # Desktop process evidence covers delivered component-specific worker slices.
@@ -482,7 +500,7 @@ ARC-CMP-004:
   # Python-default metadata live topic plus query-scoped native TUN live session,
   # and owner-loss exit.
   # Linux owns allowlisted browser base assets, authenticated loopback-only health/status/local-metadata/configuration/schema/canonical-log-envelope/telemetry-client/TUN-routing/connection/peer/live-topic reads, derived onboarding connection profiles and blueprints from parent snapshots, Core-owned invite generation and PSK-masked preview plus password-confirmed encrypted PSK reveal from a dedicated authenticated invite-source RPC and peer snapshots; the Python persistence test proves that source retains only the PSK while public configuration and unrelated Admin secrets remain redacted, and a
-  # digest-confirmed configuration write with a refreshed redacted snapshot, authenticated remote-service catalog replacement plus reconnect/rekey/reload peer controls, bearer-token-protected TUN routing/TUN-helper repair/restart/shutdown controls, and an authenticated version-13 snapshot-first WebSocket session with Python-compatible status/connection/peer/meta defaults plus demand-scoped TUN telemetry and masked subscription/request controls; it applies the shared challenge/session policy before inherited parent RPC, and its socketpair probe completes them;
+  # digest-confirmed configuration write with a refreshed redacted snapshot, authenticated remote-service catalog replacement plus reconnect/rekey/reload peer controls, bearer-token-protected TUN routing/TUN-helper repair/restart/shutdown controls, and an authenticated version-13 snapshot-first WebSocket session with Python-compatible status/connection/peer/meta defaults plus demand-scoped TUN telemetry and masked subscription/request controls. Each Linux-native live socket transfers to a nonblocking read/write readiness owner with bounded partial frames and timer-scheduled topics; it applies the shared challenge/session policy before inherited parent RPC, and its socketpair probe completes them;
   # Packaged macOS and Linux evidence cover the full dispatched browser-route, session, live-topic, configuration, log, and privileged-control surface; macOS host qualification retries one fresh distinct loopback port set after a transient released-allocation bind race.
   # A shared native Admin bootstrap accepts only verified inherited Unix-stream control/lifetime and record-only log descriptors, exchanges Admin HELLO/READY, makes one deadline-limited correlated bootstrap-status parent RPC, fails closed when its reply is withheld, and exits on owner loss; packaged macOS and required Linux Swift socketpair tests cover the complete native Admin contract. Linux CI also executes the shared stale-reply retirement probe with the host-local helper/Admin matrix; macOS executes equivalent packaged evidence locally. Contract-v1
   # requires explicit auth and rejects malformed
@@ -551,13 +569,14 @@ ARC-CMP-004:
   # instead of a final service stop.
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_builds_native_peer_worker_with_private_capabilities
     - ios/tests/test_macos_swift_host_runner.py::test_macos_packaged_tun_helper_interoperates_with_python_common_ipc
     - ios/tests/test_macos_swift_host_runner.py::test_macos_packaged_tun_helper_exits_after_authenticated_owner_loss
     - ios/tests/test_macos_swift_host_runner.py::test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss
     - swift/Tests/ObstacleBridgeDesktopSharedTests/ObstacleBridgeWorkerIPCTests.swift::controlDecodeRejectsDuplicateObjectMembersAtEveryDepth
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterAuthenticatedOwnerLoss
-    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterAuthenticatedClientIdleWindow
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterUnauthenticatedClientIdleWindow
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_exits_when_supervisor_is_killed
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
@@ -843,6 +862,10 @@ ARC-CMP-004:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_tcp_ownserver_proxies_mixed_python_peer_for_ws_and_quic
 
 ARC-CMP-005:
+  # Native collector coverage includes bounded cold-process readiness retries
+  # for the public UDP query probe on macOS CI hardware.
+  # Keep-open Linux Swift proxy peers also tolerate their intended accept-poll
+  # turns and close-induced accept EBADF while the foreground graph changes.
   # The WebAdmin configuration renderer preserves UDP logging endpoints as
   # direct text values, independently of per-component log-level controls.
   # Admin status resilience includes the minimal live-session fallback used
@@ -852,7 +875,8 @@ ARC-CMP-005:
   # enabled-layer visibility, ChannelMux-owned reconnect countdowns, and
   # the stable peer Transport detail layout, peer-local identity-cell row spans,
   # semantic status-pill colors, consistent peer open-channel labeling, negative-uptime launcher restart countdown,
-  # and peer-scoped wrapper status.
+  # peer-scoped wrapper status. Core also owns sampled peer traffic rates,
+  # active TCP/UDP/TUN counts, and sanitized throttle presentation.
   # Telemetry coverage keeps bounded worker-owned Runner producer/upload work off forwarding
   # paths, the loopback collector endpoint, and
   # client-spool defaults aligned with macOS/iOS, while Python exposes its
@@ -869,6 +893,13 @@ ARC-CMP-005:
   # macOS private-worker producer evidence includes the shared threshold
   # vocabulary and payload-free host operational events.
   # The private Admin-worker boundary returns that same envelope.
+  # The shared live-status contract retains bounded runtime metrics on Python
+  # and every Swift host, so a live update cannot clear Runtime Analysis rows.
+  # Linux-native myUDP uses nonblocking read readiness and a separately
+  # scheduled Core timer after bootstrap; idle socket waits are not receive work,
+  # while Core decode/dispatch is measured per DATA, CONTROL, or IDLE datagram.
+  # Linux TCP/WebSocket frame buffers and TLS-WebSocket/QUIC NIO callbacks use
+  # post-bootstrap readiness ownership; partial records never invoke a blocking read.
   unit_tests:
     # Build identity is re-probed by each supervised Python child, including
     # elevated restarts against a developer-owned source checkout.
@@ -883,6 +914,8 @@ ARC-CMP-005:
     - tests/unit/test_peer_stack_worker.py::test_peer_worker_inherits_stderr_without_managed_collector
     - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates
     - tests/unit/test_admin_worker.py::test_python_admin_worker_updates_runner_and_serves_concurrent_requests
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_status_frame_contains_payload
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap
     - tests/unit/test_admin_worker.py::test_admin_worker_exits_on_owner_loss_and_reports_child_loss
     - tests/unit/test_admin_worker.py::test_supervised_admin_recovers_at_same_port_with_authentication
     - tests/unit/test_admin_worker.py::test_supervised_admin_retries_failed_bind_and_stops_without_orphans
@@ -905,6 +938,7 @@ ARC-CMP-005:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::ringIsBoundedAndClassifiesOnlyTheLastLifecycleMarker
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::persistenceKeepsOnlyCompleteRedactedRing
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::canonicalVectorRoundTripsThroughThePortableContract
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::adminStatusEnvelopeOwnsSharedDashboardFields
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::rejectsNonAllowlistedAndMalformedEvents
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::enforcesEventAndBatchBounds
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::concurrentEmissionStaysBoundedAndNeverThrows
@@ -919,6 +953,7 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::compressionSnapshotCountsCompressedUncompressedAndRejectedFrames
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::peersSerializesNonzeroCompressionTelemetry
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::enabledCompressionCarriesProtectedRequestAndResponseAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::disabledAndPassiveCompressionPoliciesInteroperateAgainstPythonPeer
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_overlay_stack_default_compress_client_matches_python
@@ -1171,6 +1206,7 @@ ARC-CMP-006:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketDuplexSessionReceivesPeerFrameBeforeLocalSend
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionReceivesPeerFrameAfterAddressRegistration
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::workerDeliversEpochTaggedFramesAndCancelsBlockingReceive
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::asyncWorkerRearmsAfterEachDeliveredFrame
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkReceivesProtectedPeerFrameBeforeLocalSend
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketSecureLinkReceivesProtectedPeerFrameBeforeLocalSend
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkReceivesProtectedPeerFrameBeforeLocalSend
@@ -1232,6 +1268,8 @@ ARC-CMP-007:
 
 ARC-CMP-008:
   # Peer-address framing covers the server-observed source address and port.
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_linux_swift_proxy_logs_follow_collector
   unit_tests:
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv4_without_delivering_control_frames
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv6_without_delivering_control_frames
@@ -1241,6 +1279,28 @@ ARC-CMP-008:
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_all_transports_with_peer_address_protocol_without_secure_link
     - ios/tests/test_ios_peer_address_protocol.py::test_ios_peer_address_protocol_reflects_ipv4_and_ipv6_without_delivering_control
     - ios/tests/test_ios_overlay_layer_transport_adapter.py::test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link
+
+ARC-IO-001:
+  unit_tests:
+    - tests/unit/test_async_io_guards.py::test_swift_guard_rejects_waits_in_every_product_source
+    - tests/unit/test_async_io_guards.py::test_python_guard_rejects_new_wait_without_exception
+    - tests/unit/test_swift_concurrency_guard.py::test_rejects_changed_unchecked_mutable_collection_without_evidence
+    - tests/unit/test_swift_concurrency_guard.py::test_accepts_lock_marker_with_named_test
+    - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_covers_every_product_owner
+    - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_requires_usable_evidence
+    # Also verifies coalesced cache warming after accepted records, so Admin
+    # can project completed logs without reintroducing a synchronous receive.
+    - tests/unit/test_native_log_supervisor.py::test_native_log_supervisor_query_uses_readiness_callback_not_polling
+    - tests/unit/test_linux_native_peer_worker.py::test_linux_native_peer_worker_uses_readiness_decoder_after_bootstrap
+    - tests/unit/test_telemetry.py::test_mtls_ingest_rejects_incomplete_body_with_timeout
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxProxyProviderTests.swift::listenerReadinessDrainAdmitsEveryQueuedSOCKSClient
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxProxyProviderTests.swift::socksParserCompletesFragmentedGreetingWithoutBlockingRead
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpDuplexSessionUsesReadinessCallbacksAfterBootstrap
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tlsWebSocketSessionUsesNIOCallbacksAfterBootstrap
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::quicReliableStreamUsesNIOCallbacksAfterBootstrap
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::tcpListenerPublishesOpenAndDataFrames
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::packetDeviceReceivesHelperPacketAndEventThroughReadinessSource
 # Full-tunnel TUN policy keeps kernel-connected local exclusions on their
 # direct main-table device; the matching Python and Swift helper regressions
 # are tracked under the lifecycle/runtime architecture links below.

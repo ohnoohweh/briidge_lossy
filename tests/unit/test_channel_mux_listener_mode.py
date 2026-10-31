@@ -42,6 +42,7 @@ class _FakeSession:
         self.app_cb = None
         self.peer_disconnect_cb = None
         self.sent = []
+        self.sent_peer_ids = []
         self.rotation_requests = []
         self.rotation_cycle_resets = 0
         self.connected = connected
@@ -87,8 +88,9 @@ class _FakeSession:
     def set_on_peer_disconnect(self, cb):
         self.peer_disconnect_cb = cb
 
-    def send_app(self, payload):
+    def send_app(self, payload, peer_id=None):
         self.sent.append(payload)
+        self.sent_peer_ids.append(peer_id)
         return len(payload)
 
     def request_connection_rotation(self, reason=""):
@@ -152,6 +154,15 @@ class _FakeBackpressureWriter:
         return None
 
 
+class _CaptureWriter(_FakeBackpressureWriter):
+    def __init__(self, transport):
+        super().__init__(transport)
+        self.written = []
+
+    def write(self, payload):
+        self.written.append(bytes(payload))
+
+
 def test_channelmux_tcp_backpressure_is_demand_driven_and_cancelled_on_close():
     async def _run():
         mux = ChannelMux(_FakeSession(connected=True), asyncio.get_running_loop())
@@ -179,6 +190,70 @@ def test_channelmux_tcp_backpressure_is_demand_driven_and_cancelled_on_close():
         finally:
             for task in list(mux._tcp_backpressure_tasks.values()):
                 task.cancel()
+
+    asyncio.run(_run())
+
+
+def test_channelmux_tcp_inbound_channels_are_scoped_to_authenticated_peer():
+    async def _run():
+        mux = ChannelMux(_FakeSession(connected=True), asyncio.get_running_loop())
+        wire_chan = 9
+        # A different peer already owns the same wire ID. This models a
+        # shared Python listener accepting two native clients after either
+        # client reconnects and restarts its odd-ID allocator.
+        incumbent = _CaptureWriter(_FakeBackpressureTransport())
+        mux._tcp_by_chan[wire_chan] = (1, incumbent)
+        mux._tcp_role_by_chan[wire_chan] = "client"
+
+        local_chan = mux._bind_inbound_tcp_channel(peer_id=50, wire_chan=wire_chan)
+        assert local_chan != wire_chan
+        peer_writer = _CaptureWriter(_FakeBackpressureTransport())
+        mux._tcp_by_chan[local_chan] = (13, peer_writer)
+        mux._tcp_role_by_chan[local_chan] = "client"
+
+        mux._rx_tcp(wire_chan, ChannelMux.MType.DATA, b"reply", peer_id=50)
+        assert peer_writer.written == [b"reply"]
+        assert incumbent.written == []
+
+        mux._rx_tcp(wire_chan, ChannelMux.MType.CLOSE, b"", peer_id=50)
+        assert (50, wire_chan) not in mux._tcp_inbound_wire_to_local
+        assert wire_chan in mux._tcp_by_chan
+
+    asyncio.run(_run())
+
+
+def test_channelmux_stream_egress_round_robins_one_message_per_source():
+    async def _run():
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_transport = "tcp"
+        try:
+            mux._send_mux(7, ChannelMux.Proto.TCP, ChannelMux.MType.OPEN, b"tcp-7-open")
+            mux._send_mux(7, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, b"tcp-7-data")
+            mux._send_mux(7, ChannelMux.Proto.TCP, ChannelMux.MType.CLOSE, b"")
+            mux._send_mux(9, ChannelMux.Proto.UDP, ChannelMux.MType.DATA, b"udp-9-a")
+            mux._send_mux(9, ChannelMux.Proto.UDP, ChannelMux.MType.DATA, b"udp-9-b")
+            mux._send_mux(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, b"tun-11-a")
+            mux._send_mux(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, b"tun-11-b")
+
+            for _ in range(20):
+                if len(session.sent) == 7:
+                    break
+                await asyncio.sleep(0)
+
+            sent = [mux._unpack_mux(frame) for frame in session.sent]
+            assert [frame[0] for frame in sent] == [7, 9, 11, 7, 9, 11, 7]
+            assert [frame[3] for frame in sent] == [
+                ChannelMux.MType.OPEN,
+                ChannelMux.MType.DATA,
+                ChannelMux.MType.DATA,
+                ChannelMux.MType.DATA,
+                ChannelMux.MType.DATA,
+                ChannelMux.MType.DATA,
+                ChannelMux.MType.CLOSE,
+            ]
+        finally:
+            mux._clear_egress_data_queues()
 
     asyncio.run(_run())
 
@@ -2037,6 +2112,12 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             mux.loop.close()
 
     def test_listener_mode_explicitly_publishes_remote_servers_per_authenticated_peer(self):
+        session = _FakeSession(connected=True)
+        session.get_overlay_peers_snapshot = lambda: [
+            {"peer_id": -1, "listening": True, "secure_link": {"authenticated": False}},
+            {"peer_id": 41, "connected": True, "secure_link": {"authenticated": True}},
+            {"peer_id": 43, "connected": True, "secure_link": {"authenticated": True}},
+        ]
         args = argparse.Namespace(
             peer=None,
             udp_peer=None,
@@ -2055,11 +2136,19 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             mux_tcp_bp_poll_interval_ms=50,
         )
 
-        mux = ChannelMux.from_args(_FakeSession(), asyncio.new_event_loop(), args)
+        mux = ChannelMux.from_args(session, asyncio.new_event_loop(), args)
         try:
             self.assertEqual(mux._local_services, {})
             self.assertEqual(len(mux._remote_services_requested), 1)
             self.assertEqual(mux._remote_services_requested[0].l_port, 3129)
+            mux._send_remote_services_catalog_if_any()
+            self.assertEqual(session.sent_peer_ids, [41, 43])
+            self.assertEqual(len(session.sent), 2)
+            for wire in session.sent:
+                parsed = mux._unpack_mux(wire)
+                self.assertIsNotNone(parsed)
+                assert parsed is not None
+                self.assertEqual(parsed[3], ChannelMux.MType.REMOTE_SERVICES_SET_V2)
         finally:
             mux.loop.close()
 

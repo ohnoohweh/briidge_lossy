@@ -8,6 +8,7 @@ import NIOTLS
 /// kept below the existing WebSocket framing boundary so TLS never changes
 /// overlay, SecureLink, or ChannelMux byte ownership.
 final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSocketByteConnection, @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxOverlayTransportTests
     private final class TLSHandlerBox: @unchecked Sendable {
         let handler: NIOSSLClientHandler
         init(_ handler: NIOSSLClientHandler) { self.handler = handler }
@@ -20,15 +21,23 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
         private var inactive = false
         private var failure: Error?
         private var handshakeComplete = false
+        private var asyncHandler: ((Result<Data, Error>) -> Void)?
 
         func channelRead(context: ChannelHandlerContext, data: NIOAny) {
             var buffer = unwrapInboundIn(data)
             if let received = buffer.readBytes(length: buffer.readableBytes), !received.isEmpty {
-                condition.lock(); bytes.append(contentsOf: received); condition.broadcast(); condition.unlock()
+                let data = Data(received)
+                condition.lock()
+                let handler = asyncHandler
+                if handler == nil { bytes.append(data) }
+                condition.broadcast()
+                condition.unlock()
+                handler?(.success(data))
             }
         }
         func errorCaught(context: ChannelHandlerContext, error: Error) {
-            condition.lock(); failure = error; inactive = true; condition.broadcast(); condition.unlock()
+            condition.lock(); failure = error; inactive = true; let handler = asyncHandler; condition.broadcast(); condition.unlock()
+            handler?(.failure(error))
             context.close(promise: nil)
         }
         func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
@@ -38,7 +47,8 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
             context.fireUserInboundEventTriggered(event)
         }
         func channelInactive(context: ChannelHandlerContext) {
-            condition.lock(); inactive = true; condition.broadcast(); condition.unlock()
+            condition.lock(); inactive = true; let handler = asyncHandler; condition.broadcast(); condition.unlock()
+            handler?(.failure(ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF))
             context.fireChannelInactive()
         }
         func close() { condition.lock(); inactive = true; condition.broadcast(); condition.unlock() }
@@ -56,6 +66,20 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
             let result = Data(bytes.prefix(count))
             bytes.removeFirst(count)
             return result
+        }
+        func startAsyncRead(_ handler: @escaping (Result<Data, Error>) -> Void) {
+            condition.lock()
+            guard asyncHandler == nil else { condition.unlock(); return }
+            asyncHandler = handler
+            // Detach the startup buffer before publishing it to the callback.
+            // `Data.removeAll` may mutate shared Foundation storage while NIO
+            // has just delivered a ByteBuffer-backed value on another thread.
+            let pending = Data(bytes)
+            bytes = Data()
+            let terminal: Error? = failure ?? (inactive ? ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF : nil)
+            condition.unlock()
+            if !pending.isEmpty { handler(.success(pending)) }
+            if let terminal { handler(.failure(terminal)) }
         }
         func waitForHandshake(timeoutMilliseconds: Int) throws {
             let deadline = Date().addingTimeInterval(Double(max(1, timeoutMilliseconds)) / 1_000)
@@ -169,6 +193,7 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
         }
         throw ObstacleBridgeLinuxOverlayTransportError.webSocketHandshakeFailed
     }
+    func startAsyncRead(_ handler: @escaping (Result<Data, Error>) -> Void) { inbound.startAsyncRead(handler) }
     func close() {
         lock.lock(); guard !closed else { lock.unlock(); return }; closed = true
         let channel = channel; self.channel = nil; lock.unlock()

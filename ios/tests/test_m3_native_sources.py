@@ -14,6 +14,13 @@ def test_shared_worker_ipc_source_rejects_duplicate_control_members() -> None:
     assert "JSONSerialization.jsonObject" in common_ipc
 
 
+def test_shared_worker_ipc_source_exposes_incremental_readiness_framing() -> None:
+    common_ipc = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeWorkerIPC.swift").read_text(encoding="utf-8")
+    assert "struct ObstacleBridgeWorkerIPCStreamDecoder" in common_ipc
+    assert "mutating func append(_ bytes: Data)" in common_ipc
+    assert "ObstacleBridgeWorkerIPC.decode(buffered)" in common_ipc
+
+
 def test_shared_native_admin_child_source_uses_inherited_control_and_lifetime_descriptors() -> None:
     child = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeNativeAdminWorker.swift").read_text(encoding="utf-8")
     macos_service = (ROOT / "swift" / "Sources" / "ObstacleBridgeMacOS" / "ObstacleBridgeNativeAdminMacOSService.swift").read_text(encoding="utf-8")
@@ -21,7 +28,8 @@ def test_shared_native_admin_child_source_uses_inherited_control_and_lifetime_de
     assert '"admin.control"' in child
     assert '"get_onboarding_config_snapshot"' in child
     assert '"admin.ready"' in child
-    assert "lifetime.availableData" in child
+    assert "DispatchSource.makeReadSource(fileDescriptor: lifetimeFD" in child
+    assert "O_NONBLOCK" in child
     assert "ObstacleBridgeWebAdminServer" in macos_service
     assert '"/api/status"' in macos_service
     assert "staticAssetResponse" in macos_service
@@ -219,7 +227,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "private func nativePacketDiagnosticsEnabled() -> Bool" in provider
     assert "guard nativePacketDiagnosticsEnabled() else { return }" in provider
     assert "if shouldRecordHeartbeat, self.nativePacketDiagnosticsEnabled()" in provider
+    assert "private let peerTrafficRateLock = NSLock()" in provider
     assert "private var peerTrafficRateState:" in provider
+    assert "peerTrafficRateLock.lock()" in provider
     assert "private var secureLinkConnectedSinceUnixTS:" in provider
     assert '"rx_bytes_per_sec": rxRate' in provider
     assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS)' in provider
@@ -243,7 +253,10 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'summary["secure_link_recover_after_failure"]' not in provider
     assert 'summary["secure_link_recover_delay_seconds"]' not in provider
     assert "static func peerThrottleSnapshot(peerID: Int, connectionsSnapshot: [String: Any]) -> [String: Any]" in snapshot_support
-    assert "static func peersSnapshotForAPI(_ peers: [[String: Any]]) -> [[String: Any]]" in snapshot_support
+    assert "public static func peerEnvelope(" in snapshot_support
+    assert "public static func canonicalPeerEnvelope(_ peer: [String: Any]) -> [String: Any]" in snapshot_support
+    assert "public static func peersSnapshotForAPI(_ peers: [[String: Any]]) -> [[String: Any]]" in snapshot_support
+    assert "ObstacleBridgeAdminSnapshotSupport.canonicalPeerEnvelope(peer)" in provider
     assert "peerThrottleRatio" not in snapshot_support
     assert '"budget_bytes", "used_bytes", "remaining_bytes"' in snapshot_support
 
@@ -373,6 +386,8 @@ def test_ios_runtime_metrics_include_atomic_leaf_boundaries() -> None:
     assert "drainOnePendingSecureLinkPayload" in adapter
     assert "scheduleOutboundMuxFrameDrain" in owner
     assert "scheduleInboundOverlayPayloadDrain" in owner
+    assert "DispatchSource.makeReadSource" in owner
+    assert "recvfrom(socketFD, &buffer, buffer.count, Int32(MSG_DONTWAIT)" in owner
     assert ".appleTransportOwnerQueue" not in owner
     assert ".appleTransportParseDispatch" in owner
     assert ".appleTransportEgress" in owner

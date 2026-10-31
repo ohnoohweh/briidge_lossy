@@ -10,6 +10,7 @@ import Glibc
 import ObstacleBridgeCore
 @testable import ObstacleBridgeLinuxAdapters
 
+@Suite(.serialized)
 struct ObstacleBridgeLinuxLiveRuntimeTests {
     @Test func nativeRuntimeOwnsEitherProxyWorkerAndReportsLoss() throws {
         let environment = ProcessInfo.processInfo.environment
@@ -411,10 +412,11 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         #expect(listener.peers().count == 2)
         #expect(listener.peers().allSatisfy { $0.snapshot.authenticated })
         #expect(listener.status().appReady)
-        // The test process shares one network namespace, so both clients
-        // cannot bind the same fixed listener port simultaneously. Assert the
-        // portable per-child catalog-control boundary here instead.
-        #expect(waitUntil { clients.allSatisfy { $0.status().receivedFrames > 0 } })
+        // Catalog delivery is exercised by the dedicated protected-catalog
+        // tests. This test owns the distinct-child admission contract: a
+        // receive counter is not a reliable proxy for that contract because
+        // an idle authenticated child has no reason to receive application
+        // frames.
     }
 
     @Test func myudpForegroundOwnerBoundsAuthenticatedPeerAdmission() throws {
@@ -804,6 +806,7 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         let connections = runtime.connectionsForAdmin()
         let listenerRow = try #require((connections["tcp"] as? [[String: Any]])?.first)
         #expect(listenerRow["state"] as? String == "listening")
+        #expect(listenerRow["role"] as? String == "server")
         #expect(listenerRow["service_name"] as? String == "echo")
         #expect(listenerRow["local_port"] as? Int == runtime.localServicePorts()[1])
         let fd = try connectTCP(port: try #require(runtime.localServicePorts()[1]))

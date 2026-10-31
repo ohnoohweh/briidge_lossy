@@ -79,6 +79,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private var resolvedPeerCandidates: [ResolvedAddress] = []
     private var pendingOutboundMessages: [URLSessionWebSocketTask.Message] = []
     private var outboundSendInFlight = false
+    private let muxEgressScheduler = ObstacleBridgeChannelMuxEgressSequencer<Data>()
+    private var muxEgressDrainScheduled = false
     private var secureLinkPayloadDrainScheduled = false
     private var overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
     private var lastOverlayRxWallNS: UInt64 = 0
@@ -1224,9 +1226,22 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func sendMuxFrames(_ frames: [Data]) {
-        guard !frames.isEmpty else { return }
         for frame in frames {
-            sendOverlayTransportPayload(frame)
+            guard let wire = try? ObstacleBridgeChannelMuxFrameCodec.decode(frame) else { continue }
+            muxEgressScheduler.enqueue(frame, from: .init(wire))
+        }
+        scheduleMuxEgressDrain()
+    }
+
+    private func scheduleMuxEgressDrain() {
+        guard !muxEgressDrainScheduled else { return }
+        muxEgressDrainScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.muxEgressDrainScheduled = false
+            guard let frame = self.muxEgressScheduler.dequeueNext() else { return }
+            self.sendOverlayTransportPayload(frame)
+            if !self.muxEgressScheduler.isEmpty { self.scheduleMuxEgressDrain() }
         }
     }
 

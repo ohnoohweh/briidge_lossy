@@ -26,6 +26,11 @@ public struct ObstacleBridgeLinuxPeerSnapshot: Codable, Equatable, Sendable {
     public let protectedFramesReceivedTotal: UInt64
     public let authenticatedGenerationsTotal: UInt64
     public let rekeysCompletedTotal: UInt64
+    public let connectedSinceUnixTS: TimeInterval?
+    public let lastIncomingAgeSeconds: TimeInterval?
+    public let observedPublicIP: String
+    public let observedPublicPort: Int?
+    public let myudpStats: [String: UInt64]
     public let compression: ObstacleBridgeMuxCompressionSnapshot
 }
 
@@ -61,6 +66,7 @@ public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
 /// session is explicit: callers must close it when their higher-level runtime
 /// decides the transport epoch has ended.
 public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests
     // The lower session's closures deliberately retain the client weakly to
     // avoid a client/session cycle. Keep the client alive for this configured
     // epoch so those closures remain usable after `connect` returns.
@@ -70,8 +76,18 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     private let overlayAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let secureLinkServer: ObstacleBridgeSecureLinkPSKServer?
     private let requestLock = NSLock()
+    /// SecureLink and the overlay adapter maintain directional protocol state.
+    /// A readiness callback receives on its own queue while service owners may
+    /// send from theirs, so serialize that state without moving socket waits
+    /// back onto a blocking worker.
+    private let protocolLock = NSLock()
     private var receiveOwnerActive = false
     private var pendingCompatibilityReply: (signal: DispatchSemaphore, value: Data?)?
+    /// A peer can publish its first authenticated ChannelMux control frame
+    /// while the client is still completing the lower peer-address exchange.
+    /// Keep that frame until the single receive owner is active rather than
+    /// treating it as handshake-only traffic.
+    private var handshakeDeliveredPayloads: [Data] = []
     /// The resource owner supplies measured request/reply latency. The Core
     /// lifecycle decides whether sustained delay retires the epoch.
     public var onTransportLivenessSample: ((Double) -> Void)?
@@ -120,6 +136,18 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         }
     }
 
+    init(lowerSession: ObstacleBridgeLinuxOverlayTransportSession, overlayAdapter: ObstacleBridgeOverlayLayerTransportAdapter, transport: ObstacleBridgeLinuxTransport) {
+        self.lower = nil
+        self.lowerSession = lowerSession
+        self.secureLink = nil
+        self.overlayAdapter = overlayAdapter
+        self.secureLinkServer = nil
+        self.snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
+        lowerSession.onLivenessSample = { [weak self] delayMilliseconds in
+            self?.onTransportLivenessSample?(delayMilliseconds)
+        }
+    }
+
     public func send(_ payload: Data) throws -> Data {
         do {
             requestLock.lock()
@@ -148,11 +176,48 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// directional counters, so the receive worker never observes ciphertext
     /// outside this boundary.
     public var supportsDuplexReceive: Bool { true }
+    public var supportsAsyncReceive: Bool { lowerSession.supportsAsyncReceive }
+
+    /// Installs a readiness-driven lower receive source after the synchronous
+    /// bootstrap handshake. SecureLink remains the sole owner of protected
+    /// records; only socket waiting moves out of the receive worker.
+    public func startAsyncReceiveOwner(_ handler: @escaping (Result<Data?, Error>) -> Void) {
+        // The synchronous authentication exchange can receive the peer's
+        // first protected application record while completing its transcript.
+        // Hand that retained record to the long-lived owner before arming the
+        // lower readiness source; the worker will re-arm us for subsequent
+        // records without a blocking compatibility read.
+        if let payload = takeHandshakeDeliveredPayload() {
+            handler(.success(payload))
+            return
+        }
+        lowerSession.startAsyncReceive { [weak self] result in
+            guard let self else { return }
+            do {
+                switch result {
+                case .success(let wire):
+                    // The readiness source is the receive owner just as the
+                    // legacy blocking loop was.  In particular, compatibility
+                    // `send()` calls wait for their reply through this owner;
+                    // do not publish a received reply directly to ChannelMux
+                    // and leave that waiter stranded.
+                    handler(.success(self.deliverToReceiveOwner(try self.handleReceivedWire(wire))))
+                case .failure(let error): handler(.failure(error))
+                }
+            } catch { handler(.failure(error)) }
+        }
+    }
     public func sendOneWay(_ payload: Data) throws {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.overlaySend, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         do {
+            protocolLock.lock()
+            defer { protocolLock.unlock() }
             debug("secure_link.outbound", ["protected": isProtected ? "true" : "false", "application_bytes": String(payload.count)])
             if let overlayAdapter {
-                for wire in try overlayAdapter.handleOutboundPayload(payload).emittedFrames { try lowerSession.send(wire) }
+                for wire in try overlayAdapter.handleOutboundPayload(payload).emittedFrames {
+                    try sendSecureLinkBoundaryFrame(wire)
+                }
             }
             else if let secureLink { try lowerSession.send(secureLink.protect(payload)) }
             else if let secureLinkServer { try lowerSession.send(secureLinkServer.protect(payload)) }
@@ -166,10 +231,11 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
 
     public func receiveInbound() throws -> Data {
         do {
+            if let payload = takeHandshakeDeliveredPayload() { return payload }
             let wire = try lowerSession.receive()
             if let overlayAdapter {
-                let inbound = overlayAdapter.handleInboundFrame(wire)
-                for reply in inbound.emittedFrames { try lowerSession.send(reply) }
+                let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
+                for reply in inbound.emittedFrames { try sendSecureLinkBoundaryFrame(reply) }
                 guard let payload = inbound.deliveredPayloads.first else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
                 return payload
             }
@@ -212,7 +278,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         do {
             let outbound = try overlayAdapter.requestSecureLinkRekey(sessionID: sessionID, clientNonce: clientNonce).emittedFrames
             debug("secure_link.rekey.owner_started", ["frames": String(outbound.count)])
-            for frame in outbound { try lowerSession.send(frame) }
+            for frame in outbound { try sendSecureLinkBoundaryFrame(frame) }
             return outbound.count
         } catch {
             debug("secure_link.rekey.owner_failed", ["reason": error.localizedDescription])
@@ -227,40 +293,57 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     public func receiveForOwner() throws -> Data? {
         do {
             while true {
-                let wire = try lowerSession.receive()
-                let payload: Data?
-                if let overlayAdapter {
-                    let inbound = overlayAdapter.handleInboundFrame(wire)
-                    for reply in inbound.emittedFrames { try lowerSession.send(reply) }
-                    payload = inbound.deliveredPayloads.first
-                } else if let secureLink {
-                    payload = try secureLink.unprotect(wire)
-                } else if let secureLinkServer {
-                    payload = try secureLinkServer.unprotect(wire)
-                } else {
-                    payload = wire
-                }
-                onSecureLinkStateChange?()
-                debug("secure_link.inbound", ["wire_bytes": String(wire.count), "delivered_application": payload == nil ? "false" : "true"])
+                if let payload = takeHandshakeDeliveredPayload() { return payload }
+                let payload = try handleReceivedWire(lowerSession.receive())
                 // SecureLink rekey controls have no application payload. They
                 // are fully handled by Core above and must not retire a live
                 // receive epoch merely because ChannelMux has nothing to read.
                 guard let payload else { continue }
-                requestLock.lock()
-                if let pending = pendingCompatibilityReply {
-                    pendingCompatibilityReply?.value = payload
-                    pending.signal.signal()
-                    requestLock.unlock()
-                    return nil
-                }
-                requestLock.unlock()
-                return payload
+                return deliverToReceiveOwner(payload)
             }
         } catch {
             debug("secure_link.owner_receive_failed", ["reason": error.localizedDescription])
             fail(error)
             throw error
         }
+    }
+
+    private func handleReceivedWire(_ wire: Data) throws -> Data? {
+        protocolLock.lock()
+        defer { protocolLock.unlock() }
+        let payload: Data?
+        if let overlayAdapter {
+            let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
+            for reply in inbound.emittedFrames { try sendSecureLinkBoundaryFrame(reply) }
+            payload = inbound.deliveredPayloads.first
+        } else if let secureLink {
+            payload = try secureLink.unprotect(wire)
+        } else if let secureLinkServer {
+            payload = try secureLinkServer.unprotect(wire)
+        } else {
+            payload = wire
+        }
+        onSecureLinkStateChange?()
+        debug("secure_link.inbound", ["wire_bytes": String(wire.count), "delivered_application": payload == nil ? "false" : "true"])
+        return payload
+    }
+
+    /// Delivers a decoded application payload to the single receive owner.
+    /// A synchronous compatibility caller may be waiting for exactly one
+    /// response; it must win over ChannelMux dispatch regardless of whether
+    /// the lower transport reached us through a blocking read or a readiness
+    /// callback.
+    private func deliverToReceiveOwner(_ payload: Data?) -> Data? {
+        guard let payload else { return nil }
+        requestLock.lock()
+        if let pending = pendingCompatibilityReply {
+            pendingCompatibilityReply?.value = payload
+            pending.signal.signal()
+            requestLock.unlock()
+            return nil
+        }
+        requestLock.unlock()
+        return payload
     }
 
     public func activateReceiveOwner() {
@@ -287,6 +370,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     public var secureLinkProtocolState: ObstacleBridgeSecureLinkPSKState? {
         overlayAdapter?.secureLinkProtocolState() ?? secureLink?.state ?? secureLinkServer?.state
     }
+    public var transportProtocolStats: [String: UInt64] { lowerSession.protocolStatsSnapshot }
+    public var observedPublicIP: String { overlayAdapter?.observedPublicIPSnapshot() ?? "" }
+    public var observedPublicPort: Int? { overlayAdapter?.observedPublicPortSnapshot() }
 
     public func close() {
         overlayAdapter?.handleTransportDisconnected()
@@ -304,10 +390,22 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
 
     func completeClientHandshake(sessionID: UInt64, clientNonce: Data) throws {
         guard let overlayAdapter else { return }
-        _ = try exchangeAdapterFrames(try overlayAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce).emittedFrames)
+        let delivered = try exchangeAdapterFrames(try overlayAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce).emittedFrames)
+        if !delivered.isEmpty {
+            requestLock.lock()
+            handshakeDeliveredPayloads.append(contentsOf: delivered)
+            requestLock.unlock()
+        }
         guard overlayAdapter.secureLinkProtocolState()?.authenticated == true else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
         }
+    }
+
+    private func takeHandshakeDeliveredPayload() -> Data? {
+        requestLock.lock()
+        defer { requestLock.unlock() }
+        guard !handshakeDeliveredPayloads.isEmpty else { return nil }
+        return handshakeDeliveredPayloads.removeFirst()
     }
 
     private func exchangeAdapterFrames(_ initialFrames: [Data]) throws -> [Data] {
@@ -316,11 +414,26 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         var delivered: [Data] = []
         while !pending.isEmpty {
             let outbound = pending.removeFirst()
-            let inbound = overlayAdapter.handleInboundFrame(try lowerSession.exchange(outbound))
+            lowerSession.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+            let wire = try lowerSession.exchange(outbound)
+            let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
             pending.append(contentsOf: inbound.emittedFrames)
             delivered.append(contentsOf: inbound.deliveredPayloads)
         }
         return delivered
+    }
+
+    private func sendSecureLinkBoundaryFrame(_ frame: Data) throws {
+        lowerSession.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+        try lowerSession.send(frame)
+    }
+
+    private func handleSecureLinkBoundaryFrame(
+        _ wire: Data,
+        adapter: ObstacleBridgeOverlayLayerTransportAdapter
+    ) -> ObstacleBridgeOverlayLayerTransportAdapter.InboundSnapshot {
+        lowerSession.recordSecureLinkBoundaryFrame(direction: "to_securelink")
+        return adapter.handleInboundFrame(wire)
     }
 
     private func recordTransportLiveness(since startedAt: TimeInterval) {
@@ -365,6 +478,7 @@ final class ObstacleBridgeLinuxConnectionAdmission: @unchecked Sendable {
     var snapshot: ObstacleBridgeLinuxOverlaySnapshot
     var activeSession: ObstacleBridgeLinuxConfiguredSession?
     var activeHost: String?
+    var connectedSinceUnixTS: TimeInterval?
     var secureLinkState: String
     var connectionEpoch: UInt64 = 0
     var candidateStartIndex = 0
@@ -477,6 +591,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
         admission.beginInFlightConnection()
         admission.activeSession?.close()
         admission.activeSession = nil
+        admission.connectedSinceUnixTS = nil
         var lastError: Error?
         for offset in configuration.peerCandidates.indices {
             let index = (admission.candidateStartIndex + offset) % configuration.peerCandidates.count
@@ -508,6 +623,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 admission.snapshot = .init(transport: configuration.transport.rawValue, state: "connected", attempts: index + 1, failureReason: nil)
                 admission.connectionEpoch &+= 1
                 admission.activeHost = host
+                admission.connectedSinceUnixTS = Date().timeIntervalSince1970
                 admission.candidateStartIndex = index
                 admission.activeSession = session
                 onDiagnostic?("overlay.connect.authenticated", [
@@ -569,6 +685,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
         admission.activeSession = session
         admission.connectionEpoch &+= 1
         admission.activeHost = host
+        admission.connectedSinceUnixTS = Date().timeIntervalSince1970
         admission.secureLinkState = configuration.secureLinkPSK == nil ? "off" : "authenticated"
         admission.snapshot = .init(transport: configuration.transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
     }
@@ -585,6 +702,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
         admission.activeSession?.close()
         admission.activeSession = nil
         admission.activeHost = nil
+        admission.connectedSinceUnixTS = nil
         admission.secureLinkState = configuration.secureLinkPSK == nil ? "off" : "disconnected"
         if admission.snapshot.state != "failed" {
             admission.snapshot = .init(transport: configuration.transport.rawValue, state: "disconnected", attempts: admission.snapshot.attempts, failureReason: nil)
@@ -645,9 +763,23 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 protectedFramesReceivedTotal: coreState?.protectedFramesReceivedTotal ?? 0,
                 authenticatedGenerationsTotal: coreState?.authenticatedGenerationsTotal ?? 0,
                 rekeysCompletedTotal: coreState?.rekeysCompletedTotal ?? 0,
+                connectedSinceUnixTS: admission.connectedSinceUnixTS,
+                lastIncomingAgeSeconds: lastIncomingAgeSeconds(
+                    admission.activeSession?.transportProtocolStats["last_rx_wall_ns"]
+                ),
+                observedPublicIP: admission.activeSession?.observedPublicIP ?? "",
+                observedPublicPort: admission.activeSession?.observedPublicPort,
+                myudpStats: admission.activeSession?.transportProtocolStats ?? [:],
                 compression: compressionTelemetry.snapshot()
             )
         )
+    }
+
+    private func lastIncomingAgeSeconds(_ lastRxWallNS: UInt64?) -> TimeInterval? {
+        guard let lastRxWallNS, lastRxWallNS > 0 else { return nil }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now >= lastRxWallNS else { return nil }
+        return TimeInterval(now - lastRxWallNS) / 1_000_000_000.0
     }
 
     /// Sends one payload with bounded fresh-epoch retries. This is a small

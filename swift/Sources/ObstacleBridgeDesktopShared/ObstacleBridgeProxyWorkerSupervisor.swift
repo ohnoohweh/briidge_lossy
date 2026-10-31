@@ -66,7 +66,10 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
         var offset = 0
         while offset < count {
             try waitReady(fd, events: Int16(POLLIN), deadline: deadline)
-            let n = bytes.withUnsafeMutableBytes { recv(fd, $0.baseAddress!.advanced(by: offset), count - offset, 0) }
+            // The parent descriptor is nonblocking and readiness is advisory.
+            // A stale event must re-enter the deadline loop, never block the
+            // proxy lifecycle while another owner drains the control socket.
+            let n = bytes.withUnsafeMutableBytes { recv(fd, $0.baseAddress!.advanced(by: offset), count - offset, Int32(MSG_DONTWAIT)) }
             if n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) { continue }
             guard n > 0 else { throw Failure.unavailable }
             offset += n

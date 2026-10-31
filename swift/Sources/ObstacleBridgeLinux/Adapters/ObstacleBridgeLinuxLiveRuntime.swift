@@ -161,6 +161,7 @@ public enum ObstacleBridgeLinuxShutdownSignal: String, Sendable {
 }
 
 public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
     public var onDiagnostic: ((String, [String: String]) -> Void)?
     public var onDebugDiagnostic: ((String, [String: String]) -> Void)?
@@ -181,6 +182,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var serviceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var remoteServiceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var channelOwners: [String: ObstacleBridgeLinuxServiceSocketOwner] = [:]
+    private let muxEgressScheduler = ObstacleBridgeChannelMuxEgressSequencer<ObstacleBridgeChannelMuxFrame>()
+    private var muxEgressDrainScheduled = false
     private var proxyProvider: ObstacleBridgeLinuxProxyProvider?
     /// Published under statusLock so Admin never waits for the transport queue.
     private var proxyWorker: ObstacleBridgeSupervisedProxyWorker?
@@ -284,6 +287,15 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 protectedFramesReceivedTotal: base.peer.protectedFramesReceivedTotal,
                 authenticatedGenerationsTotal: base.peer.authenticatedGenerationsTotal,
                 rekeysCompletedTotal: base.peer.rekeysCompletedTotal,
+                connectedSinceUnixTS: base.peer.connectedSinceUnixTS,
+                // A receive-worker timestamp only advances for an application
+                // payload. Prefer the lower transport's accepted-record time,
+                // which also covers myUDP CONTROL/IDLE liveness traffic.
+                lastIncomingAgeSeconds: base.peer.lastIncomingAgeSeconds
+                    ?? receive?.lastReceivedUnixTS.map { max(0, Date().timeIntervalSince1970 - $0) },
+                observedPublicIP: base.peer.observedPublicIP,
+                observedPublicPort: base.peer.observedPublicPort,
+                myudpStats: base.peer.myudpStats,
                 // Compression telemetry changes on the live ChannelMux data
                 // path, so do not reuse the connection-start status cache.
                 // Core remains the single counter owner.
@@ -374,6 +386,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         transportLifecycleOwner.cancelInFlightConnection()
         queue.sync {
             stopped = true
+            muxEgressScheduler.removeAll()
+            muxEgressDrainScheduled = false
             apply(coordinator.handle(.stop))
             stopRuntimeHealthHeartbeat()
             proxyProvider?.stop(); proxyProvider = nil
@@ -400,7 +414,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 throw ObstacleBridgeLinuxLiveRuntimeError.notRunning
             }
             do {
-                return try session.send(payload)
+                let reply = try session.send(payload)
+                refreshStatusProjection()
+                return reply
             } catch {
                 if inboundOnly {
                     apply(coordinator.handle(.stop))
@@ -504,14 +520,19 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             proxy["listeners"] = workerStatus["listeners"]
             proxy["last_error"] = workerStatus["last_error"]
         }
+        let managedHelperRunning = managedTunHelper?.isRunning ?? false
+        // An auto-managed helper owns the device and policy. Do not present a
+        // configured foreground as active after that child has exited.
+        let packetTunnelActive = current.appReady && configured.packetTunnelEnabled &&
+            (!configured.launchSwiftTunHelper || managedHelperRunning)
         return [
             "packet_tunnel": [
                 "configured": configured.packetTunnelEnabled,
                 "helper_configured": configured.tunHelperSocketPath != nil,
                 "managed_helper": configured.launchSwiftTunHelper,
-                "managed_helper_running": current.appReady && configured.launchSwiftTunHelper,
-                "device_open": current.appReady && configured.packetTunnelEnabled,
-                "network_policy_applied": current.appReady && configured.packetTunnelEnabled,
+                "managed_helper_running": configured.launchSwiftTunHelper ? managedHelperRunning : false,
+                "device_open": packetTunnelActive,
+                "network_policy_applied": packetTunnelActive,
             ],
             "service_sockets": [
                 "configured_local": configured.ownServices.count,
@@ -528,18 +549,42 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     }
 
     private func tunRoutingForAdminLocked() -> [String: Any] {
-            let configured = configuredRuntime.configuration
-            return [
-                "ok": true,
-                "configured": configured.packetTunnelEnabled,
-                "enabled": tunDevice != nil && tunNetworkApplied,
-                "startup_enabled": configured.packetTunnelPlan?.enabledOnStartup ?? false,
-                "helper_configured": configured.tunHelperSocketPath != nil,
-                "managed_helper": configured.launchSwiftTunHelper,
-                "managed_helper_running": managedTunHelper?.isRunning ?? false,
-                "device_open": tunDevice != nil,
-                "network_policy_applied": tunNetworkApplied,
-            ]
+        let configured = configuredRuntime.configuration
+        let plan = configured.packetTunnelPlan
+        // Core owns the table/summary envelope used by the shared Admin Web.
+        // Linux adds only its resource-owner facts and configured route plan.
+        var payload = ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: connectionsForAdminLocked())
+        let helperRunning = managedTunHelper?.isRunning ?? false
+        payload["ok"] = true
+        payload["configured"] = configured.packetTunnelEnabled
+        payload["device_open"] = tunDevice != nil
+        payload["network_policy_applied"] = tunNetworkApplied
+        payload["helper_configured"] = configured.tunHelperSocketPath != nil
+        payload["managed_helper"] = configured.launchSwiftTunHelper
+        payload["managed_helper_running"] = helperRunning
+        payload["included_routes"] = plan?.includedRoutes ?? []
+        payload["excluded_routes"] = plan?.excludedRoutes ?? []
+        payload["included_routes6"] = plan?.includedRoutes6 ?? []
+        payload["excluded_routes6"] = plan?.excludedRoutes6 ?? []
+        payload["tun_control"] = ObstacleBridgeAdminAPI.tunControlSnapshot(
+            enabled: tunDevice != nil && tunNetworkApplied,
+            startupEnabled: plan?.enabledOnStartup ?? false,
+            supported: configured.packetTunnelEnabled
+        )
+        payload["tun_helper"] = [
+            "enabled": configured.tunHelperSocketPath != nil,
+            "mode": configured.launchSwiftTunHelper ? "helper" : "inline",
+            "backend": "linux-swift-native",
+            "connected": tunDevice != nil,
+            "server_started": helperRunning,
+            "apply_network": tunNetworkApplied,
+            "runtime": [
+                "ifname": configured.tunInterfaceName,
+                "mtu": plan?.mtu ?? 0,
+                "network_applied": tunNetworkApplied,
+            ],
+        ]
+        return payload
     }
 
     /// Applies or removes only the selected configuration's helper-owned TUN
@@ -606,19 +651,30 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// is visible as a listening row even before a client opens a ChannelMux
     /// channel, which distinguishes a bound port from an absent service.
     public func connectionsForAdmin() -> [String: Any] {
-        queue.sync {
-            var tcp: [[String: Any]] = []
-            var udp: [[String: Any]] = []
-            for owner in serviceOwners {
-                let rows = owner.adminConnectionRows(peerID: "configured-peer")
-                if owner.specification.listenProtocol == .tcp { tcp.append(contentsOf: rows) } else { udp.append(contentsOf: rows) }
-            }
-            for owner in remoteServiceOwners {
-                let rows = owner.adminConnectionRows(peerID: "configured-peer", catalog: "remote_servers")
-                if owner.specification.listenProtocol == .tcp { tcp.append(contentsOf: rows) } else { udp.append(contentsOf: rows) }
-            }
-            return ["tcp": tcp, "udp": udp, "tun": []]
+        queue.sync { connectionsForAdminLocked() }
+    }
+
+    private func connectionsForAdminLocked() -> [String: Any] {
+        var tcp: [[String: Any]] = []
+        var udp: [[String: Any]] = []
+        for owner in serviceOwners {
+            let rows = owner.adminConnectionRows(peerID: "configured-peer")
+            if owner.specification.listenProtocol == .tcp { tcp.append(contentsOf: rows) } else { udp.append(contentsOf: rows) }
         }
+        for owner in remoteServiceOwners {
+            let rows = owner.adminConnectionRows(peerID: "configured-peer", catalog: "remote_servers")
+            if owner.specification.listenProtocol == .tcp { tcp.append(contentsOf: rows) } else { udp.append(contentsOf: rows) }
+        }
+        // ObstacleBridgeOverlayChannelAdapter delegates row construction to
+        // Core, the same source used by the Apple products.
+        return ["tcp": tcp, "udp": udp, "tun": tunChannelAdapter?.connectionRows() ?? []]
+    }
+
+    /// The peer page is a peer-scoped summary of the same ChannelMux service
+    /// rows exposed by `/api/connections`; do not substitute SecureLink frame
+    /// counts for locally observed service bytes.
+    public func peerTrafficForAdmin() -> [String: UInt64] {
+        ObstacleBridgeAdminSnapshotSupport.aggregateConnectionTraffic(connectionsForAdmin())
     }
 
     private func openTransport(epoch: UInt64) {
@@ -661,13 +717,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 }
             }
             apply(coordinator.handle(.transportConnected(epoch: epoch)))
-            apply(coordinator.handle(.authenticated(epoch: epoch)))
-            // The initial Core receive effect is delivered after this
-            // synchronous `openTransport` call returns.  TUN helper elevation
-            // can legitimately pause here for an operator password, so start
-            // the already-admitted receiver before publishing catalog frames
-            // or waiting on that helper.  The deferred Core effect below sees
-            // this same epoch and becomes a no-op.
+            // Do not advertise the lifecycle as `connected` until all local
+            // facilities promised by that state are usable.  In particular,
+            // callers use the connected notification to discover and connect
+            // configured service listeners; publishing it before binding
+            // those listeners races a local TCP connect with `ECONNREFUSED`.
+            // The session is already cryptographically admitted, so its
+            // receive owner can safely start before the public transition.
             startReceiveWorker(session: connectedSession, mux: mux, coordinatorEpoch: epoch)
             phase = "remote_catalog"
             try publishRemoteCatalog()
@@ -675,6 +731,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             try startOwnServiceOwners()
             phase = "packet_tunnel"
             try startPacketDeviceIfNeeded()
+            apply(coordinator.handle(.authenticated(epoch: epoch)))
             emitDiagnostic("overlay.post_auth.ready", fields: ["epoch": String(epoch)])
         } catch ObstacleBridgeLinuxOverlayTransportError.cancelled {
             // `stop()` has already interrupted the in-flight lower session.
@@ -718,6 +775,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 session?.close()
                 session = nil
                 channelMux = nil
+                muxEgressScheduler.removeAll()
+                muxEgressDrainScheduled = false
                 stopPacketDevice()
                 activeCoordinatorEpoch = nil
                 replaceReceiveWorker(with: nil)
@@ -930,26 +989,48 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     }
 
     private func sendServiceFrames(_ frames: [ObstacleBridgeChannelMuxFrame], from owner: ObstacleBridgeLinuxServiceSocketOwner) {
-        guard !stopped, let channelMux else { return }
+        guard !stopped, channelMux != nil else { return }
         for frame in frames {
-            emitDebugDiagnostic("myudp.channel_mux.send", [
-                "message_type": String(frame.messageType.rawValue),
-                "channel": String(frame.channelID),
-                "body_bytes": String(frame.body.count),
-            ])
+            muxEgressScheduler.enqueue(frame, from: .init(frame))
             if frame.messageType == .open { channelOwners[channelKey(frame)] = owner }
-            do { try channelMux.sendUnsolicited(frame) }
-            catch {
-                emitDebugDiagnostic("myudp.channel_mux.send_failed", [
+        }
+        scheduleMuxEgressDrain()
+    }
+
+    private func scheduleMuxEgressDrain() {
+        guard !muxEgressDrainScheduled else { return }
+        muxEgressDrainScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.muxEgressDrainScheduled = false
+            // `sendUnsolicited` performs a datagram write, not a receive wait.
+            // Send a bounded fair batch in this turn so an OPEN and its
+            // immediately queued DATA are not separated by arbitrary queue
+            // work.  The bound retains an interruption point for other
+            // lifecycle callbacks and preserves the persistent Core
+            // round-robin order across sources.
+            for _ in 0..<32 {
+                guard !self.stopped, let channelMux = self.channelMux,
+                      let frame = self.muxEgressScheduler.dequeueNext() else { return }
+                self.emitDebugDiagnostic("myudp.channel_mux.send", [
                     "message_type": String(frame.messageType.rawValue),
                     "channel": String(frame.channelID),
-                    "reason": error.localizedDescription,
+                    "body_bytes": String(frame.body.count),
                 ])
-                if let epoch = activeCoordinatorEpoch {
-                    apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
+                do { try channelMux.sendUnsolicited(frame) }
+                catch {
+                    self.emitDebugDiagnostic("myudp.channel_mux.send_failed", [
+                        "message_type": String(frame.messageType.rawValue),
+                        "channel": String(frame.channelID),
+                        "reason": error.localizedDescription,
+                    ])
+                    if let epoch = self.activeCoordinatorEpoch {
+                        self.apply(self.coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
+                    }
+                    return
                 }
-                return
             }
+            if !self.muxEgressScheduler.isEmpty { self.scheduleMuxEgressDrain() }
         }
     }
 
@@ -968,6 +1049,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                     if let payload = try session.receiveForOwner() { return payload }
                 }
             },
+            asyncReceive: session.supportsAsyncReceive ? { completion in
+                session.startAsyncReceiveOwner(completion)
+            } : nil,
             cancelReceive: { session.cancelReceive() },
             sink: { [weak self] workerEpoch, payload in
                 guard let self, self.configuredRuntime.connectionEpoch == workerEpoch else { return }

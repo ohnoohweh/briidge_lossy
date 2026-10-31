@@ -54,6 +54,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private var receiveBuffer = Data()
     private var pendingOutboundWires: [Data] = []
     private var outboundSendInFlight = false
+    private let muxEgressScheduler = ObstacleBridgeChannelMuxEgressSequencer<Data>()
+    private var muxEgressDrainScheduled = false
     private var overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
     private var lastOverlayRxWallNS: UInt64 = 0
     private let outboundContentContext = NWConnection.ContentContext(
@@ -862,7 +864,23 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     }
 
     private func sendMuxFrames(_ frames: [Data]) {
-        sendFrames(frames)
+        for frame in frames {
+            guard let wire = try? ObstacleBridgeChannelMuxFrameCodec.decode(frame) else { continue }
+            muxEgressScheduler.enqueue(frame, from: .init(wire))
+        }
+        scheduleMuxEgressDrain()
+    }
+
+    private func scheduleMuxEgressDrain() {
+        guard !muxEgressDrainScheduled else { return }
+        muxEgressDrainScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.muxEgressDrainScheduled = false
+            guard let frame = self.muxEgressScheduler.dequeueNext() else { return }
+            self.sendPayload(frame)
+            if !self.muxEgressScheduler.isEmpty { self.scheduleMuxEgressDrain() }
+        }
     }
 
     private func scheduleSecureLinkPayloadDrain() {

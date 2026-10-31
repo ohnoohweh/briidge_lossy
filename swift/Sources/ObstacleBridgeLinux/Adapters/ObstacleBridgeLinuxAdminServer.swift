@@ -31,9 +31,11 @@ public enum ObstacleBridgeLinuxAdminServerError: Error, Equatable, LocalizedErro
 /// Minimal Linux-native Admin HTTP surface. It owns no transport state and
 /// reads only the runtime's redacted status projection.
 public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxAdminServerTests
     private let statusProvider: () -> ObstacleBridgeLinuxRuntimeStatus
     private let peersProvider: () -> [(identity: String, snapshot: ObstacleBridgeLinuxPeerSnapshot)]
     private let connectionsProvider: () -> [String: Any]
+    private let peerTrafficRates = ObstacleBridgeAdminPeerTrafficRateSampler()
     private let runtimeHealthProvider: () -> (count: Int, previousClean: Bool?)
     private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
     private let resourceHealthProvider: () -> [String: Any]
@@ -55,6 +57,8 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let startedAt = Date()
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
+    private var clientSources: [Int32: DispatchSourceRead] = [:]
+    private var clientRequests: [Int32: Data] = [:]
     public private(set) var port: Int = 0
 
     public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil, connectionsProvider: @escaping () -> [String: Any] = { ["tcp": [], "udp": [], "tun": []] }, tunRoutingProvider: @escaping () -> [String: Any] = { ["ok": true, "configured": false, "enabled": false] }, tunRoutingControlHandler: ((Bool) -> [String: Any])? = nil, tunHelperRepairHandler: (() -> [String: Any])? = nil, logWorker: ObstacleBridgeLogWorkerSupervisor? = nil) {
@@ -167,6 +171,10 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         }
         guard bindResult == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxAdminServerError.bindFailure(code) }
         guard listen(fd, 16) == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxAdminServerError.listenFailure(code) }
+        let listenerFlags = fcntl(fd, F_GETFL)
+        guard listenerFlags >= 0, fcntl(fd, F_SETFL, listenerFlags | O_NONBLOCK) == 0 else {
+            let code = errno; _ = close(fd); throw ObstacleBridgeLinuxAdminServerError.socketFailure(code)
+        }
         var actual = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         _ = withUnsafeMutablePointer(to: &actual) { pointer in pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }
         self.listener = fd
@@ -181,27 +189,84 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     public func stop() {
         source?.cancel()
         source = nil
+        let clients = clientSources
+        clientSources.removeAll(); clientRequests.removeAll()
+        for source in clients.values { source.cancel() }
         listener = -1
         port = 0
     }
 
     private func acceptReadyClient() {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxAdminServerTests
         guard listener >= 0 else { return }
-        let client = accept(listener, nil, nil)
-        guard client >= 0 else { return }
-        DispatchQueue.global().async { [weak self] in self?.serve(client) }
+        while true {
+            let client = accept(listener, nil, nil)
+            if client < 0 {
+                if errno == EINTR { continue }
+                return
+            }
+            let flags = fcntl(client, F_GETFL)
+            guard flags >= 0, fcntl(client, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                _ = close(client)
+                continue
+            }
+            let source = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
+            clientSources[client] = source
+            source.setEventHandler { [weak self] in self?.readClientRequest(client) }
+            source.setCancelHandler { _ = close(client) }
+            source.resume()
+            readClientRequest(client)
+        }
     }
 
-    private func serve(_ client: Int32) {
-        defer { _ = close(client) }
-        var request = Data()
-        var buffer = [UInt8](repeating: 0, count: 1024)
-        while request.count < 16 * 1024 {
-            let received = read(client, &buffer, buffer.count)
-            guard received > 0 else { return }
-            request.append(buffer, count: Int(received))
-            if request.range(of: Data("\r\n\r\n".utf8)) != nil { break }
+    /// Keeps partial HTTP frames under the accepted descriptor's readiness
+    /// owner.  A response worker receives a duplicate only once its bounded
+    /// request is complete, so it cannot be stranded in a receive call.
+    private func readClientRequest(_ client: Int32) {
+        while true {
+            var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+            let received = recv(client, &buffer, buffer.count, Int32(MSG_DONTWAIT))
+            if received > 0 {
+                clientRequests[client, default: Data()].append(buffer, count: Int(received))
+                guard let request = clientRequests[client], request.count <= 65_536 else { closeClientRequest(client); return }
+                guard let headerEnd = request.range(of: Data("\r\n\r\n".utf8)) else { continue }
+                let headerData = request[..<headerEnd.lowerBound]
+                let headerText = String(data: headerData, encoding: .utf8) ?? ""
+                let headers = headerText.split(separator: "\r\n").dropFirst().reduce(into: [String: String]()) { headers, line in
+                    let parts = line.split(separator: ":", maxSplits: 1)
+                    guard parts.count == 2 else { return }
+                    headers[parts[0].trimmingCharacters(in: .whitespaces).lowercased()] = parts[1].trimmingCharacters(in: .whitespaces)
+                }
+                let contentLength = headers["content-length"].flatMap(Int.init) ?? 0
+                guard (0...65_536).contains(contentLength), request.count >= headerEnd.upperBound + contentLength else { continue }
+                let responseClient = dup(client)
+                guard responseClient >= 0 else { closeClientRequest(client); return }
+                let responseFlags = fcntl(responseClient, F_GETFL)
+                guard responseFlags >= 0, fcntl(responseClient, F_SETFL, responseFlags & ~O_NONBLOCK) == 0 else {
+                    _ = close(responseClient)
+                    closeClientRequest(client)
+                    return
+                }
+                clientSources.removeValue(forKey: client)?.cancel()
+                clientRequests.removeValue(forKey: client)
+                DispatchQueue.global().async { [weak self] in self?.serve(responseClient, requestData: request) }
+                return
+            }
+            if received < 0, (errno == EAGAIN || errno == EWOULDBLOCK) { return }
+            if received < 0, errno == EINTR { continue }
+            closeClientRequest(client)
+            return
         }
+    }
+
+    private func closeClientRequest(_ client: Int32) {
+        clientSources.removeValue(forKey: client)?.cancel()
+        clientRequests.removeValue(forKey: client)
+    }
+
+    private func serve(_ client: Int32, requestData: Data) {
+        defer { _ = close(client) }
+        let request = requestData
         guard let headerEnd = request.range(of: Data("\r\n\r\n".utf8)) else { return }
         let headerData = request[..<headerEnd.lowerBound]
         let headerText = String(data: headerData, encoding: .utf8) ?? ""
@@ -213,9 +278,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let contentLength = headers["content-length"].flatMap(Int.init) ?? 0
         guard (0...65_536).contains(contentLength) else { return }
         let bodyStart = headerEnd.upperBound
-        while request.count - bodyStart < contentLength {
-            let received = read(client, &buffer, buffer.count); guard received > 0 else { return }; request.append(buffer, count: Int(received))
-        }
+        guard request.count - bodyStart >= contentLength else { return }
         let body = Data(request[bodyStart..<(bodyStart + contentLength)])
         let requestLine = headerText.split(separator: "\r\n", maxSplits: 1).first ?? ""
         let parts = requestLine.split(separator: " ")
@@ -433,7 +496,32 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let header = "HTTP/1.1 \(statusText)\r\nContent-Type: \(response.contentType)\r\nContent-Length: \(response.body.count)\r\n\(extraHeaders)Connection: close\r\n\r\n"
         var wire = Data(header.utf8)
         wire.append(response.body)
-        _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
+        _ = writeAll(client, data: wire)
+    }
+
+    private func writeAll(_ client: Int32, data: Data) -> Bool {
+        // A full Admin snapshot can exceed one socket-buffer write.  A single
+        // POSIX write silently truncates the JSON body, which the browser then
+        // reports as an unavailable API structure.
+        var offset = 0
+        while offset < data.count {
+            let written = data.withUnsafeBytes { buffer -> Int in
+                guard let base = buffer.baseAddress else { return -1 }
+                return write(client, base.advanced(by: offset), data.count - offset)
+            }
+            if written > 0 {
+                offset += written
+                continue
+            }
+            if written < 0, errno == EINTR { continue }
+            if written < 0, errno == EAGAIN || errno == EWOULDBLOCK {
+                var descriptor = pollfd(fd: client, events: Int16(POLLOUT), revents: 0)
+                guard poll(&descriptor, 1, 1_000) > 0 else { return false }
+                continue
+            }
+            return false
+        }
+        return true
     }
 
     private var adminDashboard: String {
@@ -482,13 +570,17 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             .split(separator: ":", maxSplits: 1).dropFirst().first?.trimmingCharacters(in: .whitespaces)
         else {
             let wire = Data("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n".utf8)
-            _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
+            _ = writeAll(client, data: wire)
             return
         }
         let accept = Data(Insecure.SHA1.hash(data: Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8))).base64EncodedString()
         let handshake = Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n".utf8)
-        _ = handshake.withUnsafeBytes { write(client, $0.baseAddress, handshake.count) }
-        var topics = Set(ObstacleBridgeAdminLiveTopicPolicyPort.allTopics)
+        guard writeAll(client, data: handshake) else { return }
+        // Wait for the browser subscription before emitting snapshots.  This
+        // avoids filling a non-blocking client socket with every topic before
+        // it has begun receiving, while the control message still requests an
+        // immediate snapshot of the active tabs.
+        var topics = Set<String>()
         var nextDue: [String: TimeInterval] = [:]
         var intervals: [String: Any] = [:]
         for topic in ObstacleBridgeAdminLiveTopicPolicyPort.allTopics {
@@ -515,7 +607,9 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             guard ready >= 0 else { return }
             guard ready > 0 else { continue }
             var buffer = [UInt8](repeating: 0, count: 16 * 1024)
-            let received = read(client, &buffer, buffer.count)
+            let received = recv(client, &buffer, buffer.count, Int32(MSG_DONTWAIT))
+            if received < 0, (errno == EAGAIN || errno == EWOULDBLOCK) { continue }
+            if received < 0, errno == EINTR { continue }
             guard received > 0 else { return }
             receiveBuffer.append(buffer, count: Int(received))
             while let frame = parseLiveWebSocketFrame(receiveBuffer) {
@@ -554,10 +648,17 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private func sendLiveFrame(_ client: Int32, opcode: UInt8, payload: Data) -> Bool {
         guard payload.count <= Int(UInt16.max) else { return false }
         var frame = Data([0x80 | opcode])
-        if payload.count < 126 { frame.append(UInt8(payload.count)) }
-        else { frame.append(126); var length = UInt16(payload.count).bigEndian; frame.append(Data(bytes: &length, count: 2)) }
+        if payload.count < 126 {
+            frame.append(UInt8(payload.count))
+        } else {
+            // Encode the WebSocket extended length explicitly.  The native
+            // Admin live status payload is larger than the short-frame limit.
+            frame.append(126)
+            frame.append(UInt8((payload.count >> 8) & 0xff))
+            frame.append(UInt8(payload.count & 0xff))
+        }
         frame.append(payload)
-        return frame.withUnsafeBytes { write(client, $0.baseAddress, frame.count) == frame.count }
+        return writeAll(client, data: frame)
     }
 
     private func parseLiveWebSocketFrame(_ data: Data) -> LinuxWebSocketFrame? {
@@ -616,6 +717,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             ObstacleBridgeRuntimeMetrics.shared.recordCPUSample(processCPUNS: cpuNS)
         }
         let status = statusProvider()
+        let configuration = ObstacleBridgeRuntimeConfigPort.flatten(adminConfigurationProvider())
         let health = runtimeHealthProvider()
         let healthRecords = runtimeHealthRecordsProvider().compactMap { record -> [String: Any]? in
             guard let data = try? JSONEncoder().encode(record) else { return nil }
@@ -627,6 +729,11 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             extra: ["app_ready": status.appReady, "failure_reason": status.failureReason as Any]
         )
         var payload: [String: Any] = [
+            // The shared Admin page applies every live status document to its
+            // headline and uptime widgets, so these must mirror `/api/meta`.
+            "app": "ObstacleBridgeLinux",
+            "admin_web_name": configuration["admin_web_name"] as? String ?? "",
+            "uptime_sec": max(0, Int(Date().timeIntervalSince(startedAt))),
             "platform": "linux-swift",
             "overlay_transport": status.transport,
             "transport_state": status.state,
@@ -664,11 +771,38 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                 "queue_depth": status.receiveQueueDepth,
                 "failure_reason": status.receiveFailureReason as Any,
             ],
-            "peer": peerPayload(status.peer),
+            "peer": ObstacleBridgeAdminSnapshotSupport.peerEnvelope(facts: peerFacts(
+                status.peer,
+                identity: "configured-peer",
+                endpointHost: status.activeHost ?? status.configuredCandidates.first,
+                status: status
+            )),
             "build": buildInfoProvider(),
         ]
         payload["runtime_metrics"] = ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()
-        return payload
+        return ObstacleBridgeAdminSnapshotSupport.statusEnvelope(
+            runtimeOwner: "ObstacleBridgeLinux",
+            runtimeMode: "linux-swift",
+            adminWebName: configuration["admin_web_name"] as? String ?? "",
+            adminUI: ObstacleBridgeAdminWebPort.uiPayload(
+                runtimeConfig: adminConfigurationProvider(),
+                platform: "linux-swift"
+            ),
+            securityAdvisor: ObstacleBridgeAdminWebPort.securityAdvisorPayload(
+                runtimeConfig: adminConfigurationProvider(),
+                bindHostFallback: "127.0.0.1"
+            ),
+            startedAt: startedAt.timeIntervalSince1970,
+            uptimeSec: max(0, Int(Date().timeIntervalSince(startedAt))),
+            bootstrapState: [
+                "status": status.state,
+                "transport": status.transport,
+                "app_ready": status.appReady,
+            ],
+            transportRuntime: transportRuntime,
+            compressLayer: (payload["peer"] as? [String: Any])?["compression_layer"] ?? NSNull(),
+            extra: payload
+        )
     }
 
     /// Host facts and actionable guidance for the Linux resource boundaries.
@@ -698,65 +832,55 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
 
     private func peersPayload() -> [[String: Any]] {
         let status = statusProvider()
-        return peersProvider().map { row in
-            var peer = peerPayload(row.snapshot, identity: row.identity)
-            peer["configured_candidates"] = status.configuredCandidates
-            peer["active_host"] = status.activeHost as Any
-            peer["port"] = status.port
-            peer["failure_reason"] = status.failureReason as Any
-            return peer
-        }
+        let connections = connectionsProvider()
+        let traffic = ObstacleBridgeAdminSnapshotSupport.aggregateConnectionTraffic(connections)
+        let activeConnections = ObstacleBridgeAdminSnapshotSupport.activeConnectionCounts(connections)
+        let peers = peersProvider()
+        let identities = Set(peers.map(\.identity))
+        peerTrafficRates.removeUnknownPeers(identities)
+        return ObstacleBridgeAdminSnapshotSupport.peersSnapshotForAPI(peers.map { row in
+            let endpointHost = status.activeHost ?? status.configuredCandidates.first
+            var envelope = ObstacleBridgeAdminSnapshotSupport.peerEnvelope(facts: peerFacts(
+                row.snapshot, identity: row.identity, endpointHost: endpointHost, status: status,
+                traffic: traffic,
+                trafficRates: peerTrafficRates.sample(identity: row.identity, traffic: traffic),
+                activeConnections: activeConnections
+            ))
+            // The Core policy merges only connection rows that belong to this
+            // client peer and strips retired byte-window internals later.
+            envelope["throttle"] = ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(
+                peerID: 1, connectionsSnapshot: connections
+            )
+            return envelope
+        })
     }
 
-    /// Serialize the one Core/adapter-derived peer projection. Do not read
-    /// configuration secrets or construct protocol counters in this HTTP
-    /// adapter: all SecureLink fields arrive through `status.peer`.
-    private func peerPayload(_ peer: ObstacleBridgeLinuxPeerSnapshot, identity: String = "configured-peer") -> [String: Any] {
-        return [
-            "peer_id": identity,
-            "transport": peer.transport,
-            "state": peer.lifecycleState,
-            "connection_epoch": peer.connectionEpoch,
-            "app_ready": peer.ready,
-            "secure_link": [
-                "state": peer.secureLinkState,
-                "authenticated": peer.authenticated,
-                "session_id": peer.sessionID ?? NSNull(),
-                "pending_rekey_session_id": peer.pendingRekeySessionID ?? NSNull(),
-                "application_sending_blocked": peer.applicationSendingBlocked,
-                "attempts": peer.attempts,
-                "next_retry_milliseconds": peer.nextRetryMilliseconds ?? NSNull(),
-                "protected_tx_counter": peer.protectedTxCounter,
-                "protected_rx_counter": peer.protectedRxCounter,
-                "protected_frames_sent_total": peer.protectedFramesSentTotal,
-                "protected_frames_received_total": peer.protectedFramesReceivedTotal,
-                "authenticated_generations_total": peer.authenticatedGenerationsTotal,
-                "rekeys_completed_total": peer.rekeysCompletedTotal,
-            ],
-            "compression_layer": [
-                "enabled": peer.compression.enabled,
-                "algorithm": peer.compression.algorithm,
-                "level": peer.compression.level,
-                "min_bytes": peer.compression.minimumBodyBytes,
-                "compress_attempts_total": peer.compression.compressAttemptsTotal,
-                "compress_applied_total": peer.compression.compressAppliedTotal,
-                "compress_skipped_no_gain_total": peer.compression.compressSkippedNoGainTotal,
-                "compress_input_bytes_total": peer.compression.compressInputBytesTotal,
-                "compress_output_bytes_total": peer.compression.compressOutputBytesTotal,
-                "compressed_frames_sent_total": peer.compression.compressedFramesSentTotal,
-                "compressed_frames_received_total": peer.compression.compressedFramesReceivedTotal,
-                "compressed_input_bytes_sent_total": peer.compression.compressedInputBytesSentTotal,
-                "compressed_output_bytes_sent_total": peer.compression.compressedOutputBytesSentTotal,
-                "compressed_input_bytes_received_total": peer.compression.compressedInputBytesReceivedTotal,
-                "compressed_output_bytes_received_total": peer.compression.compressedOutputBytesReceivedTotal,
-                "uncompressed_frames_sent_total": peer.compression.uncompressedFramesSentTotal,
-                "uncompressed_frames_received_total": peer.compression.uncompressedFramesReceivedTotal,
-                "uncompressed_bytes_sent_total": peer.compression.uncompressedBytesSentTotal,
-                "uncompressed_bytes_received_total": peer.compression.uncompressedBytesReceivedTotal,
-                "rejected_frames_total": peer.compression.rejectedFramesTotal,
-                "rejected_bytes_total": peer.compression.rejectedBytesTotal,
-            ],
-        ]
+    /// Convert Linux-owned runtime state into portable facts. Core owns every
+    /// `/api/peers` key and nested object derived from those facts.
+    private func peerFacts(_ peer: ObstacleBridgeLinuxPeerSnapshot, identity: String, endpointHost: String?, status: ObstacleBridgeLinuxRuntimeStatus, traffic: [String: UInt64] = [:], trafficRates: [String: Double] = [:], activeConnections: [String: Int] = [:]) -> ObstacleBridgeAdminPeerFacts {
+        .init(
+            identity: identity, transport: peer.transport, lifecycleState: peer.lifecycleState,
+            secureLinkState: peer.secureLinkState, connectionEpoch: peer.connectionEpoch,
+            sessionID: peer.sessionID, pendingRekeySessionID: peer.pendingRekeySessionID,
+            ready: peer.ready, authenticated: peer.authenticated,
+            applicationSendingBlocked: peer.applicationSendingBlocked, attempts: peer.attempts,
+            nextRetryMilliseconds: peer.nextRetryMilliseconds, protectedTxCounter: peer.protectedTxCounter,
+            protectedRxCounter: peer.protectedRxCounter, protectedFramesSentTotal: peer.protectedFramesSentTotal,
+            protectedFramesReceivedTotal: peer.protectedFramesReceivedTotal,
+            authenticatedGenerationsTotal: peer.authenticatedGenerationsTotal,
+            rekeysCompletedTotal: peer.rekeysCompletedTotal,
+            connectedSinceUnixTS: peer.connectedSinceUnixTS,
+            lastIncomingAgeSeconds: peer.lastIncomingAgeSeconds,
+            observedPublicIP: peer.observedPublicIP, observedPublicPort: peer.observedPublicPort,
+            compression: peer.compression,
+            secureLinkMode: status.secureLinkMode, endpointHost: endpointHost, endpointPort: status.port,
+            configuredCandidates: status.configuredCandidates,
+            activeTCPChannels: activeConnections["tcp"] ?? status.activeTCPChannels,
+            activeUDPChannels: activeConnections["udp"] ?? status.activeUDPChannels,
+            activeTUNChannels: activeConnections["tun"] ?? 0,
+            failureReason: status.failureReason,
+            traffic: traffic, trafficRates: trafficRates, myudpStats: peer.myudpStats
+        )
     }
 
     private func json(_ object: Any) -> Data { ObstacleBridgeCanonicalJSON.data(fromJSONObject: object) ?? Data("{}".utf8) }

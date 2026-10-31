@@ -91,7 +91,9 @@ class MyUdpProcessingReproTests(unittest.IsolatedAsyncioTestCase):
 
         for raw, _dst in sender_transport.sent:
             self.peer_proto.datagram_received(raw, self.peer)
-        await self._flush_callbacks()
+        # DATA chunks now yield through the receive FIFO; give all bounded
+        # continuations an opportunity to run before asserting delivery.
+        await self._flush_callbacks(rounds=32)
 
         self.assertEqual(self.completed, [payload])
 
@@ -143,6 +145,20 @@ class MyUdpProcessingReproTests(unittest.IsolatedAsyncioTestCase):
                 _, delivered = receiver.process_data(chunk)
                 completed.extend(delivered)
         self.assertEqual(completed, [b"one", b"two"])
+
+    async def test_unconfirmed_retransmit_sweep_yields_between_bounded_fifo_batches(self) -> None:
+        # This isolates timer fairness from wire encoding: a congested send
+        # window must not be walked in one event-loop callback.
+        self.session.send_buf = {counter: b"frame" for counter in range(1, 66)}
+        batches: list[list[int]] = []
+        self.peer_proto._retransmit_counters = lambda counters, **_kwargs: batches.append(list(counters))  # type: ignore[method-assign]
+
+        self.peer_proto._retx_sweep_unconfirmed()
+        self.assertEqual(batches, [list(range(1, 33))])
+        await self._flush_callbacks()
+
+        self.assertEqual(batches, [list(range(1, 33)), list(range(33, 65)), [65]])
+        self.assertFalse(self.peer_proto._unconfirmed_sweep_pending)
 
     async def test_malformed_stream_record_is_counted_and_not_delivered(self) -> None:
         malformed = _batch_frame(self.proto, [StreamChunk(1, b"\x00\x01\x00\x00")])

@@ -40,6 +40,7 @@ public struct ObstacleBridgeLinuxServiceSocketOwnerEpochReset: Equatable, Sendab
 /// callbacks and data-plane mutation run on one serial queue; no descriptor or
 /// channel state is touched by the overlay thread directly.
 public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxServiceSocketOwnerTests
     public typealias FrameSink = (ObstacleBridgeLinuxServiceSocketOwner, [ObstacleBridgeChannelMuxFrame]) -> Void
 
     private struct ChannelTraffic {
@@ -108,12 +109,21 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
               spec.listenProtocol == spec.targetProtocol else { throw ObstacleBridgeLinuxServiceSocketOwnerError.unsupportedProtocol }
         let fd = try bindSocket(host: spec.listenHost, port: spec.listenPort, type: spec.listenProtocol == .tcp ? SOCK_STREAM : SOCK_DGRAM)
         if spec.listenProtocol == .tcp, listen(fd, 64) != 0 { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxServiceSocketOwnerError.listenFailure(code) }
+        if spec.listenProtocol == .tcp {
+            let flags = fcntl(fd, F_GETFL)
+            guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                let code = errno; _ = close(fd); throw ObstacleBridgeLinuxServiceSocketOwnerError.socketFailure(code)
+            }
+        }
         spec = .init(serviceID: spec.serviceID, name: spec.name, listenProtocol: spec.listenProtocol, listenHost: spec.listenHost, listenPort: boundPort(fd), targetProtocol: spec.targetProtocol, targetHost: spec.targetHost, targetPort: spec.targetPort)
         listener = fd
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         listenerSource = source
         source.setEventHandler { [weak self] in self?.listenerReadable() }
-        source.setCancelHandler { _ = close(fd) }
+        // Descriptor ownership remains synchronous.  A cancellation handler
+        // can run after a replacement catalog has rebound the same numeric
+        // descriptor, so closing from it could tear down the new listener.
+        source.setCancelHandler {}
         source.resume()
     }
 
@@ -121,9 +131,12 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         queue.sync {
             guard !stopped else { return }
             stopped = true
-            listenerSource?.cancel(); listenerSource = nil; listener = -1
+            let activeListener = listener
+            listener = -1
+            listenerSource?.cancel(); listenerSource = nil
             for source in connectionSources.values { source.cancel() }
             connectionSources.removeAll()
+            if activeListener >= 0 { _ = close(activeListener) }
             for fd in descriptors.values { _ = close(fd) }
             descriptors.removeAll(); udpPeers.removeAll(); udpChannels.removeAll()
         }
@@ -174,7 +187,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 "peer_id": peerID,
                 "svc_id": Int(spec.serviceID),
                 "service_name": spec.name ?? "",
-                "role": "client",
+                "role": ObstacleBridgeAdminSnapshotSupport.serviceConnectionRole(catalog: catalog),
                 "source": spec.listenHost,
                 "local": ["host": spec.listenHost, "port": boundListenerPort],
                 "local_port": boundListenerPort,
@@ -212,34 +225,49 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
 
     private func listenerReadable() {
         guard !stopped else { return }
-        if spec.listenProtocol == .tcp { acceptTCP() } else { receiveUDP() }
+        if spec.listenProtocol == .tcp {
+            while acceptTCP() {}
+        } else {
+            while receiveUDP() {}
+        }
     }
 
-    private func acceptTCP() {
+    /// Drains one pending stream client after the listener's readiness source
+    /// fires. The listener is nonblocking, so a stale readiness notification
+    /// cannot hold the service-owner queue while a peer is between TCP
+    /// handshake and application data.
+    @discardableResult
+    private func acceptTCP() -> Bool {
         let fd = accept(listener, nil, nil)
-        guard fd >= 0,
-              let snapshot = try? tcpRuntime.acceptLocalServerConnection(service: nativeSpec(), overlayConnected: true, acceptingEnabled: true),
-              let channelID = UInt16(exactly: snapshot.chanID) else { if fd >= 0 { _ = close(fd) }; return }
+        guard fd >= 0 else { return false }
+        guard let snapshot = try? tcpRuntime.acceptLocalServerConnection(service: nativeSpec(), overlayConnected: true, acceptingEnabled: true),
+              let channelID = UInt16(exactly: snapshot.chanID) else { _ = close(fd); return true }
         descriptors[channelID] = fd
         coreTCPChannels.insert(channelID)
         channelTraffic[channelID] = .init()
         openedTCPChannels += 1
         installReadSource(fd: fd, channelID: channelID, isUDP: false)
         emitCoreWires(snapshot.frames)
+        return true
     }
 
-    private func receiveUDP() {
+    /// Drains one queued datagram without ever blocking the serial owner
+    /// queue. `MSG_DONTWAIT` is intentional even though Dispatch reported
+    /// readability: another consumer or a transient readiness state may have
+    /// emptied the socket before this callback runs.
+    @discardableResult
+    private func receiveUDP() -> Bool {
         var bytes = [UInt8](repeating: 0, count: 65_535)
         var address = sockaddr_storage(); var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
         let count = withUnsafeMutablePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { recvfrom(listener, &bytes, bytes.count, 0, $0, &length) }
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { recvfrom(listener, &bytes, bytes.count, Int32(MSG_DONTWAIT), $0, &length) }
         }
-        guard count > 0 else { return }
+        guard count > 0 else { return false }
         let addressData = Data(bytes: &address, count: Int(length))
         guard let snapshot = try? udpRuntime.handleLocalServerDatagram(
             service: nativeSpec(), serviceKey: addressData.base64EncodedString(), payload: Data(bytes.prefix(Int(count))),
             addrHost: addressData.base64EncodedString(), addrPort: 0, overlayConnected: true, acceptingEnabled: true
-        ), let channelID = UInt16(exactly: snapshot.chanID) else { return }
+        ), let channelID = UInt16(exactly: snapshot.chanID) else { return true }
         udpChannels[addressData] = channelID
         udpPeers[channelID] = (addressData, length)
         coreUDPChannels.insert(channelID)
@@ -250,39 +278,49 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         if snapshot.allocatedChannel { openedUDPChannels += 1 }
         debug("service.udp.local_datagram", ["channel": String(channelID), "bytes": String(count), "allocated": snapshot.allocatedChannel ? "true" : "false", "peer": addressData.base64EncodedString()])
         emitCoreWires(snapshot.frames)
+        return true
     }
 
     private func installReadSource(fd: Int32, channelID: UInt16, isUDP: Bool) {
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         connectionSources[channelID] = source
         source.setEventHandler { [weak self] in self?.connectionReadable(channelID: channelID, isUDP: isUDP) }
-        source.setCancelHandler { _ = close(fd) }
+        // See the listener source above: close while this owner still holds
+        // the descriptor rather than asynchronously after cancellation.
+        source.setCancelHandler {}
         source.resume()
     }
 
     private func connectionReadable(channelID: UInt16, isUDP: Bool) {
         guard let fd = descriptors[channelID], !stopped else { return }
-        var bytes = [UInt8](repeating: 0, count: 65_535)
-        let count = read(fd, &bytes, bytes.count)
-        if count > 0 {
-            let payload = Data(bytes.prefix(Int(count)))
-            recordLocalRead(channelID: channelID, bytes: Int(count))
-            if coreTCPChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalServerData(chanID: Int(channelID), payload: payload, overlayConnected: true) {
-                emitCoreWires(snapshot.frames)
-            } else if coreTCPClientChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalClientData(chanID: Int(channelID), payload: payload, overlayConnected: true) {
-                emitCoreWires(snapshot.frames)
-            } else if coreUDPClientChannels.contains(channelID), let snapshot = try? udpRuntime.handleLocalClientDatagram(chanID: Int(channelID), payload: payload) {
-                emitCoreWires(snapshot.frames)
-            } else {
-                malformedFrames += 1
+        while true {
+            var bytes = [UInt8](repeating: 0, count: 65_535)
+            let count = recv(fd, &bytes, bytes.count, Int32(MSG_DONTWAIT))
+            if count > 0 {
+                let payload = Data(bytes.prefix(Int(count)))
+                recordLocalRead(channelID: channelID, bytes: Int(count))
+                if coreTCPChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalServerData(chanID: Int(channelID), payload: payload, overlayConnected: true) {
+                    emitCoreWires(snapshot.frames)
+                } else if coreTCPClientChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalClientData(chanID: Int(channelID), payload: payload, overlayConnected: true) {
+                    emitCoreWires(snapshot.frames)
+                } else if coreUDPClientChannels.contains(channelID), let snapshot = try? udpRuntime.handleLocalClientDatagram(chanID: Int(channelID), payload: payload) {
+                    emitCoreWires(snapshot.frames)
+                } else {
+                    malformedFrames += 1
+                }
+                continue
             }
-        } else if count == 0 || !isUDP {
-            if coreTCPChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalServerEOF(chanID: Int(channelID), overlayConnected: true) {
-                emitCoreWires(snapshot.frames)
-            } else if coreTCPClientChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalClientEOF(chanID: Int(channelID), overlayConnected: true) {
-                emitCoreWires(snapshot.frames)
-            } else { malformedFrames += 1 }
-            closeChannel(channelID)
+            if count < 0, (errno == EAGAIN || errno == EWOULDBLOCK) { return }
+            if count < 0, errno == EINTR { continue }
+            if count == 0 || !isUDP {
+                if coreTCPChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalServerEOF(chanID: Int(channelID), overlayConnected: true) {
+                    emitCoreWires(snapshot.frames)
+                } else if coreTCPClientChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalClientEOF(chanID: Int(channelID), overlayConnected: true) {
+                    emitCoreWires(snapshot.frames)
+                } else { malformedFrames += 1 }
+                closeChannel(channelID)
+            }
+            return
         }
     }
 
@@ -418,7 +456,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
             completedTraffic.txMessages += traffic.txMessages
         }
         connectionSources.removeValue(forKey: channelID)?.cancel()
-        descriptors.removeValue(forKey: channelID)
+        if let fd = descriptors.removeValue(forKey: channelID) { _ = close(fd) }
         udpPeers.removeValue(forKey: channelID)
         udpChannels = udpChannels.filter { $0.value != channelID }
         coreTCPChannels.remove(channelID)

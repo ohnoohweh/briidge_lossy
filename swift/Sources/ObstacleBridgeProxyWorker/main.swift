@@ -16,12 +16,29 @@ private let datagramType = Int32(SOCK_DGRAM.rawValue)
 private let maximumControlFrame = 65_536
 private enum WorkerError: Error { case invalid, io, closed, destinationDenied }
 
+private let controlFrameDeadlineMS: Int32 = 5_000
+
+private func waitForControl(_ fd: Int32, events: Int16, timeoutMilliseconds: Int32 = controlFrameDeadlineMS) throws {
+    var descriptor = pollfd(fd: fd, events: events, revents: 0)
+    while true {
+        let result = poll(&descriptor, 1, timeoutMilliseconds)
+        if result < 0 && errno == EINTR { continue }
+        guard result > 0 else { throw WorkerError.closed }
+        if descriptor.revents & events != 0 { return }
+        if descriptor.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 { throw WorkerError.closed }
+    }
+}
+
 private func readExact(_ fd: Int32, _ count: Int) throws -> Data {
     var bytes = [UInt8](repeating: 0, count: count)
     var offset = 0
     while offset < count {
-        let n = bytes.withUnsafeMutableBytes { recv(fd, $0.baseAddress!.advanced(by: offset), count - offset, 0) }
+        let n = bytes.withUnsafeMutableBytes { recv(fd, $0.baseAddress!.advanced(by: offset), count - offset, Int32(MSG_DONTWAIT)) }
         if n < 0 && errno == EINTR { continue }
+        if n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+            try waitForControl(fd, events: Int16(POLLIN))
+            continue
+        }
         guard n > 0 else { throw WorkerError.closed }
         offset += n
     }
@@ -31,8 +48,12 @@ private func readExact(_ fd: Int32, _ count: Int) throws -> Data {
 private func writeAll(_ fd: Int32, _ data: Data) throws {
     var offset = 0
     while offset < data.count {
-        let n = data.withUnsafeBytes { send(fd, $0.baseAddress!.advanced(by: offset), data.count - offset, 0) }
+        let n = data.withUnsafeBytes { send(fd, $0.baseAddress!.advanced(by: offset), data.count - offset, Int32(MSG_DONTWAIT)) }
         if n < 0 && errno == EINTR { continue }
+        if n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+            try waitForControl(fd, events: Int16(POLLOUT))
+            continue
+        }
         guard n > 0 else { throw WorkerError.io }
         offset += n
     }
@@ -87,7 +108,7 @@ private final class ChildLogger: @unchecked Sendable {
                                      "name": "proxy_provider", "level": level >= 30 ? "WARNING" : "INFO",
                                      "levelno": level, "message": message, "process": Int(getpid()), "thread": "native-proxy"]
         guard let data = try? JSONSerialization.data(withJSONObject: record), data.count <= 8192 else { return }
-        _ = data.withUnsafeBytes { send(fd, $0.baseAddress, data.count, 0) }
+        _ = data.withUnsafeBytes { send(fd, $0.baseAddress, data.count, Int32(MSG_DONTWAIT)) }
     }
 }
 
@@ -95,6 +116,11 @@ private func setTimeout(_ fd: Int32, seconds: Int) {
     var timeout = timeval(tv_sec: seconds, tv_usec: 0)
     _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
     _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+}
+
+private func makeNonBlocking(_ fd: Int32) throws {
+    let flags = fcntl(fd, F_GETFL)
+    guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { throw WorkerError.io }
 }
 
 private struct DestinationPolicy: Sendable {
@@ -501,14 +527,16 @@ private final class ProxyListener: @unchecked Sendable {
                 if events & Int16(POLLERR | POLLNVAL) != 0 { return }
                 if events & Int16(POLLOUT) != 0 && !pending[1 - direction].isEmpty {
                     let incoming = 1 - direction
-                    let sent = pending[incoming].withUnsafeBytes { send(fds[direction], $0.baseAddress, $0.count, 0) }
+                    let sent = pending[incoming].withUnsafeBytes { send(fds[direction], $0.baseAddress, $0.count, Int32(MSG_DONTWAIT)) }
                     if sent > 0 {
                         pending[incoming].removeFirst(sent)
                         lock.lock(); if incoming == 0 { rx += sent } else { tx += sent }; lock.unlock()
                     } else if sent == 0 || (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) { return }
                 }
                 if !eof[direction] && pending[direction].count < capacity && events & Int16(POLLIN | POLLHUP) != 0 {
-                    let received = recv(fds[direction], &bytes, min(bytes.count, capacity - pending[direction].count), 0)
+                    // poll readiness is advisory: another event can consume
+                    // it before this turn, so never permit a blocking read.
+                    let received = recv(fds[direction], &bytes, min(bytes.count, capacity - pending[direction].count), Int32(MSG_DONTWAIT))
                     if received > 0 { pending[direction].append(contentsOf: bytes.prefix(received)) }
                     else if received == 0 { eof[direction] = true }
                     else if errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK { return }
@@ -520,8 +548,8 @@ private final class ProxyListener: @unchecked Sendable {
 
 private func run(_ fd: Int32, logFD: Int32?) throws {
     guard validateSocket(fd, type: streamType), logFD != fd else { throw WorkerError.invalid }
+    try makeNonBlocking(fd)
     let logger = try logFD.map { try ChildLogger(fd: $0) }
-    setTimeout(fd, seconds: 5)
     let hello = try readFrame(fd)
     guard hello["kind"] as? String == "worker.hello", hello["role"] as? String == "supervisor",
           hello["capabilities"] as? [String] == ["proxy.control"], let helloGeneration = hello["generation"] as? Int, helloGeneration > 0 else { throw WorkerError.invalid }

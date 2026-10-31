@@ -40,8 +40,12 @@ def test_native_collector_accepts_python_records_and_queries(native_collector: P
     )
     handler = None
     try:
-        query = UdpLogQueryClient(target, timeout_sec=0.05)
-        deadline = time.monotonic() + 5
+        # A cold Swift process on the ARM macOS CI runner can take longer than
+        # one 50 ms UDP round-trip to install its public receive owner. Keep
+        # each query bounded while allowing the process readiness probe a
+        # realistic, deterministic startup budget.
+        query = UdpLogQueryClient(target, timeout_sec=0.2)
+        deadline = time.monotonic() + 10
         while time.monotonic() < deadline and not query.fetch(10)["available"]:
             assert process.poll() is None, "collector exited before binding"
             time.sleep(0.01)

@@ -82,6 +82,7 @@
       "disposition": "split-contract",
       "files": [
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxEgressSequencer.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxReplyPolicy.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCorePorts.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskCodec.swift",
@@ -355,6 +356,16 @@
       "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::adminWebConfigurationAndLifecycleControlsMatchThePythonClientContract", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::adminRekeyCompletesAgainstPythonPeerAndKeepsForegroundRuntimeReady", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::managedTunHelperMatchesPythonCapabilityBasedPrivilegeAdmission", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesSectionedMyudpConfiguration"],
       "parity_tests": ["tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_status_route_matches_python"],
       "linux_swift": {"applicability": "required", "status": "verified", "reason": "Linux Swift serves the shared Admin contract: Core authentication and confirmation, encrypted PSK reveal, redacted status/peer routes, recipient-owned encrypted onboarding persistence, connected-peer blueprints, controlled foreground restart, peer-targeted PSK rekey, certificate-mode reload admission, and helper-backed TUN control/repair. The unprivileged foreground follows the Python capability policy and elevates only its separate helper when neither effective nor file capabilities authorize direct helper launch."}
+    },
+    {
+      "id": "swift-asynchronous-receive-ownership",
+      "requirements": ["REQ-IO-001"],
+      "python_implementations": ["src/obstacle_bridge/bridge_runner.py"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxOverlayTransport.swift", "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxServiceSocketOwner.swift", "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTunDevice.swift", "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTunHelperAdapter.swift", "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunAdapter.swift"],
+      "python_tests": ["tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_uses_per_transport_ports"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::tcpListenerPublishesOpenAndDataFrames", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunDeviceTests.swift::ownsBidirectionalNonBlockingPacketIO", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::packetDeviceReceivesHelperPacketAndEventThroughReadinessSource"],
+      "parity_tests": [],
+      "linux_swift": {"applicability": "required", "status": "partial", "reason": "Outbound overlay, local service sockets, inline TUN, long-lived helper packet IPC, ordinary foreground/native-child Admin HTTP requests, and the logging collector datagram loop use readiness-driven receives. Listener admission, Admin live-WebSocket scheduling, and worker/control IPC still require conversion; the cross-product inventory records those remaining boundaries."}
     }
   ],
   "r005_psk_traceability": [

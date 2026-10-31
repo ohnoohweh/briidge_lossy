@@ -79,6 +79,9 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert '"--peer-worker-control-fd"' in entrypoint
     assert '"--log-fd"' in entrypoint
     assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker
+    assert "Darwin.fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)" in worker
+    assert "Darwin.read(handle.fileDescriptor, &buffer, buffer.count) // O_NONBLOCK readiness owner" in worker
+    assert "isolated native peer control owner has no host event loop" in worker
     assert "ObstacleBridgeLogProducer(inheritedFD: $0, minimumLevel: rootLogLevel)" in worker
     assert '"peer.ready"' in worker and '"peer.snapshot.reply"' in worker
     assert "startPeerWorker()" in runner and "stopPeerWorker()" in runner
@@ -95,6 +98,8 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert "public static let maximumFrameBytes = 1_048_576" in common_ipc
     assert "ControlJSONScanner" in common_ipc
     assert "hasDuplicateObjectKey" in common_ipc
+    assert "ObstacleBridgeWorkerIPCStreamDecoder" in common_ipc
+    assert "ObstacleBridgeWorkerIPC.decode(buffered)" in common_ipc
     assert "nativeAdminChildControlArgument" in entrypoint
     assert 'nativeAdminChildControlArgument = "--admin-worker-control-fd"' in helper_service
     assert 'nativeAdminChildLogArgument = "--log-fd"' in helper_service
@@ -266,6 +271,8 @@ def test_macos_runtime_metrics_keep_atomic_leaf_boundaries() -> None:
     assert ".secureLinkWorker" not in adapter
     assert "drainOnePendingSecureLinkPayload" in adapter
     assert ".appleTransportOwnerQueue" not in owner
+    assert "DispatchSource.makeReadSource" in owner
+    assert "recvfrom(socketFD, &buffer, buffer.count, Int32(MSG_DONTWAIT)" in owner
     assert ".appleTransportParseDispatch" in owner
     assert ".appleTransportEgress" in owner
     assert ".appleTransportPayloadRoute" not in owner
@@ -281,9 +288,10 @@ def test_macos_runtime_metrics_keep_atomic_leaf_boundaries() -> None:
     assert ".appleTransportTunSystemEnqueue" in (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     assert ".appleTransportTunSystemWrite" in packet_flow
     provider_source = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
-    assert "ObstacleBridgePacketFlowBridge.activate(provider: provider, tunnelAddress: tunnelAddress, mtu: settings.mtu)" in provider_source
+    assert "ObstacleBridgePacketFlowBridge.activate(" in provider_source
+    assert "pcapEnabled: captureEnabled" in provider_source
     assert "ObstacleBridgePacketFlowBridge.deactivate()" in provider_source
-    assert "maxOutgoingQueuedPackets = 2048" in packet_flow
+    assert "maxOutgoingQueuedPackets = ObstacleBridgeRuntimeConfig.packetFlowFIFOQueueCapacity" in packet_flow
     assert "outgoingDrainGeneration" in packet_flow
     assert ".appleTransportTcpPayload" not in owner
     assert ".appleTransportUdpPayload" in owner
@@ -621,7 +629,10 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "ObstacleBridgeMacOSProtocolV1TunHelperServer" in helper_main
     assert "ObstacleBridgeWorkerIPC.negotiatedCapabilities" in protocol_server
     assert "ObstacleBridgeWorkerIPC.decodeControl" in protocol_server
-    assert "ObstacleBridgeWorkerIPC.frameSize" in protocol_server
+    assert "ObstacleBridgeWorkerIPCStreamDecoder" in protocol_server
+    assert "DispatchSource.makeReadSource(fileDescriptor: fd" in protocol_server
+    assert "recv(state.fd, &buffer, buffer.count, MSG_DONTWAIT)" in protocol_server
+    assert "readExactly(" not in protocol_server
     assert "ownerLossAcceptPollMilliseconds" in protocol_server
     assert "obstacleBridgeUnixSocketPathBytes(socketPath, capacity:" in protocol_server
     assert "destination.initialize(repeating: 0, count: bytes.count)" in protocol_server
@@ -1562,6 +1573,7 @@ def test_macos_swift_host_runner_routes_tun_and_local_accepts_through_active_ove
 
 def test_macos_host_runner_applies_core_catalog_listener_replacements() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    admin_snapshot_support = (CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
     for owner in (
         "ObstacleBridgeTcpOverlayTransportOwner",
         "ObstacleBridgeUdpOverlayTransportOwner",
@@ -1579,6 +1591,10 @@ def test_macos_host_runner_applies_core_catalog_listener_replacements() -> None:
     assert "startCatalogTCPService(native)" in source
     assert "startCatalogUDPService(native)" in source
     assert "serviceCatalogSink: { [weak self] install in" in source
+    assert "ObstacleBridgeRuntimeConfig.ownServiceCatalog" in source
+    assert "ObstacleBridgeRuntimeConfig.remoteServiceCatalog" in source
+    assert "ObstacleBridgeAdminSnapshotSupport.serviceConnectionRole(catalog: catalog)" in source
+    assert "func serviceConnectionRole(catalog: String) -> String" in admin_snapshot_support
 
 
 def test_macos_swift_host_runner_uses_shared_overlay_peer_endpoint_lookup() -> None:
@@ -1867,6 +1883,7 @@ def test_macos_swift_host_runner_keeps_quic_owner_iOS13_compilable() -> None:
 def test_macos_swift_host_runner_peer_status_aggregates_connection_traffic_like_python() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
 
+    assert "private let peerTrafficRateLock = NSLock()" in source
     assert "private var peerTrafficRateState: [String: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)] = [:]" in source
     assert "private func peerTrafficTotals(from connections: [String: Any]) -> (rxBytes: Int, txBytes: Int)" in source
     assert 'for key in ["udp", "tcp", "tun"]' in source
@@ -1876,6 +1893,7 @@ def test_macos_swift_host_runner_peer_status_aggregates_connection_traffic_like_
     assert '"rx_bytes_per_sec": rxRate' in source
     assert '"tx_bytes_per_sec": txRate' in source
     assert '"traffic": trafficSnapshot(peerID: "1", rxBytes: trafficTotals.rxBytes, txBytes: trafficTotals.txBytes)' in source
+    assert "peerTrafficRateLock.lock()" in source
 
 
 def test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fields() -> None:
@@ -4597,24 +4615,43 @@ def test_macos_host_proxy_logs_follow_collector(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     artifact = build_macos_swift_artifact()
-    status_port = _unused_tcp_port()
-    proxy_port = _unused_tcp_port()
-    while proxy_port == status_port:
-        proxy_port = _unused_tcp_port()
     config_path = tmp_path / "runtime.json"
-    config_path.write_text(json.dumps({
-        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+    config: dict[str, object] = {
+        "admin_web": True, "admin_web_bind": "127.0.0.1",
         "debug_logging": {"log_worker": log_implementation, "log_worker_python_executable": sys.executable},
         "proxy_provider": {
-            "enabled": True, "bind": "127.0.0.1", "http_port": proxy_port,
+            "enabled": True, "bind": "127.0.0.1",
             "socks5_port": 0, "protocols": ["http-connect"], "worker": proxy_implementation,
             "worker_python_executable": sys.executable,
             "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
             "egress": {"mode": "direct"},
             "policy": {"allow_private_destinations": True, "blocked_host_patterns": []},
         },
-    }), encoding="utf-8")
-    process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    }
+    process = None
+    status_port = proxy_port = 0
+    # The hosted macOS image can briefly retain a just-released loopback port
+    # from a preceding worker test.  A host runner which cannot bind its Admin
+    # endpoint exits before it can expose the useful startup error, so retry
+    # only that address-in-use race with a fresh, distinct pair.
+    for attempt in range(3):
+        status_port, proxy_port = _unused_tcp_ports(2)
+        config["admin_web_port"] = status_port
+        proxy_config = config["proxy_provider"]
+        assert isinstance(proxy_config, dict)
+        proxy_config["http_port"] = proxy_port
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            _wait_http_condition(f"http://127.0.0.1:{status_port}/api/status", lambda _item: True, timeout_sec=2)
+            break
+        except AssertionError:
+            if process.poll() is None:
+                raise
+            _stdout, stderr = process.communicate(timeout=2)
+            if attempt == 2 or "address already in use" not in stderr.lower():
+                raise AssertionError(f"macOS host runner exited before Admin startup: {stderr.strip()}")
+    assert process is not None
     try:
         url = f"http://127.0.0.1:{status_port}/api/status"
         logs_url = f"http://127.0.0.1:{status_port}/api/logs?limit=100"

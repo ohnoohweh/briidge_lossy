@@ -99,10 +99,37 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(try adapter.send(command: .applyNetwork, payload: [:])["applied"] as? Bool == true)
     }
 
-    @Test func swiftHelperServerStopsAfterAuthenticatedClientIdleWindow() throws {
+    @Test func packetDeviceReceivesHelperPacketAndEventThroughReadinessSource() throws {
+        let backend = SwiftHelperBackend()
+        let path = "/tmp/obstaclebridge-swift-helper-packet-device-\(UUID().uuidString).sock"
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend)
+        try server.start(); defer { server.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token", timeoutMilliseconds: 5_000)
+        let packetReceived = DispatchSemaphore(value: 0)
+        let eventReceived = DispatchSemaphore(value: 0)
+        var packets: [Data] = []
+        var events: [String] = []
+        let lock = NSLock()
+        let device = ObstacleBridgeLinuxTunHelperPacketDevice(adapter: adapter, packetSink: { packet in
+            lock.lock(); packets.append(packet); lock.unlock(); packetReceived.signal()
+        }, eventSink: { event in
+            lock.lock(); events.append(event); lock.unlock(); eventReceived.signal()
+        })
+        try device.start()
+        defer { device.stop() }
+        server.emitPacket(Data([0x45, 0x00, 0x12, 0x34]))
+        server.emitEvent("packet-ready")
+        #expect(packetReceived.wait(timeout: .now() + 1) == .success)
+        #expect(eventReceived.wait(timeout: .now() + 1) == .success)
+        lock.lock(); let receivedPackets = packets; let receivedEvents = events; lock.unlock()
+        #expect(receivedPackets == [Data([0x45, 0x00, 0x12, 0x34])])
+        #expect(receivedEvents == ["packet-ready"])
+    }
+
+    @Test func swiftHelperServerStopsAfterUnauthenticatedClientIdleWindow() throws {
         let backend = SwiftHelperBackend()
         let path = "/tmp/obstaclebridge-swift-helper-idle-\(UUID().uuidString).sock"
-        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 0.5)
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 5, unauthenticatedClientIdleTimeout: 0.5)
         try server.start(); defer { server.stop() }
         let deadline = Date().addingTimeInterval(1.5)
         while FileManager.default.fileExists(atPath: path), Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
@@ -112,14 +139,13 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     @Test func swiftHelperServerStopsAfterAuthenticatedOwnerLoss() throws {
         let backend = SwiftHelperBackend()
         let path = "/tmp/obstaclebridge-swift-helper-owner-loss-\(UUID().uuidString).sock"
-        // This scenario first needs to negotiate the authenticated owner.
-        // Leave room for a contended CI executor to schedule that exchange;
-        // the assertion below still verifies shutdown once the owner is gone.
-        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 1.5)
+        // Keep the server's unauthenticated startup window separate from its
+        // short post-authentication owner-loss deadline.
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 0.5, unauthenticatedClientIdleTimeout: 10)
         try server.start(); defer { server.stop() }
-        let client = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token")
+        let client = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token", timeoutMilliseconds: 5_000)
         #expect(try client.send(command: .snapshot, payload: [:])["backend"] as? String == "swift-test")
-        let deadline = Date().addingTimeInterval(3.0)
+        let deadline = Date().addingTimeInterval(1.5)
         while FileManager.default.fileExists(atPath: path), Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
         #expect(!FileManager.default.fileExists(atPath: path))
     }

@@ -1303,13 +1303,14 @@ class WebSocketProxyHelpersTests(unittest.TestCase):
         session._log = mock.Mock()
 
         fake_sock = mock.Mock()
+        fake_sock.send.return_value = 65_536
         with mock.patch("obstacle_bridge.bridge_proxy_common.socket.create_connection", return_value=fake_sock) as create_connection:
             with mock.patch("obstacle_bridge.bridge_proxy_common.read_http_proxy_response", return_value=(200, {})):
                 sock = session._open_ws_proxy_socket_blocking("overlay.example", 54321)
 
         self.assertIs(sock, fake_sock)
         create_connection.assert_called_once_with(("proxy.example", 8080), timeout=5.0)
-        fake_sock.sendall.assert_called_once()
+        fake_sock.send.assert_called_once()
         fake_sock.setblocking.assert_called_once_with(False)
         debug_messages = [call.args[0] for call in session._log.debug.call_args_list if call.args]
         self.assertTrue(any("opening proxy tunnel" in msg for msg in debug_messages))

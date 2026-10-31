@@ -310,6 +310,64 @@ For TUN, the important control and data messages are:
 - `DATA_FRAG`: carry one fragment of a larger TUN packet
 - `CLOSE`: tear down the current channel binding while preserving configured service devices when appropriate
 
+## Fair bulk egress scheduling
+
+### Problem
+
+A stream overlay such as TCP, WebSocket, or QUIC has one lower-layer send
+queue shared by every mux channel. A direct `send_app(...)` call from each
+local ingress callback lets the callback that runs first enqueue an arbitrary
+burst. Under a bottleneck below the overlay—such as an HTTP proxy—the burst can
+consume the entire available bandwidth while other ready TCP channels receive
+no data. The same failure can exclude ready UDP or TUN sources.
+
+The four-origin throttled-overlay regression models this with a 10 kB/s
+downstream relay. All origins release a 100 kB response at once. A priority
+failure completes one response near the 10-second single-lane time, then starts
+the next; a fair mux makes all lanes progress over the shared approximately
+40-second aggregate transfer.
+
+### Dispatcher contract
+
+For stream overlays, ChannelMux owns one bounded egress queue per source. A
+source identity is the peer, protocol, and mux channel tuple. Every outbound
+mux record enters this scheduler: `OPEN`, `DATA`, `DATA_FRAG`, `CLOSE`, remote
+service catalog records, and liveness/control records.
+
+The dispatcher keeps a persistent ready-source ring:
+
+1. select the next ready source after the last source served;
+2. hand exactly one complete mux message to the lower session;
+3. if that source remains nonempty, append it to the tail of the ring;
+4. cooperatively yield, then select the next source.
+
+This gives each ready TCP channel, UDP channel, and TUN channel one message per
+turn. A fragmented datagram or packet takes multiple turns, one `DATA_FRAG` at
+a time, rather than becoming an unbounded exception to fairness. Per-channel
+TCP byte order remains unchanged because only messages from distinct sources
+are interleaved.
+
+When the lower layer reports saturation, the dispatcher pauses rather than
+adding more records to its send queue. TCP read pumps stop reading when their
+own bounded source queue is full, allowing normal TCP socket backpressure to
+reach the application. UDP retains bounded datagram admission/drop behavior.
+TUN retains its explicit final overload shedding policy, but any TUN packet
+admitted for overlay carriage receives the same round-robin turn as TCP and
+UDP. Lifecycle and catalog records remain ordered behind earlier records from
+their own source rather than bypassing the sequencer.
+
+The persistent cursor is essential: a new scheduling cycle never restarts at a
+fixed channel, so a continuously ready first channel cannot win every recovery
+from saturation.
+
+Python and Swift use the same peer-scoped source identity and persistent turn
+contract. Swift’s shared core sequencer is installed at the Linux service
+egress and at the TCP, WebSocket, and QUIC Apple stream-overlay owners; their
+asynchronous one-record drains keep lower-layer writes nonblocking while
+preserving the same source order. The throttled end-to-end regression is the
+Python runtime proof of bandwidth sharing; the shared Swift scheduler test
+proves the equivalent message-order contract.
+
 ## TCP protocol
 
 TCP in `ChannelMux` is connection-oriented. One accepted or dialed TCP socket maps to one mux channel id for the lifetime of that connection.

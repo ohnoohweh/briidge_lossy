@@ -833,7 +833,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             var fromLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
             let received = withUnsafeMutablePointer(to: &fromStorage) { fromPtr -> Int in
                 fromPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
-                    recvfrom(socketFD, &buffer, buffer.count, 0, sockaddrPtr, &fromLength)
+                    // Readiness can be stale after a concurrent drain.  Keep
+                    // this callback nonblocking even if fd flags change.
+                    recvfrom(socketFD, &buffer, buffer.count, Int32(MSG_DONTWAIT), sockaddrPtr, &fromLength)
                 }
             }
             if received > 0 {

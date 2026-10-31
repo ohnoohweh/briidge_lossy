@@ -13,6 +13,7 @@ private let logStreamSocket = Int32(SOCK_STREAM.rawValue)
 
 /// Supervises either private log collector. Records are best effort; callers
 /// never wait for the collector, disk, a query, or a restart to complete.
+// OBSTACLEBRIDGE-CONCURRENCY: lock stateLock/queryLock + serial queryQueue cache coalescing; test=test_native_log_supervisor_query_uses_readiness_callback_not_polling
 public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
     public enum Failure: Error, LocalizedError {
         case invalidConfiguration, unavailable
@@ -34,6 +35,7 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
     private let lifecycleLock = NSLock()
     private let queryLock = NSLock()
     private let monitorQueue = DispatchQueue(label: "org.obstaclebridge.desktop.logging-worker")
+    private let queryQueue = DispatchQueue(label: "org.obstaclebridge.desktop.logging-worker.query")
     private var process: Process?
     private var dataFD: Int32 = -1
     private var lifetimeFD: Int32 = -1
@@ -44,6 +46,11 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
     private var failedStarts = 0
     private var droppedRecords = 0
     private var nextAttempt = Date.distantPast
+    private var querySource: DispatchSourceRead?
+    private var queryDeadlineTimer: DispatchSourceTimer?
+    private var pendingQueries: [String: (generation: Int, deadline: DispatchTime, completion: @Sendable ([String: Any]) -> Void)] = [:]
+    private var cachedQuery: [String: Any] = ["available": false, "lines": [String](), "error": "logger unavailable"]
+    private var snapshotRefreshPending = false
 
     public init(implementation: String, executable: String, proxyLogLevel: Int = 0) throws {
         guard ["python", "native"].contains(implementation), !executable.isEmpty else { throw Failure.invalidConfiguration }
@@ -111,7 +118,10 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
 
     private func receive(_ fd: Int32, generation: UInt64) -> (kind: ObstacleBridgeWorkerIPC.Kind, payload: [String: Any])? {
         var bytes = [UInt8](repeating: 0, count: Self.maxDatagram + ObstacleBridgeWorkerIPC.headerBytes + 1)
-        let count = recv(fd, &bytes, bytes.count, 0)
+        // Readiness can become stale when shutdown or another drain wins the
+        // datagram race.  This supervisor must never block a lifecycle path
+        // after `poll` has reported the descriptor readable.
+        let count = recv(fd, &bytes, bytes.count, Int32(MSG_DONTWAIT))
         guard count > 0, count <= Self.maxDatagram + ObstacleBridgeWorkerIPC.headerBytes,
               let decoded = try? ObstacleBridgeWorkerIPC.decode(Data(bytes.prefix(count))), let frame = decoded.0,
               decoded.1.isEmpty, frame.generation == generation,
@@ -140,10 +150,10 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         catch { close(parentData); close(childData); throw error }
         var adopted = false
         let childInput = FileHandle(fileDescriptor: childData, closeOnDealloc: true)
-        let childError = FileHandle(fileDescriptor: childLifetime, closeOnDealloc: true)
+        let childLifetimeHandle = FileHandle(fileDescriptor: childLifetime, closeOnDealloc: true)
         let child = Process()
         defer {
-            try? childInput.close(); try? childError.close()
+            try? childInput.close(); try? childLifetimeHandle.close()
             if !adopted {
                 close(parentData); close(parentLifetime)
                 if child.isRunning { _ = kill(child.processIdentifier, SIGKILL); child.waitUntilExit() }
@@ -158,15 +168,19 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         var noSignal: Int32 = 1
         guard setsockopt(parentData, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else { throw Failure.unavailable }
         #endif
-        guard let nullOutput = FileHandle(forWritingAtPath: "/dev/null") else { throw Failure.unavailable }
+        let dataFlags = fcntl(parentData, F_GETFL)
+        guard dataFlags >= 0, fcntl(parentData, F_SETFL, dataFlags | O_NONBLOCK) == 0 else { throw Failure.unavailable }
         child.executableURL = URL(fileURLWithPath: executable)
         let nextGeneration = UInt64(generation + 1)
-        child.arguments = (implementation == "python" ? ["-m", "obstacle_bridge.bridge_logging_ipc"] : []) + ["--private-fds", "0", "2", "--generation", String(nextGeneration)]
+        child.arguments = (implementation == "python" ? ["-m", "obstacle_bridge.bridge_logging_ipc"] : []) + ["--private-fds", "0", "1", "--generation", String(nextGeneration)]
         child.standardInput = childInput
-        child.standardError = childError
-        child.standardOutput = nullOutput
+        // Keep standard error available for worker diagnostics. Foundation's
+        // optimized Linux stderr redirection can prematurely close an
+        // inherited Unix lifetime stream; stdout is an equivalent private
+        // descriptor and avoids that lifecycle regression.
+        child.standardOutput = childLifetimeHandle
         try child.run()
-        try childInput.close(); try childError.close(); try nullOutput.close()
+        try childInput.close(); try childLifetimeHandle.close()
         guard sendDatagram(parentData, kind: .hello, generation: nextGeneration, payload: [
                   "v": 1, "kind": "worker.hello", "role": "supervisor",
                   "capabilities": ["logging.query", "logging.records"],
@@ -183,6 +197,7 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         stateLock.lock()
         process = child; dataFD = parentData; lifetimeFD = parentLifetime; generation += 1
         stateLock.unlock()
+        startQueryReceiver(descriptor: parentData)
         adopted = true
     }
 
@@ -200,6 +215,7 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
     }
 
     private func retireChild() -> Process? {
+        stopQueryReceiver()
         stateLock.lock()
         let child = process, data = dataFD, lifetime = lifetimeFD
         process = nil; dataFD = -1; lifetimeFD = -1
@@ -229,12 +245,18 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
     /// credentials, packet contents, or other sensitive payloads.
     public func emit(name: String, level: String, levelNumber: Int, message: String) {
         guard stateLock.try() else { return }
-        defer { stateLock.unlock() }
-        guard !stopped, dataFD >= 0, process?.isRunning == true else { droppedRecords += 1; return }
+        guard !stopped, dataFD >= 0, process?.isRunning == true else {
+            droppedRecords += 1
+            stateLock.unlock()
+            return
+        }
         let record: [String: Any] = ["v": 1, "created": Date().timeIntervalSince1970, "name": String(name.prefix(256)),
                                      "level": String(level.prefix(32)), "levelno": levelNumber,
                                      "message": String(message.prefix(4096)), "process": Int(ProcessInfo.processInfo.processIdentifier), "thread": "native"]
-        if !sendDatagram(dataFD, kind: .data, generation: UInt64(generation), payload: record) { droppedRecords += 1 }
+        let accepted = sendDatagram(dataFD, kind: .data, generation: UInt64(generation), payload: record)
+        if !accepted { droppedRecords += 1 }
+        stateLock.unlock()
+        if accepted { requestSnapshotRefresh(limit: 200) }
     }
 
     /// A child gets a separate record-only socket, never the Admin query
@@ -252,35 +274,131 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         // request path.  Wait for a concurrent lifecycle transition instead
         // of silently losing a child record while it holds stateLock.
         stateLock.lock()
-        defer { stateLock.unlock() }
-        guard !stopped, dataFD >= 0, process?.isRunning == true else { droppedRecords += 1; return }
+        guard !stopped, dataFD >= 0, process?.isRunning == true else {
+            droppedRecords += 1
+            stateLock.unlock()
+            return
+        }
         #if os(Linux)
         let flags = Int32(MSG_DONTWAIT | MSG_NOSIGNAL)
         #else
         let flags = Int32(MSG_DONTWAIT)
         #endif
-        guard let frame = try? ObstacleBridgeWorkerIPC.encode(kind: .data, generation: UInt64(generation), payload: data) else { droppedRecords += 1; return }
+        guard let frame = try? ObstacleBridgeWorkerIPC.encode(kind: .data, generation: UInt64(generation), payload: data) else {
+            droppedRecords += 1
+            stateLock.unlock()
+            return
+        }
         let sent = frame.withUnsafeBytes { send(dataFD, $0.baseAddress, $0.count, flags) }
         if sent != frame.count { droppedRecords += 1 }
+        stateLock.unlock()
+        if sent == frame.count { requestSnapshotRefresh(limit: 200) }
     }
 
     public func fetch(limit: Int) -> [String: Any] {
+        // Compatibility callers (the synchronous Admin projection) must not
+        // wait for a child process. Refresh the bounded snapshot in the
+        // background and return its last complete value immediately.
+        requestSnapshotRefresh(limit: limit)
+        queryLock.lock(); defer { queryLock.unlock() }
+        return cachedQuery
+    }
+
+    /// Coalesces cache warming after accepted records and Admin projections so
+    /// a synchronous caller never has to wait for the collector while a burst
+    /// also cannot create one query per record.
+    private func requestSnapshotRefresh(limit: Int) {
+        queryLock.lock()
+        guard !snapshotRefreshPending else { queryLock.unlock(); return }
+        snapshotRefreshPending = true
+        queryLock.unlock()
+        fetchAsync(limit: limit) { [weak self] _ in
+            self?.queryLock.lock()
+            self?.snapshotRefreshPending = false
+            self?.queryLock.unlock()
+        }
+    }
+
+    /// Requests a bounded log snapshot without blocking the caller. Replies
+    /// are correlated by request ID on the retained descriptor-readiness
+    /// source; lifecycle replacement and the independent deadline both finish
+    /// outstanding callbacks with the same unavailable envelope.
+    public func fetchAsync(limit: Int, completion: @escaping @Sendable ([String: Any]) -> Void) {
         let unavailable: [String: Any] = ["available": false, "lines": [String](), "error": "logger unavailable"]
-        guard queryLock.try() else { return unavailable }
-        defer { queryLock.unlock() }
         stateLock.lock()
         let currentGeneration = generation
         let descriptor = !stopped && process?.isRunning == true && dataFD >= 0 ? fcntl(dataFD, F_DUPFD_CLOEXEC, 3) : -1
         stateLock.unlock()
-        guard descriptor >= 0 else { return unavailable }
+        guard descriptor >= 0 else { completion(unavailable); return }
         defer { close(descriptor) }
         let requestID = UUID().uuidString.lowercased()
-        guard sendDatagram(descriptor, kind: .request, generation: UInt64(currentGeneration), payload: ["v": 1, "kind": "logs.query", "limit": max(1, min(limit, 1000)), "request_id": requestID]),
-              waitReadable(descriptor, milliseconds: 150), let reply = receive(descriptor, generation: UInt64(currentGeneration)), reply.kind == .response,
-              reply.payload["v"] as? Int == 1, reply.payload["kind"] as? String == "logs.reply", reply.payload["ok"] as? Bool == true,
-              reply.payload["request_id"] as? String == requestID, let lines = reply.payload["lines"] as? [String] else { return unavailable }
-        stateLock.lock(); let current = !stopped && generation == currentGeneration && process?.isRunning == true; stateLock.unlock()
-        return current ? ["available": true, "lines": lines, "error": ""] : unavailable
+        queryLock.lock()
+        pendingQueries[requestID] = (currentGeneration, .now() + .milliseconds(150), completion)
+        queryLock.unlock()
+        guard sendDatagram(descriptor, kind: .request, generation: UInt64(currentGeneration), payload: ["v": 1, "kind": "logs.query", "limit": max(1, min(limit, 1000)), "request_id": requestID]) else {
+            finishQuery(requestID: requestID, result: unavailable)
+            return
+        }
+    }
+
+    private func startQueryReceiver(descriptor: Int32) {
+        stopQueryReceiver()
+        let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queryQueue)
+        source.setEventHandler { [weak self] in self?.drainQueryReplies() }
+        source.setCancelHandler {}
+        querySource = source
+        let timer = DispatchSource.makeTimerSource(queue: queryQueue)
+        timer.schedule(deadline: .now() + .milliseconds(50), repeating: .milliseconds(50))
+        timer.setEventHandler { [weak self] in self?.expireQueries() }
+        queryDeadlineTimer = timer
+        source.resume(); timer.resume()
+    }
+
+    private func stopQueryReceiver() {
+        querySource?.cancel(); querySource = nil
+        queryDeadlineTimer?.cancel(); queryDeadlineTimer = nil
+        let unavailable: [String: Any] = ["available": false, "lines": [String](), "error": "logger unavailable"]
+        queryLock.lock()
+        let callbacks = pendingQueries.values.map(\.completion)
+        pendingQueries.removeAll()
+        cachedQuery = unavailable
+        snapshotRefreshPending = false
+        queryLock.unlock()
+        callbacks.forEach { $0(unavailable) }
+    }
+
+    private func drainQueryReplies() {
+        stateLock.lock(); let descriptor = dataFD; let currentGeneration = generation; stateLock.unlock()
+        guard descriptor >= 0 else { return }
+        while let reply = receive(descriptor, generation: UInt64(currentGeneration)) {
+            guard reply.kind == .response,
+                  reply.payload["v"] as? Int == 1,
+                  reply.payload["kind"] as? String == "logs.reply",
+                  reply.payload["ok"] as? Bool == true,
+                  let requestID = reply.payload["request_id"] as? String,
+                  let lines = reply.payload["lines"] as? [String] else { continue }
+            finishQuery(requestID: requestID, result: ["available": true, "lines": lines, "error": ""])
+        }
+    }
+
+    private func expireQueries() {
+        let now = DispatchTime.now()
+        let unavailable: [String: Any] = ["available": false, "lines": [String](), "error": "logger unavailable"]
+        queryLock.lock()
+        let expired = pendingQueries.filter { $0.value.deadline <= now }.map { $0.key }
+        queryLock.unlock()
+        expired.forEach { finishQuery(requestID: $0, result: unavailable) }
+    }
+
+    private func finishQuery(requestID: String, result: [String: Any]) {
+        queryLock.lock()
+        guard let pending = pendingQueries.removeValue(forKey: requestID) else { queryLock.unlock(); return }
+        cachedQuery = result
+        queryLock.unlock()
+        stateLock.lock()
+        let current = !stopped && generation == pending.generation && process?.isRunning == true
+        stateLock.unlock()
+        pending.completion(current ? result : ["available": false, "lines": [String](), "error": "logger unavailable"])
     }
 
     public func status() -> [String: Any] {
@@ -294,6 +412,7 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
     public func stop() {
         lifecycleLock.lock(); defer { lifecycleLock.unlock() }
         timer?.cancel(); timer = nil
+        stopQueryReceiver()
         stateLock.lock(); stopped = true; stateLock.unlock()
         guard let child = retireChild() else { return }
         let deadline = Date().addingTimeInterval(1)

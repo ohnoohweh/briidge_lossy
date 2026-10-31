@@ -107,6 +107,7 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C500000000000000000018", "71C500000000000000000118", "ObstacleBridgeAdminWebSupport.swift"),
     ("71C500000000000000000045", "71C500000000000000000145", "ObstacleBridgeTelemetryMTLSUploader.swift"),
     ("71C500000000000000000002", "71C500000000000000000102", "ObstacleBridgeChannelMuxCodec.swift"),
+    ("71C500000000000000000056", "71C500000000000000000156", "ObstacleBridgeChannelMuxEgressSequencer.swift"),
     ("71C500000000000000000053", "71C500000000000000000153", "ObstacleBridgeChannelMuxCompatibilityCodec.swift"),
     ("71C500000000000000000003", "71C500000000000000000103", "ObstacleBridgeSecureLinkPskCodec.swift"),
     ("71C500000000000000000004", "71C500000000000000000104", "ObstacleBridgeSecureLinkPskRuntime.swift"),
@@ -188,6 +189,7 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C610000000000000000015", "71C610000000000000000115", "ObstacleBridgeAdminWebSupport.swift"),
     ("71C610000000000000000045", "71C610000000000000000145", "ObstacleBridgeTelemetryMTLSUploader.swift"),
     ("71C610000000000000000028", "71C610000000000000000128", "ObstacleBridgeChannelMuxCodec.swift"),
+    ("71C610000000000000000056", "71C610000000000000000156", "ObstacleBridgeChannelMuxEgressSequencer.swift"),
     ("71C610000000000000000053", "71C610000000000000000153", "ObstacleBridgeChannelMuxCompatibilityCodec.swift"),
     ("71C610000000000000000001", "71C610000000000000000101", "ObstacleBridgeSecureLinkPskCodec.swift"),
     ("71C610000000000000000002", "71C610000000000000000102", "ObstacleBridgeSecureLinkPskRuntime.swift"),
@@ -275,7 +277,7 @@ CORE_SWIFT_SOURCE_ROOT = "../../../../../swift/Sources/ObstacleBridgeCore"
 
 
 def shared_swift_source_path(name: str) -> str:
-    if name in {"ObstacleBridgeChannelMuxCodec.swift", "ObstacleBridgeChannelMuxCompatibilityCodec.swift"}:
+    if name in {"ObstacleBridgeChannelMuxCodec.swift", "ObstacleBridgeChannelMuxCompatibilityCodec.swift", "ObstacleBridgeChannelMuxEgressSequencer.swift"}:
         return f"{CORE_SWIFT_SOURCE_ROOT}/{name}"
     if name == "ObstacleBridgeAdminAuthPolicy.swift":
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeAdminAuthPolicy.swift"

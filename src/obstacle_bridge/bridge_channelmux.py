@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Mapping
 
 from ._bridge_import import export_bridge_globals
@@ -765,6 +766,17 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._tcp_bp_poll_interval_s: float = 0.05
         self._tcp_ingress_throttle_poll_s: float = 0.05
 
+        # Stream overlays hand all mux records to a single lower-layer send
+        # queue. Keep one bounded queue per peer/protocol/channel and let a
+        # single dispatcher hand one record to each ready source per turn.
+        # This prevents the first readable TCP socket from filling that lower
+        # queue before UDP, TUN, or another TCP channel runs.
+        self._egress_source_queue_limit: int = 8
+        self._egress_data_queues: dict[tuple[int, int, int], deque[tuple[int, "ChannelMux.Proto", "ChannelMux.MType", bytes, Optional[int]]]] = {}
+        self._egress_ready_sources: deque[tuple[int, int, int]] = deque()
+        self._egress_ready_source_set: set[tuple[int, int, int]] = set()
+        self._egress_dispatch_task: Optional[asyncio.Task] = None
+
         # Listener peers may legally reuse channel ids, so counters are scoped
         # to the peer session that receives the frame.
         self._mux_counters: dict[tuple[Optional[int], int, int], int] = {}
@@ -779,6 +791,13 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._udp_chan_by_open_key: dict[tuple[int, int, int, int, str, int, int, str, int], int] = {}
         self._tcp_open_key_by_chan: dict[int, tuple[int, int, int, str, int, int, str, int]] = {}
         self._tcp_chan_by_open_key: dict[tuple[int, int, int, str, int, int, str, int], int] = {}
+        # The ChannelMux wire identifier belongs to a peer session. A shared
+        # listener can therefore receive the same wire channel ID from two
+        # authenticated peers. Keep a private, collision-free local key for
+        # socket ownership, while every outbound record retains its peer's
+        # original wire channel ID.
+        self._tcp_inbound_wire_to_local: dict[tuple[int, int], int] = {}
+        self._tcp_inbound_local_to_wire: dict[int, tuple[int, int]] = {}
         self._tcp_first_overlay_to_local_logged: set[int] = set()
         self._tcp_first_remote_to_overlay_logged: set[int] = set()
         self._tcp_pending_drain_logged: set[int] = set()
@@ -2246,6 +2265,27 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         key = self._tcp_open_key_by_chan.pop(chan, None)
         if key is not None and self._tcp_chan_by_open_key.get(key) == chan:
             self._tcp_chan_by_open_key.pop(key, None)
+        wire_key = self._tcp_inbound_local_to_wire.pop(chan, None)
+        if wire_key is not None and self._tcp_inbound_wire_to_local.get(wire_key) == chan:
+            self._tcp_inbound_wire_to_local.pop(wire_key, None)
+
+    def _tcp_local_channel_for_inbound(self, peer_id: Optional[int], wire_chan: int) -> int:
+        """Return the local socket key for one peer-scoped TCP wire channel."""
+        wire_key = (int(peer_id or 0), int(wire_chan))
+        return self._tcp_inbound_wire_to_local.get(wire_key, int(wire_chan))
+
+    def _bind_inbound_tcp_channel(self, peer_id: Optional[int], wire_chan: int) -> int:
+        """Reserve a local key without rewriting the peer-visible wire ID."""
+        wire_key = (int(peer_id or 0), int(wire_chan))
+        existing = self._tcp_inbound_wire_to_local.get(wire_key)
+        if existing is not None:
+            return existing
+        local_chan = int(wire_chan)
+        if local_chan in self._tcp_by_chan or local_chan in self._tcp_inbound_local_to_wire:
+            local_chan = self._alloc_tcp_id()
+        self._tcp_inbound_wire_to_local[wire_key] = local_chan
+        self._tcp_inbound_local_to_wire[local_chan] = wire_key
+        return local_chan
 
     def _forget_tun_open_key(self, chan: int, *, peer_id: Optional[int] = None) -> None:
         channel_key = (int(peer_id or 0), int(chan))
@@ -2320,6 +2360,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
     async def stop(self, reason: str = "") -> None:
         self.log.info("[MUX] stopping reason=%s", str(reason or "unspecified"))
+        self._clear_egress_data_queues()
         for t in (self._ensure_task, self._sweeper_task, self._transport_delay_rotation_task):
             if t:
                 try: t.cancel()
@@ -2369,6 +2410,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if not effective_connected:
             self._schedule_connection_rotation()
             self._accepting_enabled = False
+            self._clear_egress_data_queues()
             self._log_overlay_accepting_state(
                 reason="on_overlay_state_disconnected",
                 connected_arg=connected,
@@ -2689,6 +2731,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._tcp_role_by_chan.clear()
         self._tcp_open_key_by_chan.clear()
         self._tcp_chan_by_open_key.clear()
+        self._tcp_inbound_wire_to_local.clear()
+        self._tcp_inbound_local_to_wire.clear()
         self._chan_owner_peer_id.clear()
         self._chan_stats.clear()
         # UDP server maps
@@ -3103,6 +3147,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         proto: "ChannelMux.Proto",
         chunk_mtype: "ChannelMux.MType",
         payload: bytes,
+        peer_id: Optional[int] = None,
     ) -> None:
         max_data_len = self._max_mux_data_len()
         chunk_payload_cap = max_data_len - ChannelMux.CTRL_CHUNK_HDR.size
@@ -3142,7 +3187,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 idx,
                 total_chunks,
             ) + part
-            self._send_mux(chan_id, proto, chunk_mtype, frame_data)
+            self._send_mux(chan_id, proto, chunk_mtype, frame_data, peer_id=peer_id)
 
     def _consume_control_chunk(
         self,
@@ -3231,25 +3276,57 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._mux_connection_seq = (self._mux_connection_seq + 1) & 0xFFFFFFFF
         self._send_remote_services_catalog_if_any(allow_empty=True)
 
+    def _remote_catalog_target_peer_ids(self) -> list[Optional[int]]:
+        """Resolve authenticated listener children without transport inference."""
+        getter = getattr(self.session, "get_overlay_peers_snapshot", None)
+        if callable(getter):
+            targets: list[Optional[int]] = []
+            with contextlib.suppress(Exception):
+                for row in list(getter() or []):
+                    if not isinstance(row, Mapping) or bool(row.get("listening")):
+                        continue
+                    secure_link = row.get("secure_link")
+                    if not isinstance(secure_link, Mapping) or not bool(secure_link.get("authenticated")):
+                        continue
+                    targets.append(int(row.get("peer_id", 0) or 0))
+            if targets:
+                return list(dict.fromkeys(targets))
+        # Client sessions and lightweight compatibility sessions retain the
+        # ordinary implicit single-peer route.
+        return [None]
+
     def _send_remote_services_catalog_if_any(self, *, allow_empty: bool = False) -> None:
         if not self._remote_services_requested and not allow_empty:
             return
         try:
             payload = self._encode_remote_services_set_v2(self._remote_services_requested)
-            if ChannelMux.MUX_HDR.size + len(payload) <= self._session_max_app_payload:
-                self._send_mux(0, ChannelMux.Proto.UDP, ChannelMux.MType.REMOTE_SERVICES_SET_V2, payload)
-                self.log.info("[MUX/CTRL] sent REMOTE_SERVICES_SET_V2 with %d service(s)", len(self._remote_services_requested))
-            else:
-                self._send_chunked_control_payload(
-                    chan_id=0,
-                    proto=ChannelMux.Proto.UDP,
-                    chunk_mtype=ChannelMux.MType.REMOTE_SERVICES_SET_V2_CHUNK,
-                    payload=payload,
-                )
-                self.log.info(
-                    "[MUX/CTRL] sent chunked REMOTE_SERVICES_SET_V2 with %d service(s)",
-                    len(self._remote_services_requested),
-                )
+            for peer_id in self._remote_catalog_target_peer_ids():
+                if ChannelMux.MUX_HDR.size + len(payload) <= self._session_max_app_payload:
+                    self._send_mux(
+                        0,
+                        ChannelMux.Proto.UDP,
+                        ChannelMux.MType.REMOTE_SERVICES_SET_V2,
+                        payload,
+                        peer_id=peer_id,
+                    )
+                    self.log.info(
+                        "[MUX/CTRL] sent REMOTE_SERVICES_SET_V2 with %d service(s) peer_id=%s",
+                        len(self._remote_services_requested),
+                        peer_id,
+                    )
+                else:
+                    self._send_chunked_control_payload(
+                        chan_id=0,
+                        proto=ChannelMux.Proto.UDP,
+                        chunk_mtype=ChannelMux.MType.REMOTE_SERVICES_SET_V2_CHUNK,
+                        payload=payload,
+                        peer_id=peer_id,
+                    )
+                    self.log.info(
+                        "[MUX/CTRL] sent chunked REMOTE_SERVICES_SET_V2 with %d service(s) peer_id=%s",
+                        len(self._remote_services_requested),
+                        peer_id,
+                    )
         except Exception as e:
             self.log.warning("[MUX/CTRL] failed sending REMOTE_SERVICES_SET_V2: %r", e)
 
@@ -3466,7 +3543,134 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             packet_bytes=len(payload),
         )
 
+    def _fair_egress_enabled(self) -> bool:
+        """Whether this lower transport needs ChannelMux-owned fairness."""
+        return str(self._overlay_transport or "").lower() in {"tcp", "ws", "quic"}
+
+    def _egress_source_key(
+        self,
+        chan_id: int,
+        proto: "ChannelMux.Proto",
+        peer_id: Optional[int],
+    ) -> tuple[int, int, int]:
+        owner_peer_id = peer_id if peer_id is not None else self._chan_owner_peer_id.get(int(chan_id), 0)
+        return (int(owner_peer_id or 0), int(proto), int(chan_id))
+
+    def _egress_source_depth(
+        self,
+        chan_id: int,
+        proto: "ChannelMux.Proto",
+        peer_id: Optional[int] = None,
+    ) -> int:
+        queue = self._egress_data_queues.get(self._egress_source_key(chan_id, proto, peer_id))
+        return len(queue) if queue is not None else 0
+
+    def _clear_egress_data_queues(self) -> None:
+        self._egress_data_queues.clear()
+        self._egress_ready_sources.clear()
+        self._egress_ready_source_set.clear()
+        task = self._egress_dispatch_task
+        self._egress_dispatch_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _enqueue_fair_egress(
+        self,
+        chan_id: int,
+        proto: "ChannelMux.Proto",
+        mtype: "ChannelMux.MType",
+        data: bytes,
+        *,
+        peer_id: Optional[int],
+        allow_overflow: bool = False,
+    ) -> bool:
+        source = self._egress_source_key(chan_id, proto, peer_id)
+        queue = self._egress_data_queues.setdefault(source, deque())
+        if len(queue) >= self._egress_source_queue_limit and not allow_overflow:
+            self.log.debug(
+                "[MUX/EGRESS] drop queued data source=%s depth=%s limit=%s",
+                source,
+                len(queue),
+                self._egress_source_queue_limit,
+            )
+            return False
+        queue.append((int(chan_id), proto, mtype, bytes(data or b""), peer_id))
+        if source not in self._egress_ready_source_set:
+            self._egress_ready_sources.append(source)
+            self._egress_ready_source_set.add(source)
+        if self._egress_dispatch_task is None or self._egress_dispatch_task.done():
+            self._egress_dispatch_task = self.loop.create_task(self._drain_fair_egress())
+        return True
+
+    async def _drain_fair_egress(self) -> None:
+        """Hand one mux record per ready source to the lower layer."""
+        try:
+            while self._egress_ready_sources:
+                if not self.session.is_connected():
+                    self._clear_egress_data_queues()
+                    return
+                snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
+                if self._session_overlay_backpressure_active(snapshot):
+                    await asyncio.sleep(self._tcp_ingress_throttle_poll_s)
+                    continue
+                source = self._egress_ready_sources.popleft()
+                self._egress_ready_source_set.discard(source)
+                queue = self._egress_data_queues.get(source)
+                if not queue:
+                    self._egress_data_queues.pop(source, None)
+                    continue
+                chan_id, proto, mtype, data, peer_id = queue.popleft()
+                if queue:
+                    self._egress_ready_sources.append(source)
+                    self._egress_ready_source_set.add(source)
+                else:
+                    self._egress_data_queues.pop(source, None)
+                self._send_mux_now(chan_id, proto, mtype, data, peer_id=peer_id)
+                # Let lower transport writers and other local ingress tasks run
+                # before selecting the next source. This is a cooperative yield,
+                # not a blocking wait.
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._egress_dispatch_task is asyncio.current_task():
+                self._egress_dispatch_task = None
+
     def _send_mux(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType, data: bytes, *, peer_id: Optional[int] = None) -> None:
+        if self._fair_egress_enabled():
+            # Expand before admission so every fragment retains its place in
+            # this source's sequence. Otherwise a later CLOSE could overtake
+            # fragments emitted only when the oversized DATA reaches the head.
+            payload = bytes(data or b"")
+            if (
+                mtype == ChannelMux.MType.DATA
+                and proto == ChannelMux.Proto.UDP
+                and ChannelMux.MUX_HDR.size + len(payload) > self._session_max_app_payload
+            ):
+                self._send_udp_mux_fragments(chan_id, payload)
+                return
+            if (
+                mtype == ChannelMux.MType.DATA
+                and proto == ChannelMux.Proto.TUN
+                and ChannelMux.MUX_HDR.size + len(payload) > self._session_max_app_payload
+            ):
+                self._send_tun_mux_fragments(chan_id, payload, peer_id=peer_id)
+                return
+            self._enqueue_fair_egress(
+                chan_id,
+                proto,
+                mtype,
+                data,
+                peer_id=peer_id,
+                # A local TCP pump never admits DATA once its bounded source
+                # queue is full. Lifecycle and catalog records must still be
+                # retained behind that data to preserve wire ordering.
+                allow_overflow=mtype not in (ChannelMux.MType.DATA, ChannelMux.MType.DATA_FRAG),
+            )
+            return
+        self._send_mux_now(chan_id, proto, mtype, data, peer_id=peer_id)
+
+    def _send_mux_now(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType, data: bytes, *, peer_id: Optional[int] = None) -> None:
         try:
             self._record_sync_diag("ChannelMux._send_mux", phase="started")
             if not self.session.is_connected():
@@ -4692,12 +4896,33 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             or float(snapshot.get("rtt_est_ms", 0.0) or 0.0) >= self._transport_delay_threshold_ms
         )
 
-    async def _wait_for_local_tcp_ingress(self, chan: int) -> None:
+    async def _wait_for_local_tcp_ingress(
+        self,
+        chan: int,
+        *,
+        wire_chan: Optional[int] = None,
+        peer_id: Optional[int] = None,
+    ) -> None:
         while self._overlay_connected and self._accepting_enabled:
             snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
-            if float(snapshot.get("rtt_est_ms", 0.0) or 0.0) < self._transport_delay_threshold_ms:
+            source_chan = int(wire_chan if wire_chan is not None else chan)
+            source_full = (
+                self._fair_egress_enabled()
+                and self._egress_source_depth(source_chan, ChannelMux.Proto.TCP, peer_id)
+                >= self._egress_source_queue_limit
+            )
+            if (
+                not self._session_overlay_backpressure_active(snapshot)
+                and not source_full
+            ):
                 return
-            self.log.debug("[TCP/INGRESS] paused chan=%s rtt_est_ms=%.1f", chan, float(snapshot["rtt_est_ms"]))
+            self.log.debug(
+                "[TCP/INGRESS] paused chan=%s rtt_est_ms=%.1f source_queue=%s/%s",
+                chan,
+                float(snapshot["rtt_est_ms"]),
+                self._egress_source_depth(source_chan, ChannelMux.Proto.TCP, peer_id),
+                self._egress_source_queue_limit,
+            )
             await asyncio.sleep(self._tcp_ingress_throttle_poll_s)
 
     def _tcp_overlay_read_size(self) -> int:
@@ -6846,7 +7071,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             options,
         ) = p
         peer_key = int(peer_id or 0)
-        self._chan_owner_peer_id[chan] = peer_key
+        wire_chan = int(chan)
         prev_epoch = self._peer_mux_epochs.get(peer_key)
         epoch_is_new = self._peer_epoch_is_new(peer_id, instance_id, connection_seq)
         self.log.info(
@@ -6880,21 +7105,28 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if int(r_proto) != int(ChannelMux.Proto.TCP):
             self.log.warning("[TCP/CLI] chan=%s OPEN requests non-TCP r_proto=%s", chan, r_proto)
             return
+        local_chan = self._bind_inbound_tcp_channel(peer_id, wire_chan)
+        self._chan_owner_peer_id[local_chan] = peer_key
         open_key = (peer_key, int(svc_id), int(l_proto), str(l_bind), int(l_port), int(r_proto), str(host), int(r_port))
-        self._forget_tcp_open_key(chan)
-        self._tcp_open_key_by_chan[chan] = open_key
-        self._tcp_chan_by_open_key[open_key] = chan
+        self._forget_tcp_open_key(local_chan)
+        # _forget_tcp_open_key deliberately owns all teardown state, including
+        # the peer/wire binding.  Restore it for this (possibly replayed) OPEN.
+        wire_key = (peer_key, wire_chan)
+        self._tcp_inbound_wire_to_local[wire_key] = local_chan
+        self._tcp_inbound_local_to_wire[local_chan] = wire_key
+        self._tcp_open_key_by_chan[local_chan] = open_key
+        self._tcp_chan_by_open_key[open_key] = local_chan
         self.log.info(
             "[TCP/CLI] OPEN channel identity bind chan=%s key=%s:%s->%s:%s key_map_size=%s",
-            chan,
+            wire_chan,
             l_bind,
             l_port,
             host,
             r_port,
             len(self._tcp_chan_by_open_key),
         )
-        if chan in self._tcp_by_chan:
-            self.log.info("[TCP/CLI] chan=%s OPEN ignored because chan already connected", chan)
+        if local_chan in self._tcp_by_chan:
+            self.log.info("[TCP/CLI] chan=%s OPEN ignored because chan already connected", wire_chan)
             return
         peer_spec = ChannelMux.ServiceSpec(
             svc_id=int(svc_id),
@@ -6911,53 +7143,57 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
         async def _dial():
             try:
-                await self._run_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
-                self.log.info("[TCP/CLI] chan=%s connecting -> %s:%s", chan, host, r_port)
+                await self._run_service_hook(peer_spec, None, "client", "before_connect", channel_id=wire_chan, peer_id=peer_id)
+                self.log.info("[TCP/CLI] chan=%s connecting -> %s:%s", wire_chan, host, r_port)
                 reader, writer = await self._open_tcp_target_connection(str(host), int(r_port))
-                self._tcp_by_chan[chan] = (svc_id, writer)
-                self._tcp_by_writer[writer] = (svc_id, chan)
-                self._tcp_role_by_chan[chan] = "client"
+                self._tcp_by_chan[local_chan] = (svc_id, writer)
+                self._tcp_by_writer[writer] = (svc_id, local_chan)
+                self._tcp_role_by_chan[local_chan] = "client"
                 try:
                     l_ep, r_ep = self._tcp_endpoints(writer)
-                    self.log.info("[TCP/CLI] chan=%s connected local=%s remote=%s", chan, l_ep, r_ep)
+                    self.log.info("[TCP/CLI] chan=%s connected local=%s remote=%s", wire_chan, l_ep, r_ep)
                 except Exception:
                     pass
-                self._schedule_service_hook(peer_spec, None, "client", "on_connected", channel_id=chan, peer_id=peer_id)
-                pending = self._tcp_pending_data.pop(chan, [])
+                self._schedule_service_hook(peer_spec, None, "client", "on_connected", channel_id=wire_chan, peer_id=peer_id)
+                pending = self._tcp_pending_data.pop(local_chan, [])
                 for buf in pending:
                     try:
                         writer.write(buf)
-                        ctr = self._ctr(ChannelMux.Proto.TCP, chan)
+                        ctr = self._ctr(ChannelMux.Proto.TCP, local_chan)
                         ctr.msgs_out += 1
                         ctr.bytes_out += len(buf)
-                        self._maybe_signal_backpressure(chan, writer)
-                        self.log.debug("[TCP/CLI] chan=%s flushed pending %dB", chan, len(buf))
+                        self._maybe_signal_backpressure(local_chan, writer)
+                        self.log.debug("[TCP/CLI] chan=%s flushed pending %dB", wire_chan, len(buf))
                     except Exception as e:
-                        self.log.info("[TCP/CLI] chan=%s pending flush error: %r", chan, e)
+                        self.log.info("[TCP/CLI] chan=%s pending flush error: %r", wire_chan, e)
                         break
                 if pending:
                     try:
                         await writer.drain()
-                        if chan not in self._tcp_pending_drain_logged:
-                            self._tcp_pending_drain_logged.add(chan)
+                        if local_chan not in self._tcp_pending_drain_logged:
+                            self._tcp_pending_drain_logged.add(local_chan)
                             pending_bytes = sum(len(buf) for buf in pending)
                             self.log.info(
                                 "[TCP/CLI] chan=%s drained pending writes count=%d bytes=%d",
-                                chan,
+                                wire_chan,
                                 len(pending),
                                 pending_bytes,
                             )
                         else:
-                            self.log.debug("[TCP/CLI] chan=%s drained pending writes count=%d", chan, len(pending))
+                            self.log.debug("[TCP/CLI] chan=%s drained pending writes count=%d", wire_chan, len(pending))
                     except Exception as e:
-                        self.log.info("[TCP/CLI] chan=%s pending drain error: %r", chan, e)
+                        self.log.info("[TCP/CLI] chan=%s pending drain error: %r", wire_chan, e)
                         raise
 
                 # Start RX pump: remote->overlay
                 async def _rx():
                     try:
                         while True:
-                            await self._wait_for_local_tcp_ingress(chan)
+                            await self._wait_for_local_tcp_ingress(
+                                local_chan,
+                                wire_chan=wire_chan,
+                                peer_id=peer_key,
+                            )
                             buf = await reader.read(self._tcp_overlay_read_size())
                             if not buf:
                                 break
@@ -6969,46 +7205,46 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                             except Exception as e:
                                 self.log.debug(f"[NET] logging failed : %r",e)
                                 pass
-                            ctr = self._ctr(ChannelMux.Proto.TCP, chan)
+                            ctr = self._ctr(ChannelMux.Proto.TCP, local_chan)
                             ctr.msgs_in += 1
                             ctr.bytes_in += len(buf)
-                            self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, buf)
-                            if chan not in self._tcp_first_remote_to_overlay_logged:
-                                self._tcp_first_remote_to_overlay_logged.add(chan)
+                            self._send_mux(wire_chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, buf, peer_id=peer_key)
+                            if local_chan not in self._tcp_first_remote_to_overlay_logged:
+                                self._tcp_first_remote_to_overlay_logged.add(local_chan)
                                 self.log.info(
                                     "[TCP/CLI] chan=%s first remote->overlay bytes=%d read_cap=%d buffered_frames=%d",
-                                    chan,
+                                    wire_chan,
                                     len(buf),
                                     self._tcp_overlay_read_size(),
                                     self._session_buffered_frames(),
                                 )
-                            self.log.debug("[TCP/CLI] chan=%s remote->overlay %dB", chan, len(buf))
+                            self.log.debug("[TCP/CLI] chan=%s remote->overlay %dB", wire_chan, len(buf))
                     except Exception as e:
-                        self.log.info("[TCP/CLI] chan=%s rx error: %r", chan, e)
+                        self.log.info("[TCP/CLI] chan=%s rx error: %r", wire_chan, e)
                     finally:
-                        self.log.info("[TCP/CLI] chan=%s EOF -> CLOSE", chan)
-                        self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.CLOSE, b"")
-                        self._cancel_backpressure_task(chan)
+                        self.log.info("[TCP/CLI] chan=%s EOF -> CLOSE", wire_chan)
+                        self._send_mux(wire_chan, ChannelMux.Proto.TCP, ChannelMux.MType.CLOSE, b"", peer_id=peer_key)
+                        self._cancel_backpressure_task(local_chan)
                         try:
                             writer.close()
                             await getattr(writer, "wait_closed", lambda: asyncio.sleep(0))()
                         except Exception:
                             pass
                         self._tcp_by_writer.pop(writer, None)
-                        self._tcp_by_chan.pop(chan, None)
-                        self._finalize_channel_stats(chan, ChannelMux.Proto.TCP)
-                        self._tcp_first_remote_to_overlay_logged.discard(chan)
-                        self._tcp_pending_drain_logged.discard(chan)
-                        self._tcp_first_overlay_to_local_logged.discard(chan)
-                        self._forget_tcp_open_key(chan)
-                        self._schedule_service_hook(peer_spec, None, "client", "after_closed", channel_id=chan, peer_id=peer_id)
-                        self.log.info("[TCP/CLI] chan=%s CLOSE teardown complete map_size=%s", chan, len(self._tcp_by_chan))
+                        self._tcp_by_chan.pop(local_chan, None)
+                        self._finalize_channel_stats(local_chan, ChannelMux.Proto.TCP, peer_id=peer_key)
+                        self._tcp_first_remote_to_overlay_logged.discard(local_chan)
+                        self._tcp_pending_drain_logged.discard(local_chan)
+                        self._tcp_first_overlay_to_local_logged.discard(local_chan)
+                        self._forget_tcp_open_key(local_chan)
+                        self._schedule_service_hook(peer_spec, None, "client", "after_closed", channel_id=wire_chan, peer_id=peer_id)
+                        self.log.info("[TCP/CLI] chan=%s CLOSE teardown complete map_size=%s", wire_chan, len(self._tcp_by_chan))
 
                 self.loop.create_task(_rx())
             except Exception as e:
                 self.log.info("[TCP/CLI] chan=%s connect failed: %r", chan, e)
-                self._tcp_pending_data.pop(chan, None)
-                self._forget_tcp_open_key(chan)
+                self._tcp_pending_data.pop(local_chan, None)
+                self._forget_tcp_open_key(local_chan)
 
         self.loop.create_task(_dial())
 
@@ -7021,28 +7257,33 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             self._rx_open_chunk(chan, ChannelMux.Proto.TCP, data, peer_id=peer_id)
             return
 
+        # OPEN-bound channels are keyed by both authenticated peer and wire
+        # channel. A local listener channel retains its raw ID when no inbound
+        # binding exists for this peer.
+        local_chan = self._tcp_local_channel_for_inbound(peer_id, chan)
+
         # DATA to local TCP writer (overlay -> local)
         if mtype == ChannelMux.MType.DATA:
-            open_key = self._tcp_open_key_by_chan.get(chan)
-            role = self._tcp_role_by_chan.get(chan)
-            pending = len(self._tcp_pending_data.get(chan, []))
+            open_key = self._tcp_open_key_by_chan.get(local_chan)
+            role = self._tcp_role_by_chan.get(local_chan)
+            pending = len(self._tcp_pending_data.get(local_chan, []))
             self.log.debug(
                 "[TCP] chan=%s DATA arrival check: writer_ready=%s role=%s pending=%s open_bound=%s tcp_map_size=%s",
                 chan,
-                chan in self._tcp_by_chan,
+                local_chan in self._tcp_by_chan,
                 role,
                 pending,
                 open_key is not None,
                 len(self._tcp_by_chan),
             )
-            tup = self._tcp_by_chan.get(chan)
+            tup = self._tcp_by_chan.get(local_chan)
             if not tup:
-                self._tcp_pending_data.setdefault(chan, []).append(data)
+                self._tcp_pending_data.setdefault(local_chan, []).append(data)
                 self._warning_with_channel_dump(
                     "[TCP] chan=%s DATA not routed yet (writer not ready); buffered %dB (pending=%d)",
                     chan,
                     len(data),
-                    len(self._tcp_pending_data.get(chan, [])),
+                    len(self._tcp_pending_data.get(local_chan, [])),
                 )
                 return
             svc_id, writer = tup
@@ -7059,12 +7300,12 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     pass
 
                 # --------------------------------------------------------
-                ctr = self._ctr(ChannelMux.Proto.TCP, chan)
+                ctr = self._ctr(ChannelMux.Proto.TCP, local_chan)
                 ctr.msgs_out += 1
                 ctr.bytes_out += len(data)
-                self._maybe_signal_backpressure(chan, writer)
-                if chan not in self._tcp_first_overlay_to_local_logged:
-                    self._tcp_first_overlay_to_local_logged.add(chan)
+                self._maybe_signal_backpressure(local_chan, writer)
+                if local_chan not in self._tcp_first_overlay_to_local_logged:
+                    self._tcp_first_overlay_to_local_logged.add(local_chan)
                     try:
                         pending_frames = self._session_buffered_frames()
                     except Exception:
@@ -7074,7 +7315,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                         chan,
                         len(data),
                         pending_frames,
-                        str(self._tcp_role_by_chan.get(chan) or "unknown"),
+                        str(self._tcp_role_by_chan.get(local_chan) or "unknown"),
                     )
                 self.log.debug("[TCP] chan=%s overlay->local %dB", chan, len(data))
             except Exception as e:
@@ -7083,26 +7324,26 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
         # CLOSE
         if mtype == ChannelMux.MType.CLOSE:
-            self._cancel_backpressure_task(chan)
-            tup = self._tcp_by_chan.pop(chan, None)
-            role = self._tcp_role_by_chan.pop(chan, None)
+            self._cancel_backpressure_task(local_chan)
+            tup = self._tcp_by_chan.pop(local_chan, None)
+            role = self._tcp_role_by_chan.pop(local_chan, None)
             if tup:
                 _, writer = tup
-                self._tcp_pending_data.pop(chan, None)
+                self._tcp_pending_data.pop(local_chan, None)
                 self._tcp_by_writer.pop(writer, None)
-                self._finalize_channel_stats(chan, ChannelMux.Proto.TCP)
-                self._chan_owner_peer_id.pop(chan, None)
-                self._tcp_first_overlay_to_local_logged.discard(chan)
-                self._tcp_first_remote_to_overlay_logged.discard(chan)
-                self._tcp_pending_drain_logged.discard(chan)
+                self._finalize_channel_stats(local_chan, ChannelMux.Proto.TCP, peer_id=peer_id)
+                self._chan_owner_peer_id.pop(local_chan, None)
+                self._tcp_first_overlay_to_local_logged.discard(local_chan)
+                self._tcp_first_remote_to_overlay_logged.discard(local_chan)
+                self._tcp_pending_drain_logged.discard(local_chan)
                 try:
                     writer.close()
                 except Exception:
                     pass
                 if role == "client":
                     spec = ChannelMux.ServiceSpec(svc_id=0, l_proto="tcp", l_bind="", l_port=0, r_proto="tcp", r_host="", r_port=0)
-                    self._schedule_service_hook(spec, None, "client", "after_closed", channel_id=chan)
-            self._forget_tcp_open_key(chan)
+                    self._schedule_service_hook(spec, None, "client", "after_closed", channel_id=chan, peer_id=peer_id)
+            self._forget_tcp_open_key(local_chan)
             self.log.info("[TCP] chan=%s CLOSE => local teardown map_size=%s", chan, len(self._tcp_by_chan))
 
     # ---------- TCP backpressure ----------
@@ -7234,7 +7475,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
         # Skip active channel ids during wrap-around to preserve unique in-flight identity.
         scan_start = cid
-        while cid in self._tcp_by_chan:
+        while cid in self._tcp_by_chan or cid in self._tcp_inbound_local_to_wire:
             nxt = cid + stride
             cid = nxt if nxt <= self.TCP_MAX_ID else start
             if cid == scan_start:

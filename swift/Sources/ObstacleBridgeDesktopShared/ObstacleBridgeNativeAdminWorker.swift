@@ -1,4 +1,5 @@
 import CoreFoundation
+import Dispatch
 import Foundation
 #if os(macOS) || os(iOS)
 import Darwin
@@ -23,6 +24,7 @@ public enum ObstacleBridgeNativeAdminWorker {
     /// Serialized parent-owned state access for a native Admin child. The
     /// inherited control descriptor remains the only RPC transport.
     public final class ParentRPC: @unchecked Sendable {
+        // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeWorkerIPCTests
         private static let methods: Set<String> = [
             "get_status_snapshot", "get_peer_connections_snapshot", "get_connections_snapshot",
             "get_config_snapshot", "get_onboarding_config_snapshot", "get_config_schema_snapshot", "get_debug_logs", "fetch_logs",
@@ -83,8 +85,8 @@ public enum ObstacleBridgeNativeAdminWorker {
         guard controlFD >= 0, lifetimeFD >= 0, controlFD != lifetimeFD, generation > 0,
               isUnixStreamDescriptor(controlFD), isUnixStreamDescriptor(lifetimeFD)
         else { throw Failure.invalidBootstrap }
+        try makeNonBlocking(controlFD)
         let control = FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)
-        let lifetime = FileHandle(fileDescriptor: lifetimeFD, closeOnDealloc: true)
         let hello = try readControl(control, generation: generation, expectedKind: .hello, deadline: ProcessInfo.processInfo.systemUptime + 5)
         guard hello["kind"] as? String == "worker.hello", hello["role"] as? String == "supervisor",
               hello["capabilities"] as? [String] == ["admin.control"], strictPositiveInt(hello["generation"]) == generation
@@ -106,9 +108,35 @@ public enum ObstacleBridgeNativeAdminWorker {
         try write(control, kind: .ready, generation: generation, value: [
             "v": 1, "kind": "admin.ready", "implementation": "native", "port": service?.port ?? 0, "generation": generation,
         ])
-        // A zero-byte lifetime read is the sole owner-loss signal. Closing it
-        // releases both inherited capabilities without an ambient endpoint.
-        while !lifetime.availableData.isEmpty { }
+        // A zero-byte lifetime read is the sole owner-loss signal. Keep it
+        // callback-owned: FileHandle.availableData would block this process
+        // and can race descriptor teardown on Linux. The descriptor is made
+        // nonblocking before the source starts, so a stale readiness event
+        // cannot turn this handler into a blocking read.
+        let flags = fcntl(lifetimeFD, F_GETFL)
+        guard flags >= 0, fcntl(lifetimeFD, F_SETFL, flags | O_NONBLOCK) == 0
+        else { throw Failure.invalidBootstrap }
+        let lifetimeQueue = DispatchQueue(label: "org.obstaclebridge.native-admin-lifetime")
+        let lifetimeEnded = DispatchSemaphore(value: 0)
+        let lifetimeSource = DispatchSource.makeReadSource(fileDescriptor: lifetimeFD, queue: lifetimeQueue)
+        lifetimeSource.setEventHandler {
+            var byte: UInt8 = 0
+            while true {
+                let received = read(lifetimeFD, &byte, 1) // O_NONBLOCK readiness owner
+                if received == 0 {
+                    lifetimeEnded.signal()
+                    return
+                }
+                if received > 0 { continue }
+                if errno == EINTR { continue }
+                if errno == EAGAIN || errno == EWOULDBLOCK { return }
+                lifetimeEnded.signal()
+                return
+            }
+        }
+        lifetimeSource.setCancelHandler { _ = close(lifetimeFD) }
+        lifetimeSource.resume()
+        withExtendedLifetime(lifetimeSource) { lifetimeEnded.wait() }
     }
 
     private static func strictPositiveInt(_ value: Any?) -> Int? {
@@ -143,11 +171,23 @@ public enum ObstacleBridgeNativeAdminWorker {
         var output = Data()
         while output.count < count {
             try waitReadable(handle.fileDescriptor, deadline: deadline)
-            let chunk = try handle.read(upToCount: count - output.count) ?? Data()
-            guard !chunk.isEmpty else { throw Failure.invalidBootstrap }
-            output.append(chunk)
+            var buffer = [UInt8](repeating: 0, count: count - output.count)
+            let received = read(handle.fileDescriptor, &buffer, buffer.count) // O_NONBLOCK readiness owner
+            if received > 0 {
+                output.append(buffer, count: received)
+                continue
+            }
+            if received < 0 && errno == EINTR { continue }
+            if received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) { continue }
+            throw Failure.invalidBootstrap
         }
         return output
+    }
+
+    private static func makeNonBlocking(_ descriptor: Int32) throws {
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0
+        else { throw Failure.invalidBootstrap }
     }
 
     private static func waitReadable(_ descriptor: Int32, deadline: TimeInterval) throws {

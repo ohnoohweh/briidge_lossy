@@ -9,6 +9,23 @@ import Darwin
 #endif
 
 struct ObstacleBridgeWorkerIPCTests {
+    @Test func incrementalDecoderRetainsPartialFrameUntilReadinessDeliversItsRemainder() throws {
+        let first = try ObstacleBridgeWorkerIPC.encode(kind: .request, generation: 7, payload: Data("first".utf8))
+        let second = try ObstacleBridgeWorkerIPC.encode(kind: .data, generation: 7, payload: Data([0x45, 0x00]))
+        var decoder = ObstacleBridgeWorkerIPCStreamDecoder()
+
+        #expect(try decoder.append(Data(first.prefix(ObstacleBridgeWorkerIPC.headerBytes - 1))).isEmpty)
+        #expect(decoder.bufferedByteCount == ObstacleBridgeWorkerIPC.headerBytes - 1)
+        let frames = try decoder.append(Data(first.dropFirst(ObstacleBridgeWorkerIPC.headerBytes - 1)) + second)
+
+        #expect(frames.count == 2)
+        #expect(frames[0].kind == .request)
+        #expect(frames[0].payload == Data("first".utf8))
+        #expect(frames[1].kind == .data)
+        #expect(frames[1].payload == Data([0x45, 0x00]))
+        #expect(decoder.bufferedByteCount == 0)
+    }
+
     @Test func controlDecodeRejectsDuplicateObjectMembersAtEveryDepth() throws {
         for payload in [
             #"{"op":"SNAPSHOT","op":"STOP","payload":{}}"#,

@@ -50,7 +50,11 @@ class LinuxTunHelperBackend:
         self._packets_to_runtime = 0
         self._stopped = False
         self._reader_task: Optional[asyncio.Task] = None
+        # Kept as an accepted constructor argument for configuration
+        # compatibility.  TUN ingress is readiness-driven, not polled.
         self._read_poll_interval_s = float(read_poll_interval_s)
+        self._reader_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._reader_registered = False
         self._network_applied = False
         self._included_routes_active = False
         self._included_routes_startup_enabled = True
@@ -125,8 +129,36 @@ class LinuxTunHelperBackend:
 
     def set_packet_sink(self, sink: Callable[[bytes], Awaitable[None] | None]) -> None:
         self._packet_sink = sink
-        if self._opened and self._reader_task is None:
-            self._reader_task = asyncio.create_task(self._read_loop())
+        if self._opened:
+            self._start_reader()
+
+    def _start_reader(self) -> None:
+        """Register the nonblocking TUN fd with the active event loop.
+
+        One drain task owns packet delivery at a time.  That preserves packet
+        order when a sink awaits, while the readiness callback itself remains
+        constant-time and never performs a blocking read.
+        """
+        fd = self._fd
+        if fd is None or self._packet_sink is None or self._reader_registered:
+            return
+        loop = asyncio.get_running_loop()
+        loop.add_reader(fd, self._on_tun_readable)
+        self._reader_loop = loop
+        self._reader_registered = True
+
+    def _stop_reader(self) -> None:
+        fd = self._fd
+        loop = self._reader_loop
+        self._reader_registered = False
+        self._reader_loop = None
+        if fd is not None and loop is not None:
+            with contextlib.suppress(Exception):
+                loop.remove_reader(fd)
+
+    def _on_tun_readable(self) -> None:
+        if self._reader_task is None or self._reader_task.done():
+            self._reader_task = asyncio.create_task(self._drain_ready_packets())
 
     @staticmethod
     def _require_linux_tun_support() -> None:
@@ -1065,8 +1097,8 @@ class LinuxTunHelperBackend:
             self._ifname = actual
             self._mtu = requested_mtu
             self._stopped = False
-            if self._packet_sink is not None and self._reader_task is None:
-                self._reader_task = asyncio.create_task(self._read_loop())
+            if self._packet_sink is not None:
+                self._start_reader()
             return self.local_snapshot()
         except Exception:
             with contextlib.suppress(Exception):
@@ -1278,6 +1310,7 @@ class LinuxTunHelperBackend:
         if self._network_applied and self._ifname:
             with contextlib.suppress(Exception):
                 await self.remove_network({"ifname": self._ifname})
+        self._stop_reader()
         if self._reader_task is not None:
             self._reader_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -1289,27 +1322,42 @@ class LinuxTunHelperBackend:
             self._fd = None
         self._opened = False
 
-    async def _read_loop(self) -> None:
-        while True:
-            fd = self._fd
-            if fd is None:
-                return
-            try:
-                packet = os.read(fd, max(68, int(self._mtu or 1600) + 4))
-                if packet:
-                    self._packets_to_runtime += 1
-                    self._log_probe_trace(stage="backend_read_from_tun", packet=packet, note="source=tun-fd")
-                    if self._packet_sink is not None:
-                        result = self._packet_sink(bytes(packet))
-                        if inspect.isawaitable(result):
-                            await result
-                    continue
-            except BlockingIOError:
-                pass
-            except OSError as exc:
-                if getattr(exc, "errno", None) not in (11,):
+    async def _drain_ready_packets(self) -> None:
+        # A bounded drain prevents one always-readable TUN from monopolising
+        # the loop.  Awaited packet sinks provide another interruption point
+        # between FIFO items.
+        processed = 0
+        try:
+            while processed < 32:
+                fd = self._fd
+                if fd is None:
+                    return
+                try:
+                    packet = os.read(fd, max(68, int(self._mtu or 1600) + 4))  # O_NONBLOCK readiness owner
+                except BlockingIOError:
+                    return
+                except OSError as exc:
+                    if getattr(exc, "errno", None) in (11,):
+                        return
                     raise
-            await asyncio.sleep(self._read_poll_interval_s)
+                if not packet:
+                    return
+                processed += 1
+                self._packets_to_runtime += 1
+                self._log_probe_trace(stage="backend_read_from_tun", packet=packet, note="source=tun-fd")
+                sink = self._packet_sink
+                if sink is not None:
+                    result = sink(bytes(packet))
+                    if inspect.isawaitable(result):
+                        await result
+        finally:
+            self._reader_task = None
+        # The descriptor may still be readable after a bounded burst. Queue
+        # the next FIFO batch rather than spinning in this callback.
+        if processed == 32 and self._reader_registered:
+            loop = self._reader_loop
+            if loop is not None:
+                loop.call_soon(self._on_tun_readable)
 
 
 class LinuxTunHelperInMemoryBackend:

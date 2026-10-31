@@ -558,6 +558,9 @@ def test_swift_admin_api_live_topic_status_frame_contains_payload(swift_admin_we
         "overlay_transport": "myudp",
         "overlay_connected": True,
         "tun_open": 1,
+        "runtime_metrics": {
+            "categories": [{"category": "overlay_receive", "count": 7}],
+        },
     }
     swift = _run_swift_component(
         swift_admin_web_component_runner,

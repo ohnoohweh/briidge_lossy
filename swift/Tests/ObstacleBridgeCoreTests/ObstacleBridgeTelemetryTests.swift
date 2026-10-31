@@ -3,6 +3,139 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeTelemetryTests {
+    @Test func adminServiceConnectionRolesFollowThePortableCatalogContract() {
+        #expect(ObstacleBridgeAdminSnapshotSupport.serviceConnectionRole(catalog: "own_servers") == "server")
+        #expect(ObstacleBridgeAdminSnapshotSupport.serviceConnectionRole(catalog: "remote_servers") == "client")
+    }
+
+    @Test func adminPeerEnvelopeOwnsTheSharedAPIShapeAndPreservesMeasuredFacts() {
+        let peer = ObstacleBridgeAdminSnapshotSupport.peerEnvelope(
+            id: 1,
+            peerID: "configured-peer",
+            transport: "myudp",
+            state: "connected",
+            connected: true,
+            appReady: true,
+            peer: ["host": "198.51.100.7", "port": 443],
+            secureLink: ["state": "authenticated", "authenticated": true],
+            compressionLayer: ["enabled": true, "decompress_ok_total": 7],
+            extra: ["configured_candidates": ["198.51.100.7"]]
+        )
+        #expect(peer["peer_id"] as? String == "configured-peer")
+        #expect(peer["connected"] as? Bool == true)
+        #expect(peer["traffic"] as? [String: Any] != nil)
+        #expect(peer["open_connections"] as? [String: Any] != nil)
+        #expect((peer["secure_link"] as? [String: Any])?["authenticated"] as? Bool == true)
+        #expect((peer["compress_layer"] as? [String: Any])?["decompress_ok_total"] as? Int == 7)
+        #expect((peer["compression_layer"] as? [String: Any])?["decompress_ok_total"] as? Int == 7)
+        #expect(peer["configured_candidates"] as? [String] == ["198.51.100.7"])
+    }
+
+    @Test func typedPeerFactsKeepProtocolAndCompressionSchemaInCore() {
+        let compression = ObstacleBridgeMuxCompressionTelemetry(
+            policy: .init(enabled: true)
+        )
+        compression.recordFailedDecompression(bodyBytes: 17)
+        let peer = ObstacleBridgeAdminSnapshotSupport.peerEnvelope(facts: .init(
+            identity: "configured-peer", transport: "myudp", lifecycleState: "connected",
+            secureLinkState: "authenticated", connectionEpoch: 4, sessionID: 9,
+            pendingRekeySessionID: 10, ready: true, authenticated: true,
+            applicationSendingBlocked: false, attempts: 1, nextRetryMilliseconds: nil,
+            protectedTxCounter: 12, protectedRxCounter: 13, protectedFramesSentTotal: 14,
+            protectedFramesReceivedTotal: 15, authenticatedGenerationsTotal: 2,
+            rekeysCompletedTotal: 1, connectedSinceUnixTS: 20, lastIncomingAgeSeconds: 1,
+            observedPublicIP: "2001:db8::47", observedPublicPort: 44321,
+            compression: compression.snapshot(), secureLinkMode: "psk",
+            endpointHost: "198.51.100.7", endpointPort: 443,
+            configuredCandidates: ["198.51.100.7"], activeTCPChannels: 3,
+            activeUDPChannels: 4, activeTUNChannels: 1, failureReason: nil,
+            traffic: ["rx_bytes": 321, "tx_bytes": 654, "rx_msgs": 3, "tx_msgs": 4],
+            trafficRates: ["rx_bytes_per_sec": 12.5, "tx_bytes_per_sec": 25.0],
+            myudpStats: ["rtt_est_ms": 7, "inflight": 2]
+        ))
+        let secureLink = try! #require(peer["secure_link"] as? [String: Any])
+        let compressionLayer = try! #require(peer["compress_layer"] as? [String: Any])
+        #expect(secureLink["pending_rekey_session_id"] as? UInt64 == 10)
+        #expect(secureLink["rekey_in_progress"] as? Bool == true)
+        #expect(compressionLayer["decompress_fail_total"] as? UInt64 == 1)
+        #expect((peer["connection_layers"] as? [[String: Any]])?.count == 3)
+        #expect(peer["rtt_est_ms"] as? UInt64 == 7)
+        #expect(peer["observed_public_ip"] as? String == "2001:db8::47")
+        #expect(peer["observed_public_port"] as? Int == 44321)
+        #expect((peer["traffic"] as? [String: Any])?["rx_bytes"] as? UInt64 == 321)
+        #expect((peer["traffic"] as? [String: Any])?["tx_bytes"] as? UInt64 == 654)
+        #expect((peer["traffic"] as? [String: Any])?["rx_bytes_per_sec"] as? Double == 12.5)
+        #expect((peer["open_connections"] as? [String: Any])?["tun"] as? Int == 1)
+        #expect(JSONSerialization.isValidJSONObject(peer))
+    }
+
+    @Test func peerTrafficAggregationUsesOwnedConnectionRows() {
+        let totals = ObstacleBridgeAdminSnapshotSupport.aggregateConnectionTraffic([
+            "tcp": [
+                ["stats": ["rx_bytes": 100, "tx_bytes": 200, "rx_msgs": 1, "tx_msgs": 2]],
+                ["stats": ["rx_bytes": 50, "tx_bytes": 25, "rx_msgs": 3, "tx_msgs": 1]],
+            ],
+            "udp": [["stats": ["rx_bytes": 7, "tx_bytes": 9, "rx_msgs": 1, "tx_msgs": 1]]],
+        ])
+        #expect(totals["rx_bytes"] == 157)
+        #expect(totals["tx_bytes"] == 234)
+        #expect(totals["rx_msgs"] == 5)
+        #expect(totals["tx_msgs"] == 4)
+    }
+
+    @Test func peerTrafficRatesAndOpenCountsUseTheCoreConnectionContract() {
+        let sampler = ObstacleBridgeAdminPeerTrafficRateSampler()
+        let first = sampler.sample(identity: "peer", traffic: ["rx_bytes": 100, "tx_bytes": 200], uptime: 10)
+        let second = sampler.sample(identity: "peer", traffic: ["rx_bytes": 160, "tx_bytes": 260], uptime: 12)
+        #expect(first["rx_bytes_per_sec"] == 0)
+        #expect(second["rx_bytes_per_sec"] == 30)
+        #expect(second["tx_bytes_per_sec"] == 30)
+        let counts = ObstacleBridgeAdminSnapshotSupport.activeConnectionCounts([
+            "tcp": [["chan_id": 3, "state": "connected"]],
+            "udp": [["chan_id": NSNull(), "state": "listening"]],
+            "tun": [["chan_id": 9, "state": "connected"]],
+        ])
+        #expect(counts == ["tcp": 1, "udp": 0, "tun": 1])
+        let throttle = ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: [
+            "tun": [[
+                "chan_id": 9,
+                "state": "connected",
+                "throttle": [
+                    "applicable": true, "active": false, "disabled": true,
+                    "waiting_count": 0, "inflight": 3, "max_inflight": 200,
+                ],
+            ]],
+        ])
+        #expect(throttle["applicable"] as? Bool == true)
+        #expect(throttle["active"] as? Bool == false)
+    }
+
+    @Test func adminStatusEnvelopeOwnsSharedDashboardFields() {
+        let status = ObstacleBridgeAdminSnapshotSupport.statusEnvelope(
+            runtimeOwner: "native",
+            runtimeMode: "linux-swift",
+            adminWebName: "ObstacleBridge Fedora Native",
+            adminUI: [:], securityAdvisor: [:],
+            startedAt: 1, uptimeSec: 2,
+            bootstrapState: ["status": "connected"],
+            transportRuntime: ["kind": "myudp", "status": "connected", "app_ready": true],
+            compressLayer: [:]
+        )
+        #expect(status["app"] as? String == "native")
+        #expect(status["platform"] as? String == "linux-swift")
+        #expect(status["overlay_transport"] as? String == "myudp")
+        #expect(status["transport_state"] as? String == "connected")
+        #expect(status["app_ready"] as? Bool == true)
+        #expect(status["peer"] is NSNull)
+        let live = ObstacleBridgeAdminSnapshotSupport.liveStatusEnvelope(status.merging([
+            "runtime_metrics": ["history": Array(repeating: 1, count: 32)],
+            "runtime_health_recent_records": [["state": "connected"]],
+        ], uniquingKeysWith: { _, supplied in supplied }))
+        #expect(live["overlay_transport"] as? String == "myudp")
+        #expect((live["runtime_metrics"] as? [String: Any])?["history"] as? [Int] == Array(repeating: 1, count: 32))
+        #expect(live["runtime_health_recent_records"] == nil)
+    }
+
     private func vectorEvent() throws -> ObstacleBridgeTelemetryEvent {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

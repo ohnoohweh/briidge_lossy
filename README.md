@@ -4,7 +4,7 @@ ObstacleBridge is a cross-platform overlay and channel-multiplexing toolkit for 
 The project currently targets six platform families:
 
 - **Linux Python CLI/runtime**: the primary server and automation-friendly runtime, including `/dev/net/tun`, lifecycle hook based routing, proxy egress, and elevated integration coverage.
-- **Linux native CLI**: the compiled Swift command-line product provides native Linux overlay, service, TUN-helper, configured lifecycle logging, bounded local telemetry-spool, and explicit per-child listener remote-catalog paths backed by shared Core protocol codecs. Its private Python/native log collectors expose the same redacted lifecycle status in `/api/status` and bounded canonical lifecycle records in `/api/logs`, including through the isolated Admin-worker path; the browser-facing native Admin route returns that shared top-level envelope rather than a native-only nested log value. The native Admin child derives authenticated onboarding connection profiles and blueprints only from its allowlisted parent snapshots, then generates Core-owned portable invites and PSK-masked previews from a separately bounded invite source: only that inherited authenticated RPC carries the PSK; read-only snapshots, logs, and unrelated Admin secrets remain redacted. The required Linux Swift gate runs `ObstacleBridgeLinuxTunHelperAdapterTests`, qualifying authenticated TUN-helper owner-loss cleanup with a monotonic, independently scheduled idle watchdog. Its proxy-collector qualification treats a keep-open reference listener’s final post-close poll timeout as expected teardown while still surfacing pre-close transport failures. Set `debug_logging.debug_enabled` for bounded, payload-free myUDP/ChannelMux/SecureLink and UDP service-socket diagnostics in the local log and `/api/debug/logs`; elevated mixed Python/native helper tests qualify packet carry over myUDP. See the [Linux Swift design](docs/LinuxSwift_design.md) for current scope and known limitations.
+- **Linux native CLI**: the compiled Swift command-line product provides native Linux overlay, service, TUN-helper, configured lifecycle logging, bounded local telemetry-spool, and explicit per-child listener remote-catalog paths backed by shared Core protocol codecs. Its private Python/native log collectors expose the same redacted lifecycle status in `/api/status` and bounded canonical lifecycle records in `/api/logs`, including through the isolated Admin-worker path; the browser-facing native Admin route returns that shared top-level envelope rather than a native-only nested log value. The native Admin child derives authenticated onboarding connection profiles and blueprints only from its allowlisted parent snapshots, then generates Core-owned portable invites and PSK-masked previews from a separately bounded invite source: only that inherited authenticated RPC carries the PSK; read-only snapshots, logs, and unrelated Admin secrets remain redacted. The required Linux Swift gate runs `ObstacleBridgeLinuxTunHelperAdapterTests`, qualifying authenticated TUN-helper owner-loss cleanup with a monotonic, independently scheduled idle watchdog. Its proxy-collector qualification treats a keep-open reference listener’s short accept timeout as a polling turn and a close-induced accept `EBADF` as normal teardown, while still surfacing pre-close transport failures, including the peer-address control exchange below SecureLink application traffic. Swift `@unchecked Sendable` owners record their lock/serial ownership boundary and exercising test in every mutable-collection diff; the audited matrix and remaining stress-test gap are in [Swift concurrency coverage](docs/SWIFT_CONCURRENCY_COVERAGE.md). Set `debug_logging.debug_enabled` for bounded, payload-free myUDP/ChannelMux/SecureLink and UDP service-socket diagnostics in the local log and `/api/debug/logs`; elevated mixed Python/native helper tests qualify packet carry over myUDP. See the [Linux Swift design](docs/LinuxSwift_design.md) for current scope and known limitations.
 - **macOS native Admin IPC**: the packaged native child owns the complete authenticated browser contract through bounded inherited parent RPC: standard process/uptime/transport/dashboard metadata, the legacy `/api/live?topic=` fallback and a version-13 live session with Python-compatible status/connection/peer/meta defaults plus bounded `tun_routing` on request, onboarding, telemetry, configuration confirmation, secret reveal, logs, remote-service replacement, privileged controls, recovery, and owner-loss cleanup.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration. The Swift HostRunner binds its local Admin endpoint before private-worker bootstrap, keeping status available during worker launch.
@@ -663,6 +663,12 @@ Current websocket payload forms:
 | `--mux-tcp-bp-latency-ms` | `300` | Mux TCP: if > 0, drain writers after this ms when bytes pending. |
 | `--mux-tcp-bp-poll-interval-ms` | `50` | Mux TCP: polling interval for time-based backpressure (ms). |
 
+On a shared listener, a TCP ChannelMux wire channel belongs to the authenticated
+peer that opened it. The Python runtime keeps that peer identity in its local
+socket ownership while returning replies with the peer's original channel ID,
+so one reconnecting client cannot collide with another active client's reused
+channel number.
+
 #### Reverse service publishing with `--remote-servers`
 
 `--remote-servers` lets one peer ask the connected peer to expose listeners and bridge them to peer-local targets.
@@ -1095,7 +1101,13 @@ The Configuration tab normally keeps `secure_link_psk` write-only. When admin au
 
 The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) explains the applied auth, session, live-update, and secret-redaction concepts in more detail.
 
-An open WebAdmin page receives status and peer updates through the shared `/api/live` WebSocket subscription; if a browser cannot keep that subscription, the page falls back to bounded HTTP polling.
+An open WebAdmin page receives status and peer updates through the shared `/api/live` WebSocket subscription; if a browser cannot keep that subscription, the page falls back to bounded HTTP polling. The bounded Runtime Analysis metrics are retained in live status updates on Python and every Swift host, so the detailed runtime list remains populated after the first browser snapshot.
+
+On Linux native myUDP, authenticated receive uses nonblocking socket readiness and a separate protocol-timer source; it does not hold a receive thread in a timed `recv` wait while idle. Its isolated synchronous bootstrap/exchange fallback likewise uses `MSG_DONTWAIT` with only a configured bounded `poll` wait when no event-loop owner exists. Plain TCP and WebSocket use post-bootstrap readiness ownership with incremental frame buffers, while TLS WebSocket and QUIC surface their NIO inbound callbacks through the same pattern. A one-record asynchronous transport callback is re-armed after each successful record for the receiver lifetime. Partial records wait for the next callback rather than causing a blocking completion read.
+
+The Swift products apply this receive-owner rule to long-lived transports, service sockets, TUN packet devices, helper IPC, Admin Web, worker IPC, and logging; the delivered boundaries, bootstrap exception, and remaining conversions are tracked in [Swift Asynchronous I/O Boundary Plan](docs/SWIFT_ASYNC_IO_DESIGN.md). The desktop logging supervisor completes request-ID-correlated log snapshots through a nonblocking datagram read source or its independent deadline; accepted records coalesce a bounded cache refresh, while synchronous Admin projection returns the last completed snapshot without waiting. The public native collector’s test probe gives a cold Swift process a bounded startup interval on macOS CI, while every UDP query retains its own deadline. Linux and packaged macOS TUN-helper clients retain partial common-OBIP frames behind nonblocking `DispatchSourceRead` sources rather than synchronously completing a frame read. The shared native Admin worker owns its inherited lifetime signal through a nonblocking `DispatchSourceRead` and its bootstrap/parent-RPC frame reads through nonblocking POSIX readiness, avoiding blocking `FileHandle` reads on Linux and macOS; after bootstrap, the Linux native peer child owns its control fd through a serial `DispatchSourceRead` and shared incremental OBIP decoder. Python HTTP CONNECT keeps its explicitly isolated thread-only compatibility setup for blocking connect and Windows SSPI/Negotiate, then uses nonblocking deadline-bounded request/response framing; the legacy synchronous Admin-Web parent facade likewise uses nonblocking, readiness-gated private worker IPC.
+
+The Linux native Admin child moves each authenticated live WebSocket from the request worker to a nonblocking read/write owner with bounded partial frames and an independent topic timer.
 
 Python, Linux, macOS, and iOS products show their build identity in the WebAdmin headline and Runtime Metadata view. A Python source checkout reports its live Git revision and working-tree state; Git-less deployments report the build stamp generated immediately before deployment. The commit is always the standard first eight characters of the Git revision, with build timestamp and taint state.
 
@@ -1118,7 +1130,7 @@ What the admin web shows:
 - Runtime health metadata retains a bounded redacted record tail across restart, exposing lifecycle classification and queue/backpressure observations without packet contents, credentials, keys, nonces, or peer traffic detail. This supports post-loss diagnosis through the authenticated Admin surface.
 - Traffic cards for app-side RX/TX and peer-side RX/TX rates.
 - A peer-session table that separates Transport endpoint/state, Protocol status and timing, SecureLink reported status and phase, Compression reported status, ChannelMux traffic/channel counts plus candidate/restart timers, and TUN throttle diagnostics. Peer throttle reporting contains current delay/backpressure state only, not retired byte-budget, scope, or previous-window fields. Transport, Protocol, and ChannelMux remain visible for every non-listening peer, while enabled SecureLink and Compression layers remain visible throughout failed or reconnecting states. Connecting Python `myudp` clients keep showing their configured target endpoint there even before a live peer socket is learned.
-- Python `myudp` peer diagnostics include the myUDP2 stream-record, chunk, batch, and queue budgets plus live batch/chunk/stream-byte totals, queue age, retransmitted-chunk, malformed-batch, malformed-stream, and frames-to/from-SecureLink counters. SecureLink separately reports passed client-to-server and server-to-client frames plus client-originated drops; passed totals cover protected handshake/control as well as application frames that cross the boundary. These fields describe the Python reference runtime; Swift myUDP2 parity remains a release prerequisite.
+- Python and native Linux `myudp` peer diagnostics include the myUDP2 stream-record, chunk, batch, and queue budgets plus live batch/chunk/stream-byte totals, queue age, retransmitted-chunk, malformed-batch, malformed-stream, and frames-to/from-SecureLink counters. The native counter advances at the shared myUDP/SecureLink framing boundary for handshake, rekey, and protected application frames, independent of application-payload delivery. Peer ChannelMux RX/TX bytes and messages are separately aggregated from the owned service connection rows, not inferred from SecureLink frames. SecureLink separately reports passed client-to-server and server-to-client frames plus client-originated drops; passed totals cover protected handshake/control as well as application frames that cross the boundary. Swift myUDP2 parity remains a release prerequisite.
 - Transport State, Protocol Status, and layer Reported Status pills use green for connected and red for disconnected, keeping transitions distinct from definitive connection state.
 - Accepted listener peers retain their peer-local transport metrics while their SecureLink and compression pills use that peer’s authenticated wrapper state.
 - UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, requested remote TCP/UDP listeners, remote endpoints, and per-channel byte/message counters.
@@ -1156,8 +1168,7 @@ What the admin web shows:
 | `--telemetry-collector-revocations` | `/var/lib/obstaclebridge/telemetry-ingest/revocations.json` | Revoked client-certificate serial list path. |
 | `--debug-stderr` | `False` | mirror DEBUG lines to stderr (default: off) |
 
-The optional private UDP logger is isolated best-effort diagnostics only. The
-Python Runner additionally provides a bounded, allowlisted local event
+The optional private UDP logger is isolated best-effort diagnostics only. Its bounded Admin query correlates each UDP reply with an opaque request ID, so delayed replies cannot be mistaken for a newer snapshot. The Python Runner additionally provides a bounded, allowlisted local event
 producer, crash-safe spool, single-flight background uploader, and mTLS-required
 reference ingest process. The worker emits a startup load sample and repeats it
 every 15 seconds; empty drains are no-ops and one background flush owns
@@ -1228,6 +1239,10 @@ WebAdmin presents that state as one active/inactive throttle indicator in each p
 ### Own public IP
 
 Every peer client uses a small transport-adjacent protocol to ask its connected peer which source address and port it observes. The Peer page’s Transport block presents **Own Public IP** alongside compact Connection Uptime and Last Incoming values. It reports the peer-observed IPv4 or IPv6 source tuple for the active `myudp`, TCP, WebSocket, or QUIC path, is refreshed on each connection epoch, and remains empty until the peer replies. IPv6 uses `[address]:port`; IPv4-mapped dual-stack observations are published as normal IPv4 addresses. The diagnostic wrapper preserves the underlying transport's connected state and metrics, so it cannot turn a live peer into a disconnected Admin Web row. This is not an external address lookup and does not depend on SecureLink.
+
+**Last Incoming** is transport activity rather than application traffic: on
+myUDP it advances for accepted data, CONTROL, and IDLE records. This keeps an
+idle but healthy secure session distinct from a stale transport.
 
 ### Compression layer
 
@@ -1619,7 +1634,7 @@ Optional operations follow-up:
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product. The shared Swift package boundary is exercised separately through the `ObstacleBridgeCore` and `ObstacleBridgeApplePackageProbe` build targets.
 
-The native Python and compiled Swift TUN helpers share Linux lifecycle hardening: package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, peer-plus-channel scoped shared-TUN routing so independent listener clients may use the same channel number and the actual shared server TUN reader retains peer routing across ChannelMux instances, full-tunnel policy routing that retains every kernel-connected local LAN such as libvirt and VMware bridges in the main table without replacing it through an underlay even when explicitly excluded, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, and a new SecureLink session is considered recovered only after peer-confirmed authentication, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The native Python and compiled Swift TUN helpers share Linux lifecycle hardening: package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, readiness-owned `O_NONBLOCK` and bounded Linux/macOS Python helper packet draining, helper-reader ownership handoff protection for shared-TUN helper mode, peer-plus-channel scoped shared-TUN routing so independent listener clients may use the same channel number and the actual shared server TUN reader retains peer routing across ChannelMux instances, full-tunnel policy routing that retains every kernel-connected local LAN such as libvirt and VMware bridges in the main table without replacing it through an underlay even when explicitly excluded, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. Shared Apple UDP receives use `DispatchSourceRead` with `MSG_DONTWAIT`; Python Admin-child bootstrap and owner-lifetime IPC use awaited descriptor reads, while the isolated child-log relay and restart-placeholder web handoff use readiness-gated nonblocking receives. Diff-based Python and Swift CI guards preserve the no-new-blocking-I/O rule, requiring a documented bounded exception where an asynchronous dependency boundary is unavailable. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, and a new SecureLink session is considered recovered only after peer-confirmed authentication, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Oversized protected WebSocket UDP coverage verifies exact payload bytes and peer counters across the fragmentation boundary; diagnostic log routing remains an operator aid rather than a wire-contract dependency.
 
@@ -1648,23 +1663,23 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `78` | `1154` |
+| Python CLI/runtime, including macOS Python | `79` | `1172` |
 | macOS Swift app | `1` | `88` |
-| iOS app/extension | `32` | `216` |
+| iOS app/extension | `32` | `217` |
 
 #### Requirement traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `82/93 = 88.2%` | `91/93 = 97.8%` | `91/93 = 97.8%` |
-| macOS Swift app | `5/93 = 5.4%` | `9/93 = 9.7%` | `14/93 = 15.1%` |
-| iOS app/extension | `10/93 = 10.8%` | `26/93 = 28.0%` | `28/93 = 30.1%` |
+| Python CLI/runtime, including macOS Python | `82/94 = 87.2%` | `92/94 = 97.9%` | `92/94 = 97.9%` |
+| macOS Swift app | `5/94 = 5.3%` | `11/94 = 11.7%` | `16/94 = 17.0%` |
+| iOS app/extension | `10/94 = 10.6%` | `26/94 = 27.7%` | `28/94 = 29.8%` |
 
 #### Architecture traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `7/8 = 87.5%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
+| Python CLI/runtime, including macOS Python | `8/8 = 100.0%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
 | macOS Swift app | `1/8 = 12.5%` | `4/8 = 50.0%` | `4/8 = 50.0%` |
 | iOS app/extension | `4/8 = 50.0%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
 
@@ -1674,7 +1689,7 @@ The supporting manifests remain shared:
 - architecture traceability: [.github/architecture_traceability.yaml](.github/architecture_traceability.yaml)
 
 This baseline also includes explicit traceability for the layered reconnect contract where the lower overlay transport can remain connected while SecureLink is still re-handshaking, Linux Swift foreground `myudp` recovery probes that retain the independent peer endpoint until its protected reply is drained and the client has emitted a Core CONTROL or IDLE acknowledgement, allow a repeated-loss probe's first protected application record through its test-owned subprocess deadline, survive two independently dropped protected application copies and a delayed, duplicated, reverse-ordered multi-chunk reply while returning Core CONTROL and IDLE effects in the same protected exchange, and a macOS mixed Swift/Python `myudp` matrix that recovers a full CONTROL missing list by splitting retransmissions into wire-valid DATA batches. A valid wire-sequential end-to-end counter-rollover probe remains an explicit qualification gap.
-Linux Swift Admin additionally publishes one redacted Core/adapter peer projection with lifecycle/readiness, epoch/session diagnostics, retry presentation, and protected-frame counters/totals. The projection deliberately excludes PSKs, nonces, keys, and plaintext; broader Python peer-traffic, passed/dropped-frame, and failure-category parity remains tracked as an explicit Linux Swift gap.
+Linux Swift Admin additionally publishes one redacted Core/adapter peer projection with lifecycle/readiness, epoch/session diagnostics, retry presentation, protected-frame counters/totals, sampled ChannelMux RX/TX rates, connection-row-derived TCP/UDP/TUN counts, and the shared delay-throttle summary. The projection deliberately excludes PSKs, nonces, keys, and plaintext; broader Python failure-category detail remains tracked as an explicit Linux Swift gap.
 Its silent-peer qualification records a replacement authenticated snapshot before retired protected data withdraws that epoch.
 It also covers the dedicated TUN / Routing admin surface for global-connectivity name-resolution reporting and the ChannelMux ICMP breadcrumb lane used to correlate local-TUN read, overlay send/receive, and local-TUN write decisions during packet-loss investigations. Python and iOS regression coverage additionally guards the shared ChannelMux, packet-flow, and ICMP/name-resolution admission boundaries so no TUN-originated traffic is emitted before the layered connected state is reached. Once ready, TUN reads remain unthrottled; only completed ChannelMux TUN data is dropped immediately before SecureLink when estimated transport delay reaches two seconds.
 The authenticated TUN-helper protocol-v1 header and JSON control envelope are Core-owned, so a Python runtime can use the same local helper wire contract with compiled Linux and macOS resource owners instead of accepting a platform-specific control ABI. Core also owns canonical JSON serialization for Linux and Apple Admin documents, while service catalogs retain their protocol key order. Each selector rebuilds when the compiled helper's embedded Git identity is dirty, absent, or mismatched; authenticated macOS clients receive helper-originated packet/event frames and use the Python-compatible subnet-peer default when a tunnel gateway is omitted.
@@ -1692,9 +1707,9 @@ Desktop-only process ownership is reviewed across macOS and Linux; iOS extension
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `82` | `0` | `82` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `88` | `0` | `88` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `34` | `34` |
-| Total parity-oriented evidence | Sum of the lanes above | `94` | `154` | `248` |
+| Total parity-oriented evidence | Sum of the lanes above | `100` | `154` | `254` |
 
 Important caveat:
 
@@ -1704,7 +1719,9 @@ Important caveat:
 
 ### CI split note
 
-- Routine Linux CI builds the Swift runner, runs the focused `ObstacleBridgeLinuxLiveRuntimeTests`, then runs the 28 Linux-Swift integration scenarios with `pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only" -k "linux_swift"`. A separate runtime-interop matrix invokes the same basic `test_overlay_e2e.py` catalog as Python↔Python and Python-listener↔Linux-native-client, retaining each pairing's child-process logs as artifacts and checking native service-byte projection; it also drives five concurrent 65,535-byte TCP records through the native myUDP path to qualify wire-safe ChannelMux segmentation above the default send window. Listener service checks read the common `/api/peers` wrapper before inspecting peer rows. The broad 193-case overlay lifecycle suite is a manual workflow-dispatch qualification command so unrelated socket/process shutdown waits do not delay ordinary PR feedback.
+- Routine Linux CI builds the Swift runner, runs the focused `ObstacleBridgeLinuxLiveRuntimeTests` and `ObstacleBridgeChannelMuxEgressSequencerTests`, then runs the 28 Linux-Swift integration scenarios with `pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only" -k "linux_swift"`. The macOS Swift-backed lane also runs the Core egress-concurrency suite before device qualification. A separate runtime-interop matrix invokes the same basic `test_overlay_e2e.py` catalog as Python↔Python and Python-listener↔Linux-native-client, retaining each pairing's child-process logs as artifacts and checking native service-byte projection; it also drives five concurrent 65,535-byte TCP records through the native myUDP path to qualify wire-safe ChannelMux segmentation above the default send window. Listener service checks read the common `/api/peers` wrapper before inspecting peer rows. The broad 193-case overlay lifecycle suite is a manual workflow-dispatch qualification command so unrelated socket/process shutdown waits do not delay ordinary PR feedback.
+
+- A repository-wide Swift concurrency guard requires changed `@unchecked Sendable` collection owners to declare actor/lock/serial ownership and concurrency-test evidence; macOS runs the shared Core collection suite with Thread Sanitizer.
 - Linux runs the elevated TUN subset separately with `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`
 - The manual `run_linux_swift_privileged_tun` integration-workflow input targets an `obstaclebridge-privileged` self-hosted Linux runner and executes `OBSTACLEBRIDGE_PRIVILEGED_TUN=1 ./scripts/run_linux_swift_privileged_tun_tests.sh`, which builds the product and qualifies native Swift TUN, route, DNS, and hook lifecycle effects.
 - macOS runs the Python elevated TUN matrix separately with `./scripts/run_macos_elevated_tests.sh`. The default Swift elevated matrix, `./scripts/run_macos_swift_elevated_tests.sh`, is the supported functional fallback coverage: it builds once, proves real Swift-owned `utun`, route/DNS hook apply/remove, and packet carry through the bundled HostRunner’s automatic XPC-or-Darwin-loopback choice. Local operators can use `--interactive-elevation` for the Terminal administrator prompt; unattended CI uses scoped passwordless `sudo`. Packaged-SMAppService/XPC activation, installed-artifact lifecycle, and XPC helper-death scenarios are explicitly excluded while the known macOS 26 BTM `fullPath is nil` blocker remains unresolved. They run only with `--run-packaged-xpc-qualification` as focused resolution evidence and do not make the routine functional result fail. The Swift wrapper reuses one complete app build for selected tests, monitors cold builds by compiler/process-tree activity rather than a fixed build deadline, and allows 300 seconds per live test. Hosted macOS skips the host-runner packet-injection lane because it cannot grant the required TUN permission, and skips the Python inline route/DNS mutation case before any hook runs because changing hosted-runner network state can sever the Actions control connection; both remain required on authorized local macOS. The Python elevated matrix runs every privileged case in a separate job, while the wrapper emits unbuffered start/result lines and final host diagnostics; the affected job name remains visible even if a hosted runner loses its log connection.
@@ -1772,6 +1789,12 @@ boundaries, timer, status statistics,
 session summaries, worker state, telemetry state, TUN-helper state, peer-stack
 state, runtime-metrics/health projection,
 connections, peer inventory, build-info, security-advisor, logging, ChannelMux,
+and TUN callbacks. myUDP receive and unconfirmed retransmission work use
+bounded event-loop FIFOs so a congested window or multi-chunk batch yields
+between fixed-size work slices.
+Python UDP logging, including the supervised private worker capability path,
+is callback-owned and does not retain a worker in a blocking socket receive
+loop.
 and TUN boundaries are displayed as event-loop occupancy estimates. Inclusive
 queue, transaction, payload-batch, TCP-message-dispatch, or TUN-payload wrappers that span separately measurable subtasks are not
 shown as uninterrupted-work signals. The
@@ -1815,6 +1838,7 @@ pass over its bounded aggregate set.
 - Run the regular pytest suite during normal development to cover unit, integration, and overlay harness regression paths.
 - Use the parallel overlay harness for frequent end-to-end validation when transport and socket behavior matter most.
 - Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
+- Keep the throttled TCP-overlay fairness case in that flow: four synchronized 100 kB downloads sharing one 10 kB/s relay must expose any channel that monopolizes the aggregate path; the shared Python/Swift persistent per-source round robin schedules every TCP, UDP, TUN, and control mux record.
 - Keep Python TCP, QUIC, and WebSocket reconnect cleanup covered through stopped-event-loop teardown so supervisor restarts do not emit secondary coroutine-close exceptions.
 - Keep UDP multi-peer resolution coverage aligned with dual-stack behavior, including `prefer-ipv6` retention across immediate send errors and IPv4 fallback through IPv4-mapped sends when the active socket is IPv6.
 - Keep the Python and Swift `prefer-ipv6` peer-resolution contract pinned for native IPv4 literals: resolution should keep the IPv4 host identity intact, while IPv4-mapped notation is reserved for IPv6 socket send compatibility.

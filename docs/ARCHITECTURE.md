@@ -17,6 +17,11 @@ The current runtime can be understood in eight layers:
 
 The peer-address protocol is a delivered transport-adjacent layer. It obtains the address observed by the connected peer before optional SecureLink processing, and does not change connection readiness. SecureLink remains a delivered runtime slice above it and below the compression/reliability path.
 
+The cross-product Swift receive-ownership inventory and the remaining
+readiness conversions are maintained in [Swift Asynchronous I/O Boundary
+Plan](SWIFT_ASYNC_IO_DESIGN.md). Long-lived receivers use a callback/readiness
+owner; a bounded bootstrap read is not a substitute for one.
+
 ## Desktop process isolation and exchangeability
 
 ### Status at a glance
@@ -1195,6 +1200,7 @@ Main contribution:
 Important behaviors:
 
 - multiple concurrent TCP channels on one peer
+- fair progress for ready TCP, UDP, and TUN sources when one throttled stream-overlay path is shared, using the common peer-scoped egress sequencer for one-message round-robin turns over bounded source queues for every outbound mux record (`OPEN`, `DATA`, fragments, `CLOSE`, and control) so a single bulk response cannot monopolize the path; Swift Linux service egress and Apple TCP/WebSocket/QUIC owners use asynchronous one-record drains at this boundary
 - mixed UDP and TCP services on one peer
 - per-peer isolation in listener mode
 - cleanup on disconnect

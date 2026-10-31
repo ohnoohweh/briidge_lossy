@@ -37,6 +37,8 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     }
 
     public func exchange(_ frame: ObstacleBridgeChannelMuxFrame) throws -> ObstacleBridgeChannelMuxFrame {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.channelMuxCallback, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         guard runtime.connectionEpoch == epoch, runtime.status().appReady else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
         let duplex: Bool
         do { duplex = try replyPolicy.beginExchange(frame) }
@@ -63,6 +65,8 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     /// forced into the legacy request/reply matcher merely because it has no
     /// immediate ChannelMux acknowledgement to send.
     public func sendUnsolicited(_ frame: ObstacleBridgeChannelMuxFrame) throws {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.channelMuxCallback, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         guard runtime.connectionEpoch == epoch, runtime.status().appReady else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
         try session.sendOneWay(protectedWire(for: frame))
     }
@@ -77,6 +81,8 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     /// The sole ChannelMux decode boundary for this epoch. Compression belongs
     /// to Core; the Linux wrapper only places it around the transport record.
     public func decodeInbound(_ wire: Data) throws -> ObstacleBridgeChannelMuxFrame {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.channelMuxCallback, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         let encoded = try ObstacleBridgeChannelMuxFrameCodec.decode(wire)
         do {
             let result = try ObstacleBridgeMuxCompression.unprotect(wire)
@@ -85,7 +91,7 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
             return decoded
         } catch {
             if encoded.messageType >= ObstacleBridgeMuxCompression.compressedFlag {
-                compressionTelemetry.recordRejectedInbound(bodyBytes: encoded.body.count)
+                compressionTelemetry.recordFailedDecompression(bodyBytes: encoded.body.count)
             }
             throw error
         }
@@ -94,6 +100,8 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     /// Called only by the configured session's receive worker after it has
     /// authenticated and decoded a complete ChannelMux record.
     public func receive(_ inbound: ObstacleBridgeChannelMuxFrame) {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.channelMuxCallback, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         guard let frame = reassembledControlFrame(from: inbound) else { return }
         lock.lock()
         if replyPolicy.matchesAwaitedReply(frame) {

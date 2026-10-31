@@ -171,6 +171,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminWebSupport.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxEgressSequencer.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCompatibilityCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompression.swift"),

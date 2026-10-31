@@ -75,6 +75,8 @@ public struct ObstacleBridgeMuxCompressionSnapshot: Codable, Equatable, Sendable
     public let uncompressedFramesReceivedTotal: UInt64
     public let uncompressedBytesSentTotal: UInt64
     public let uncompressedBytesReceivedTotal: UInt64
+    public let decompressOKTotal: UInt64
+    public let decompressFailTotal: UInt64
     public let rejectedFramesTotal: UInt64
     public let rejectedBytesTotal: UInt64
 }
@@ -100,6 +102,8 @@ public final class ObstacleBridgeMuxCompressionTelemetry: @unchecked Sendable {
     private var uncompressedFramesReceivedTotal: UInt64 = 0
     private var uncompressedBytesSentTotal: UInt64 = 0
     private var uncompressedBytesReceivedTotal: UInt64 = 0
+    private var decompressOKTotal: UInt64 = 0
+    private var decompressFailTotal: UInt64 = 0
     private var rejectedFramesTotal: UInt64 = 0
     private var rejectedBytesTotal: UInt64 = 0
 
@@ -129,6 +133,7 @@ public final class ObstacleBridgeMuxCompressionTelemetry: @unchecked Sendable {
             compressedFramesReceivedTotal &+= 1
             compressedInputBytesReceivedTotal &+= input
             compressedOutputBytesReceivedTotal &+= output
+            decompressOKTotal &+= 1
         }
         else { uncompressedFramesReceivedTotal &+= 1; uncompressedBytesReceivedTotal &+= output }
     }
@@ -136,6 +141,16 @@ public final class ObstacleBridgeMuxCompressionTelemetry: @unchecked Sendable {
     public func recordRejectedInbound(bodyBytes: Int) {
         lock.lock(); defer { lock.unlock() }
         rejectedFramesTotal &+= 1; rejectedBytesTotal &+= UInt64(max(0, bodyBytes))
+    }
+
+    /// Records a compressed record whose decompression could not be completed.
+    /// This remains distinct from generic rejected frames so Admin can render
+    /// the Python-compatible decompression-failure counter accurately.
+    public func recordFailedDecompression(bodyBytes: Int) {
+        lock.lock(); defer { lock.unlock() }
+        decompressFailTotal &+= 1
+        rejectedFramesTotal &+= 1
+        rejectedBytesTotal &+= UInt64(max(0, bodyBytes))
     }
 
     public func snapshot() -> ObstacleBridgeMuxCompressionSnapshot {
@@ -152,7 +167,9 @@ public final class ObstacleBridgeMuxCompressionTelemetry: @unchecked Sendable {
             compressedOutputBytesReceivedTotal: compressedOutputBytesReceivedTotal,
             uncompressedFramesSentTotal: uncompressedFramesSentTotal,
             uncompressedFramesReceivedTotal: uncompressedFramesReceivedTotal, uncompressedBytesSentTotal: uncompressedBytesSentTotal,
-            uncompressedBytesReceivedTotal: uncompressedBytesReceivedTotal, rejectedFramesTotal: rejectedFramesTotal,
+            uncompressedBytesReceivedTotal: uncompressedBytesReceivedTotal,
+            decompressOKTotal: decompressOKTotal, decompressFailTotal: decompressFailTotal,
+            rejectedFramesTotal: rejectedFramesTotal,
             rejectedBytesTotal: rejectedBytesTotal
         )
     }

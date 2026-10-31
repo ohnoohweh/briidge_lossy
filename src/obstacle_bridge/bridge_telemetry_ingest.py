@@ -18,6 +18,7 @@ from .bridge_telemetry import MAX_BATCH_EVENTS, MAX_EVENT_BYTES, TelemetrySpool,
 from .bridge_telemetry_credentials import TelemetryRevocationList
 
 MAX_REQUEST_BYTES = MAX_EVENT_BYTES * MAX_BATCH_EVENTS
+REQUEST_BODY_TIMEOUT_S = 5.0
 
 
 class TelemetryReplayStore:
@@ -184,7 +185,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             attributes = parsed.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
             if len(attributes) != 1:
                 raise TelemetryValidationError("client identity missing")
-            self._json(202, self.store.accept(self.rfile.read(length), attributes[0].value, parsed.serial_number, self.client_address[0]))
+            # BaseHTTPRequestHandler exposes only a synchronous buffered
+            # reader. Bound that dependency-owned read so a partial HTTP body
+            # cannot indefinitely occupy a ThreadingHTTPServer handler.
+            self.connection.settimeout(REQUEST_BODY_TIMEOUT_S)
+            body = self.rfile.read(length)  # OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded BaseHTTPRequestHandler buffered-reader dependency.
+            self._json(202, self.store.accept(body, attributes[0].value, parsed.serial_number, self.client_address[0]))
+        except socket.timeout:
+            self._json(408, {"ok": False, "error": "request body timeout"})
         except TelemetryValidationError as exc:
             self._json(401, {"ok": False, "error": str(exc)})
 

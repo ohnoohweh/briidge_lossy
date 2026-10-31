@@ -200,6 +200,30 @@ def test_mtls_ingest_accepts_matching_client_identity(tmp_path):
         server.shutdown(); thread.join(timeout=2); server.server_close()
 
 
+def test_mtls_ingest_rejects_incomplete_body_with_timeout(tmp_path, monkeypatch):
+    ca_key, ca_cert = generate_ca("test-ca")
+    server_key, server_cert = issue_server_certificate(ca_key, ca_cert, "127.0.0.1")
+    client_key, client_cert, _ = issue_client_certificate(ca_key, ca_cert, "install-01")
+    paths = {name: tmp_path / name for name in ("ca.pem", "server.key", "server.pem", "client.key", "client.pem")}
+    paths["ca.pem"].write_bytes(ca_cert); paths["server.key"].write_bytes(server_key); paths["server.pem"].write_bytes(server_cert)
+    paths["client.key"].write_bytes(client_key); paths["client.pem"].write_bytes(client_cert)
+    monkeypatch.setattr(ingest, "REQUEST_BODY_TIMEOUT_S", 0.05)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ingest._Handler)
+    server.RequestHandlerClass.store = TelemetryIngestStore(str(tmp_path / "spool"), TelemetryRevocationList(str(tmp_path / "revoke.json")))
+    server.socket = build_tls_context(str(paths["server.pem"]), str(paths["server.key"]), str(paths["ca.pem"])).wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever); thread.start()
+    try:
+        context = ssl.create_default_context(cafile=str(paths["ca.pem"])); context.check_hostname = False
+        context.load_cert_chain(str(paths["client.pem"]), str(paths["client.key"]))
+        with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=2) as raw:
+            with context.wrap_socket(raw, server_hostname="127.0.0.1") as connection:
+                connection.settimeout(1)
+                connection.sendall(b"POST /v1/telemetry/batches HTTP/1.1\r\nHost: localhost\r\nContent-Length: 16\r\n\r\n")
+                assert b" 408 " in connection.recv(4096)
+    finally:
+        server.shutdown(); thread.join(timeout=2); server.server_close()
+
+
 def test_uploader_requires_https_and_respects_backoff(tmp_path):
     spool = TelemetrySpool(str(tmp_path / "spool")); assert spool.append(VECTORS["event"])
     with pytest.raises(ValueError):
