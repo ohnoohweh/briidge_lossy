@@ -14,6 +14,11 @@ import Foundation
 
 enum ObstacleBridgeTunHelperXPC {
     static let requestTimeoutSeconds: TimeInterval = 15.0
+    private static let reachabilityLock = NSLock()
+    private static var cachedReachability: [String: Any] = [
+        "ok": false,
+        "error": "helper XPC reachability check pending",
+    ]
 
     static func interface() -> NSXPCInterface {
         NSXPCInterface(with: ObstacleBridgeTunHelperXPCServicing.self)
@@ -27,42 +32,46 @@ enum ObstacleBridgeTunHelperXPC {
         machServiceName: String = ObstacleBridgeMacOSTunHelperService.xpcMachServiceName,
         timeout: TimeInterval = 0.25
     ) -> [String: Any] {
+        ping(machServiceName: machServiceName, timeout: timeout) { _ in }
+        reachabilityLock.lock()
+        defer { reachabilityLock.unlock() }
+        return cachedReachability
+    }
+
+    static func ping(
+        machServiceName: String = ObstacleBridgeMacOSTunHelperService.xpcMachServiceName,
+        timeout: TimeInterval = 0.25,
+        completion: @escaping ([String: Any]) -> Void
+    ) {
         let connection = NSXPCConnection(machServiceName: machServiceName, options: [.privileged])
         connection.remoteObjectInterface = interface()
-        defer {
+        let finishLock = NSLock()
+        var finished = false
+        func finish(_ result: [String: Any]) {
+            finishLock.lock()
+            defer { finishLock.unlock() }
+            guard !finished else { return }
+            finished = true
+            reachabilityLock.lock()
+            cachedReachability = result
+            reachabilityLock.unlock()
             connection.invalidate()
+            completion(result)
         }
         connection.resume()
-        let semaphore = DispatchSemaphore(value: 0)
-        var response: [String: Any] = [:]
-        var lastError = ""
         let proxy = connection.remoteObjectProxyWithErrorHandler { error in
-            lastError = error.localizedDescription
-            semaphore.signal()
+            finish(["ok": false, "error": error.localizedDescription])
         } as? ObstacleBridgeTunHelperXPCServicing
         guard let proxy else {
-            return [
-                "ok": false,
-                "error": "helper XPC proxy unavailable",
-            ]
+            finish(["ok": false, "error": "helper XPC proxy unavailable"])
+            return
         }
         proxy.ping { payload in
-            response = payload as? [String: Any] ?? [:]
-            semaphore.signal()
+            finish(payload as? [String: Any] ?? ["ok": false, "error": "helper XPC ping returned invalid payload"])
         }
-        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
-            return [
-                "ok": false,
-                "error": "helper XPC ping timed out",
-            ]
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+            finish(["ok": false, "error": "helper XPC ping timed out"])
         }
-        if !lastError.isEmpty {
-            return [
-                "ok": false,
-                "error": lastError,
-            ]
-        }
-        return response
     }
 }
 
@@ -100,63 +109,66 @@ final class ObstacleBridgeNSXPCTunHelperCommandTransport: ObstacleBridgeTunHelpe
     }
 
     func send(command: ObstacleBridgeTunHelperCommand, payload: [String: Any]) throws -> [String: Any] {
+        throw ObstacleBridgeTunHelperCommandError.invalidResponse("XPC commands require completion-based lifecycle ownership")
+    }
+
+    func sendPacketToHelper(_ packet: Data) throws -> [String: Any] {
+        throw ObstacleBridgeTunHelperCommandError.invalidResponse("XPC packet writes require completion-based lifecycle ownership")
+    }
+
+    func send(command: ObstacleBridgeTunHelperCommand, payload: [String: Any], completion: @escaping (Result<[String: Any], Error>) -> Void) {
         let sequence = nextOperationSequence()
         let envelope = ObstacleBridgeTunHelperCommandEnvelope(
             command: command,
             payload: payload,
             sequence: sequence
         )
-        let response = try sendRequest { proxy, reply in
+        sendRequest({ proxy, reply in
             proxy.handleCommand(envelope.xpcPayload() as NSDictionary, withReply: reply)
-        }
-        try validateResponse(
-            response,
-            expectedOperation: command.rawValue,
-            expectedSequence: sequence,
-            packetResponse: false
-        )
-        return response
+        }, expectedOperation: command.rawValue, expectedSequence: sequence, packetResponse: false, completion: completion)
     }
 
-    func sendPacketToHelper(_ packet: Data) throws -> [String: Any] {
+    func sendPacketToHelper(_ packet: Data, completion: @escaping (Result<[String: Any], Error>) -> Void) {
         let sequence = nextOperationSequence()
         let envelope = ObstacleBridgeTunHelperPacketEnvelope.packetToHelper(packet, sequence: sequence)
-        let response = try sendRequest { proxy, reply in
+        sendRequest({ proxy, reply in
             proxy.handlePacketToHelper(envelope.xpcPayload() as NSDictionary, withReply: reply)
-        }
-        try validateResponse(
-            response,
-            expectedOperation: ObstacleBridgeTunHelperCommand.writePacket.rawValue,
-            expectedSequence: sequence,
-            packetResponse: true
-        )
-        return response
+        }, expectedOperation: ObstacleBridgeTunHelperCommand.writePacket.rawValue, expectedSequence: sequence, packetResponse: true, completion: completion)
     }
 
     private func sendRequest(
-        _ sender: (ObstacleBridgeTunHelperXPCServicing, @escaping (NSDictionary) -> Void) -> Void
-    ) throws -> [String: Any] {
-        let semaphore = DispatchSemaphore(value: 0)
-        var response: [String: Any] = [:]
-        var failure = ""
+        _ sender: (ObstacleBridgeTunHelperXPCServicing, @escaping (NSDictionary) -> Void) -> Void,
+        expectedOperation: String,
+        expectedSequence: Int,
+        packetResponse: Bool,
+        completion: @escaping (Result<[String: Any], Error>) -> Void
+    ) {
+        let completionLock = NSLock()
+        var completed = false
+        func finish(_ result: Result<[String: Any], Error>) {
+            completionLock.lock()
+            defer { completionLock.unlock() }
+            guard !completed else { return }
+            completed = true
+            completion(result)
+        }
         let proxy = connection.remoteObjectProxyWithErrorHandler { error in
-            failure = error.localizedDescription
-            semaphore.signal()
+            finish(.failure(ObstacleBridgeTunHelperCommandError.invalidResponse(error.localizedDescription)))
         } as? ObstacleBridgeTunHelperXPCServicing
         guard let proxy else {
-            throw ObstacleBridgeTunHelperCommandError.invalidResponse("helper XPC proxy unavailable")
+            finish(.failure(ObstacleBridgeTunHelperCommandError.invalidResponse("helper XPC proxy unavailable")))
+            return
         }
         sender(proxy) { payload in
-            response = payload as? [String: Any] ?? [:]
-            semaphore.signal()
+            let response = payload as? [String: Any] ?? [:]
+            do {
+                try self.validateResponse(response, expectedOperation: expectedOperation, expectedSequence: expectedSequence, packetResponse: packetResponse)
+                finish(.success(response))
+            } catch { finish(.failure(error)) }
         }
-        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
-            throw ObstacleBridgeTunHelperCommandError.invalidResponse("helper XPC request timed out")
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+            finish(.failure(ObstacleBridgeTunHelperCommandError.invalidResponse("helper XPC request timed out")))
         }
-        if !failure.isEmpty {
-            throw ObstacleBridgeTunHelperCommandError.invalidResponse(failure)
-        }
-        return response
     }
 
     private func validateResponse(
@@ -219,6 +231,93 @@ final class ObstacleBridgeNSXPCTunHelperCommandTransport: ObstacleBridgeTunHelpe
             return error
         }
         return defaultMessage
+    }
+}
+
+/// Completion-owned client for the privileged helper.  `ObstacleBridgeHostRunner`
+/// uses the completion methods below on its service-state queue; the inherited
+/// synchronous witnesses reject use so XPC replies can never block that queue.
+final class ObstacleBridgeAsyncXPCTunHelperClient: ObstacleBridgeTunHelperClienting {
+    let transportKind: String
+    private let transport: ObstacleBridgeNSXPCTunHelperCommandTransport
+    private let stateLock = NSLock()
+    private var snapshot = ObstacleBridgeTunHelperRuntimeSnapshot()
+
+    init(transport: ObstacleBridgeNSXPCTunHelperCommandTransport, transportKind: String = "xpc") {
+        self.transport = transport
+        self.transportKind = transportKind
+    }
+
+    var requestedIfname: String { stateLock.withLock { snapshot.requestedIfname } }
+    var actualIfname: String { stateLock.withLock { snapshot.ifname } }
+    var mtu: Int { stateLock.withLock { snapshot.mtu } }
+    var isOpen: Bool { stateLock.withLock { snapshot.opened } }
+    var runtimeSnapshot: ObstacleBridgeTunHelperRuntimeSnapshot { stateLock.withLock { snapshot } }
+
+    func openTun(_ request: ObstacleBridgeTunHelperOpenRequest, completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        send(command: .openTun, payload: request.payload(), completion: completion)
+    }
+
+    func applyNetwork(action: String, argv: [String], env: [String: String], completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        send(command: .applyNetwork, payload: ["action": action, "argv": argv, "env": env], completion: completion)
+    }
+
+    func removeNetwork(action: String, argv: [String], env: [String: String], completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        send(command: .removeNetwork, payload: ["action": action, "argv": argv, "env": env], completion: completion)
+    }
+
+    func writePacket(_ packet: Data, completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        transport.sendPacketToHelper(packet) { [weak self] result in
+            completion(self?.apply(result) ?? .failure(ObstacleBridgeTunHelperCommandError.invalidResponse("XPC helper client released")))
+        }
+    }
+
+    func stop(completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        send(command: .stop, payload: [:], completion: completion)
+    }
+
+    func recordFailure(stage: String, error: String) {
+        stateLock.withLock { snapshot.markFailure(stage: stage, error: error) }
+    }
+
+    func openTun(_ request: ObstacleBridgeTunHelperOpenRequest) throws -> [String: Any] { throw synchronousUseError() }
+    func applyNetwork(action: String, argv: [String], env: [String: String]) { recordFailure(stage: "apply_network", error: synchronousUseError().localizedDescription) }
+    func removeNetwork(action: String, argv: [String], env: [String: String]) { recordFailure(stage: "remove_network", error: synchronousUseError().localizedDescription) }
+    func writePacket(_ packet: Data) throws { throw synchronousUseError() }
+    func stop() { recordFailure(stage: "stop", error: synchronousUseError().localizedDescription) }
+
+    private func send(command: ObstacleBridgeTunHelperCommand, payload: [String: Any], completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        transport.send(command: command, payload: payload) { [weak self] result in
+            completion(self?.apply(result) ?? .failure(ObstacleBridgeTunHelperCommandError.invalidResponse("XPC helper client released")))
+        }
+    }
+
+    private func apply(_ result: Result<[String: Any], Error>) -> Result<[String: Any], Error> {
+        switch result {
+        case .failure(let error): return .failure(error)
+        case .success(let response):
+            guard let payload = response["payload"] as? [String: Any] else {
+                return .failure(ObstacleBridgeTunHelperCommandError.invalidResponse("helper response missing payload"))
+            }
+            stateLock.withLock { snapshot = Self.snapshot(from: payload, fallback: snapshot) }
+            return .success(payload)
+        }
+    }
+
+    private func synchronousUseError() -> ObstacleBridgeTunHelperCommandError {
+        .invalidResponse("XPC helper commands require completion-based lifecycle ownership")
+    }
+
+    private static func snapshot(from payload: [String: Any], fallback: ObstacleBridgeTunHelperRuntimeSnapshot) -> ObstacleBridgeTunHelperRuntimeSnapshot {
+        var value = fallback
+        value.backend = payload["backend"] as? String ?? value.backend
+        value.requestedIfname = payload["requested_ifname"] as? String ?? value.requestedIfname
+        value.ifname = payload["ifname"] as? String ?? value.ifname
+        value.mtu = payload["mtu"] as? Int ?? value.mtu
+        value.opened = payload["opened"] as? Bool ?? value.opened
+        value.networkApplied = payload["network_applied"] as? Bool ?? value.networkApplied
+        value.applyCalls = payload["apply_calls"] as? Int ?? value.applyCalls
+        return value
     }
 }
 

@@ -37,40 +37,10 @@ Concurrency ownership is checked independently of the I/O mechanism. Any changed
 
 ## Remaining conversion work
 
-The following boundaries are intentionally not described as fallbacks: their
-underlying POSIX, NIO, or XPC dependency has an asynchronous boundary, so they
-must be converted rather than retained indefinitely.
-
-The desktop logging supervisor retains a nonblocking datagram read source for
-log-query replies. Queries are request-ID correlated, completed by a callback
-or an independent deadline, and fenced by the active worker generation; the
-synchronous Admin projection returns its most recently completed bounded
-snapshot while requesting a refresh and never waits for the collector.
-
-The Linux native peer child performs its authenticated inherited-descriptor
-bootstrap before installing a serial nonblocking descriptor-readiness owner.
-That owner retains partial common-OBIP frames in the shared incremental decoder
-and generation-fences every post-bootstrap data and control frame.
-
-The Linux native Admin child transfers each authenticated live WebSocket to a
-per-client nonblocking read owner. It retains partial masked frames, queues
-partial writes behind write readiness, and uses an independent topic timer
-rather than holding an HTTP worker in a polling loop.
-
-| Boundary | Current synchronous operation | Required replacement |
-| --- | --- | --- |
-| Linux TCP and TLS-WebSocket listener admission | framed SecureLink and HTTP-upgrade reads | listener-owned readiness state machine with incremental HTTP/WebSocket/OBIP buffers |
-| Linux foreground Admin web server | live-WebSocket polling loops | ordinary HTTP requests use per-client readiness sources with bounded reassembly; replace live polling with a timer-driven live-topic scheduler |
-| Linux in-process HTTP/SOCKS proxy client parsing | bounded `poll` compatibility waits with `MSG_DONTWAIT` reads | per-client readiness state machine with incremental HTTP/SOCKS buffers; the duplex relay already owns nonblocking read/write readiness and bounded output queues |
-| Linux native Admin worker IPC | bounded parent-RPC request/reply reads after bootstrap | descriptor readiness source with generation-fenced incremental OBIP decoder and callback completion |
-| Linux TUN helper control IPC | synchronous request/reply reads | callback-based correlated control requests; preserve independent request deadline |
-| macOS XPC helper control | semaphore wait around XPC reply | async XPC command completion propagated to the caller's lifecycle owner |
-
-No remaining row above is a permitted synchronous fallback: each boundary owns a
-descriptor or framework callback that can expose readiness/completion.  The
-only allowed bounded synchronous operation is bootstrap validation before an
-event-loop owner exists, with a deadline and generation fence; it must not be
-used for a long-lived receiver.
+None. Long-lived Linux descriptor owners use readiness callbacks, and macOS XPC
+helper ping and command completions are forwarded to their lifecycle owner with
+an independent deadline. Bootstrap validation remains bounded and may not be
+used as a long-lived receiver.
 
 ## Narrow bootstrap exception
 
