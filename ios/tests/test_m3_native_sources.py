@@ -1188,6 +1188,19 @@ def test_macos_app_main_source_exists() -> None:
     assert "--prerelease" in release_workflow
 
 
+def test_macos_xpc_helper_transport_uses_completion_callbacks() -> None:
+    xpc_transport = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
+
+    assert "static func ping(" in xpc_transport
+    assert "completion: @escaping ([String: Any]) -> Void" in xpc_transport
+    assert "func send(command: ObstacleBridgeTunHelperCommand, payload: [String: Any], completion:" in xpc_transport
+    assert "func sendPacketToHelper(_ packet: Data, completion:" in xpc_transport
+    assert "final class ObstacleBridgeAsyncXPCTunHelperClient" in xpc_transport
+    assert "XPC commands require completion-based lifecycle ownership" in xpc_transport
+    assert "DispatchSemaphore" not in xpc_transport
+    assert "semaphore.wait" not in xpc_transport
+
+
 def test_websocket_payload_codec_has_one_core_owner() -> None:
     core = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketPayloadCodec.swift").read_text(encoding="utf-8")
 

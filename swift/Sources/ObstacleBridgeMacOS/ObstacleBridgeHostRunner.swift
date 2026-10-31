@@ -365,7 +365,7 @@ final class ObstacleBridgeHostRunner {
                 packetSink: packetSink,
                 eventSink: eventSink
             )
-            return ObstacleBridgeLoopbackTunHelperClient(transport: transport, transportKind: "xpc")
+            return ObstacleBridgeAsyncXPCTunHelperClient(transport: transport, transportKind: "xpc")
         }
 #endif
         return makeLoopbackMacOSTunHelperClient(queue: queue, packetSink: packetSink, eventSink: eventSink)
@@ -2474,7 +2474,16 @@ final class ObstacleBridgeHostRunner {
            let tunService = ownServerSpecs.first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }) {
             runMacOSTunLifecycleHook(for: tunService, event: "on_stopped")
         }
-        macOSTunHelperClient?.stop()
+        if let xpcClient = macOSTunHelperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
+            xpcClient.stop { [weak self, xpcClient] _ in
+                self?.serviceStateQueue.async {
+                    guard let self else { return }
+                    self.macOSTunHelperRuntimeSnapshot = xpcClient.runtimeSnapshot
+                }
+            }
+        } else {
+            macOSTunHelperClient?.stop()
+        }
         if let client = macOSTunHelperClient {
             macOSTunHelperTransportKind = client.transportKind
             macOSTunHelperRuntimeSnapshot = client.runtimeSnapshot
@@ -2941,7 +2950,16 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func prepareSharedOverlayBootstrap() {
-        macOSTunHelperClient?.stop()
+        if let xpcClient = macOSTunHelperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
+            xpcClient.stop { [weak self, xpcClient] _ in
+                self?.serviceStateQueue.async {
+                    guard let self else { return }
+                    self.macOSTunHelperRuntimeSnapshot = xpcClient.runtimeSnapshot
+                }
+            }
+        } else {
+            macOSTunHelperClient?.stop()
+        }
         if let client = macOSTunHelperClient {
             macOSTunHelperTransportKind = client.transportKind
         }
@@ -3402,6 +3420,26 @@ final class ObstacleBridgeHostRunner {
             }
         )
         macOSTunHelperTransportKind = helperClient.transportKind
+        if let xpcClient = helperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
+            xpcClient.openTun(ObstacleBridgeTunHelperOpenRequest(requestedIfname: ifname, mtu: mtu)) { [weak self, xpcClient] result in
+                self?.serviceStateQueue.async {
+                    guard let self else { return }
+                    switch result {
+                    case .success:
+                        self.macOSTunHelperClient = xpcClient
+                        self.macOSTunHelperTransportKind = xpcClient.transportKind
+                        self.macOSTunHelperRuntimeSnapshot = xpcClient.runtimeSnapshot
+                        self.macOSTunChannelConnectedHookFired = false
+                        self.runMacOSTunLifecycleHook(for: tunService, event: "on_created")
+                    case .failure(let error):
+                        self.recordOperationalLog(event: "macos_utun_start_failed", level: "ERROR", levelNumber: 40)
+                        xpcClient.recordFailure(stage: "macos_utun_start", error: error.localizedDescription)
+                        self.macOSTunHelperRuntimeSnapshot = xpcClient.runtimeSnapshot
+                    }
+                }
+            }
+            return
+        }
         do {
             _ = try helperClient.openTun(ObstacleBridgeTunHelperOpenRequest(
                 requestedIfname: ifname,
@@ -3861,6 +3899,23 @@ final class ObstacleBridgeHostRunner {
             }
         }
         let helperEnvSnapshot = Self.macOSTunHelperHookEnvSnapshot(from: env)
+        if let xpcClient = macOSTunHelperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
+            let completed: (Result<[String: Any], Error>) -> Void = { [weak self, xpcClient] result in
+                self?.serviceStateQueue.async {
+                    guard let self else { return }
+                    if case .failure(let error) = result {
+                        xpcClient.recordFailure(stage: event == "on_stopped" ? "remove_network" : "apply_network", error: error.localizedDescription)
+                    }
+                    self.macOSTunHelperRuntimeSnapshot = xpcClient.runtimeSnapshot
+                }
+            }
+            if event == "on_stopped" {
+                xpcClient.removeNetwork(action: event, argv: argv, env: helperEnvSnapshot, completion: completed)
+            } else {
+                xpcClient.applyNetwork(action: event, argv: argv, env: helperEnvSnapshot, completion: completed)
+            }
+            return
+        }
         if event == "on_stopped" {
             macOSTunHelperClient?.removeNetwork(action: event, argv: argv, env: helperEnvSnapshot)
         } else {
@@ -3891,6 +3946,21 @@ final class ObstacleBridgeHostRunner {
             recordTunICMPStage("local_reply_virtual_probe_delivery")
         }
         guard let helperClient = macOSTunHelperClient else { return }
+        if let xpcClient = helperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
+            xpcClient.writePacket(packet) { [weak self, xpcClient] result in
+                self?.serviceStateQueue.async {
+                    guard let self else { return }
+                    if case .failure(let error) = result {
+                        self.recordOperationalLog(event: "macos_utun_write_failed", level: "ERROR", levelNumber: 40)
+                        xpcClient.recordFailure(stage: "macos_utun_write", error: error.localizedDescription)
+                    } else if matchedProbeReply {
+                        self.recordTunICMPStage("to_local_tun_written")
+                    }
+                    self.macOSTunHelperRuntimeSnapshot = xpcClient.runtimeSnapshot
+                }
+            }
+            return
+        }
         do {
             try helperClient.writePacket(packet)
             macOSTunHelperRuntimeSnapshot = helperClient.runtimeSnapshot
