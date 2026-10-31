@@ -420,6 +420,7 @@ def test_macos_swift_host_runner_exposes_python_shaped_tun_helper_status() -> No
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     helper_source = (CORE_SWIFT_DIR / "ObstacleBridgeTunHelperContract.swift").read_text(encoding="utf-8")
     macos_helper_client = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift").read_text(encoding="utf-8")
+    xpc_transport = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
 
     assert "private var macOSTunHelperClient: ObstacleBridgeTunHelperClienting?" in source
     assert 'private var macOSTunHelperTransportKind = "none"' in source
@@ -434,6 +435,7 @@ def test_macos_swift_host_runner_exposes_python_shaped_tun_helper_status() -> No
     assert "packetSink: packetSink" in source
     assert "eventSink: eventSink" in source
     assert 'transportKind: "xpc"' in source
+    assert "ObstacleBridgeAsyncXPCTunHelperClient(transport: transport, transportKind: \"xpc\")" in source
     assert "private static func makeLoopbackMacOSTunHelperClient(" in source
     assert 'transportKind: "loopback"' in source
     assert "let backend = ObstacleBridgeInProcessMacOSTunHelperClient(" in source
@@ -496,6 +498,13 @@ def test_macos_swift_host_runner_exposes_python_shaped_tun_helper_status() -> No
     assert 'serverSide ? "./scripts/server-tun-hook-macos.sh" : "./scripts/client-tun-hook-macos.sh"' in source
     assert "configured?.0 ?? defaultMacOSTunHookArgv" in source
     assert "try helperClient.writePacket(packet)" in source
+    assert "if let xpcClient = helperClient as? ObstacleBridgeAsyncXPCTunHelperClient" in source
+    assert "xpcClient.openTun(ObstacleBridgeTunHelperOpenRequest" in source
+    assert "xpcClient.applyNetwork(action: event, argv: argv, env: helperEnvSnapshot, completion: completed)" in source
+    assert "xpcClient.removeNetwork(action: event, argv: argv, env: helperEnvSnapshot, completion: completed)" in source
+    assert "xpcClient.writePacket(packet)" in source
+    assert "xpcClient.stop" in source
+    assert "DispatchSemaphore" not in xpc_transport
     assert "let helperEnvSnapshot = Self.macOSTunHelperHookEnvSnapshot(from: env)" in source
     assert "try process.run()" not in source[source.index("private func runMacOSTunLifecycleHook"):]
     assert "self?.emitPacketFromHelper(packet)" in macos_helper_client
