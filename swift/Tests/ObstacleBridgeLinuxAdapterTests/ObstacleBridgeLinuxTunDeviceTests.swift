@@ -22,6 +22,7 @@ private final class NativeAdminStatusResponse: @unchecked Sendable {
     }
 }
 
+@Suite(.serialized)
 struct ObstacleBridgeLinuxTunDeviceTests {
     private func ipv4Packet() -> Data { Data([0x45, 0, 0, 20, 0, 0, 0, 0, 64, 17, 0, 0, 10, 0, 0, 1, 10, 0, 0, 2]) }
 
