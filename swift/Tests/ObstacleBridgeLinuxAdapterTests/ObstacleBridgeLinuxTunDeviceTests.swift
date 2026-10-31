@@ -692,7 +692,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         }
         guard connected == 0 else { throw POSIXError(.ECONNREFUSED) }
         try writeAll(Data("GET /api/live HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nCookie: \(cookie)\r\n\r\n".utf8), to: client)
-        var output = try readWebSocketOutput(from: client) { data in
+        let output = try readWebSocketOutput(from: client) { data in
             let text = String(decoding: data, as: UTF8.self)
             return text.contains("HTTP/1.1 101 Switching Protocols")
                 && text.contains("\"type\":\"hello\"")
