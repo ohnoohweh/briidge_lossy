@@ -351,7 +351,7 @@ supervision:
 ```bash
 .venv/bin/python -m cProfile -o obstaclebridge.prof \
   -m obstacle_bridge.bridge_runner \
-  --config ObstacleBridge.cfg --no-dashboard
+  --config ObstacleBridge.cfg
 
 .venv/bin/python -c \
   'import pstats; pstats.Stats("obstaclebridge.prof").strip_dirs().sort_stats("cumulative").print_stats(50)'
@@ -368,7 +368,6 @@ Once a profile exists, use controlled A/B runs to attribute a subsystem. Useful
 comparisons include:
 
 - WebAdmin closed versus one live WebAdmin session
-- dashboard default versus `--no-dashboard`
 - normal logging versus a temporarily narrower log configuration
 - compression default versus `--no-compress-layer`
 - configured TUN service versus an otherwise equivalent socket-only service
@@ -379,22 +378,8 @@ Feature-disable tests are diagnostic experiments, not automatic production
 fixes. In particular, do not leave security, reliability, or required tunnel
 behavior disabled merely because doing so reduces CPU.
 
-As the code currently stands, `--no-dashboard` prevents the StatsBoard's
-periodic render task from starting. A service can express the same controlled
-setting in grouped configuration, and can disable periodic status explicitly:
-
-```json
-{
-  "stats_board": {
-    "status": false,
-    "no_dashboard": true
-  }
-}
-```
-
-There is currently no `--no-status` CLI flag. Keep this distinction in mind if
-StatsBoard behavior is later corrected so `--no-dashboard` means line output
-rather than no periodic task.
+Runtime status is sampled for WebAdmin; the Python runtime does not render a
+terminal dashboard or expose dashboard-specific CLI settings.
 
 ## Code-Specific Places to Inspect
 
@@ -410,8 +395,8 @@ profile checklist, not a claim that any one currently causes the observed
 | [Linux helper TUN reader](../src/obstacle_bridge/bridge_tun_helper_linux.py) and [macOS helper TUN reader](../src/obstacle_bridge/bridge_tun_helper_macos.py) | A nonblocking TUN read that returns no packet is retried after a 10 ms sleep. This can produce about 100 wakeups/s per active helper reader. The normal inline Linux TUN path is readiness-driven. | Prefer readiness notification or a cancellable blocking read; otherwise use a bounded adaptive idle backoff and return to low latency immediately when traffic resumes. |
 | [ChannelMux maintenance](../src/obstacle_bridge/bridge_channelmux.py) | UDP expiry, service self-healing, and delay-rotation checks run periodically, generally once per second. Snapshot and cleanup work can scale with services, peers, and fragments. | Avoid full scans when collections are empty, use next-expiry data structures where justified, and consolidate per-instance maintenance only after measuring it. |
 | [Reconnect loops](../src/obstacle_bridge/bridge_runner.py) | The configured reconnect delay accepts zero, and TCP, WebSocket, and QUIC retry loops can then repeatedly fail with a zero-second sleep. | Enforce a positive floor and use bounded exponential backoff with jitter; expose attempts/s and consecutive failures. |
-| [StatsBoard](../src/obstacle_bridge/bridge_stats.py) | With dashboard mode enabled, status and aggregate metrics are rendered and flushed once per second, even when launcher output is redirected. | Auto-disable rendering for non-TTY output, add an explicit `--no-status`, cache inexpensive counters, and separate metric sampling from terminal formatting. Compare with `--no-dashboard` first. |
-| [Launcher child-output capture](../src/obstacle_bridge/launcher.py) | In redirected mode, stdout and stderr go to unlinked `TemporaryFile` objects for the entire child lifetime so an early failure tail can be replayed. Dashboard and log output therefore consume filesystem space even though no file is visible by name. | Retain only a bounded startup/failure tail, then redirect to `/dev/null` or the service log. Monitor deleted-open files with `lsof +L1`. |
+| [StatsBoard](../src/obstacle_bridge/bridge_stats.py) | Samples status and aggregate metrics once per second for WebAdmin snapshots. | Cache inexpensive counters and avoid adding terminal rendering to the sampling path. |
+| [Launcher child-output capture](../src/obstacle_bridge/launcher.py) | In redirected mode, stdout and stderr go to unlinked `TemporaryFile` objects for the entire child lifetime so an early failure tail can be replayed. Log output can therefore consume filesystem space even though no file is visible by name. | Retain only a bounded startup/failure tail, then redirect to `/dev/null` or the service log. Monitor deleted-open files with `lsof +L1`. |
 | [Logging configuration](../src/obstacle_bridge/bridge_debug_logging.py) | Root remains at `DEBUG` and a DEBUG handler formats every accepted record into the WebAdmin memory ring. Numerous hot paths use per-packet/per-frame debug calls, including TUN hex formatting. | Make the application threshold honor the configured level, make the debug ring opt-in or independently filtered, guard expensive formatting, and count/rate-limit suppressed repetitions. |
 | [WebAdmin live topics](../src/obstacle_bridge/bridge_webadmin.py) | Most subscribed topics refresh once per second per live client and build/deep-copy peer and connection snapshots. Status construction also consults connection state. If a build misses its interval, a client can immediately begin the next cycle. | Build one cached snapshot per topic/interval, reuse it across clients, skip missed ticks with a minimum yield, and avoid traversing data no subscriber requested. |
 | [Runner asyncio diagnostics](../src/obstacle_bridge/bridge_runner.py) | A task factory records activity and adds a completion callback for every asyncio task, but exposes only the latest activity rather than useful task population/rate data. | Benchmark the task factory cost, make detailed tracing opt-in if material, and replace last-event-only data with cheap bounded counters and event-loop-lag metrics. |

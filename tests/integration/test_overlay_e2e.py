@@ -9670,7 +9670,6 @@ def test_overlay_e2e_default_entrypoint_config_bootstrap_and_webadmin_notice(tmp
         '127.0.0.1',
         '--admin-web-port',
         str(admin_port),
-        '--no-dashboard',
     ]
     proc = subprocess.Popen(
         cmd,

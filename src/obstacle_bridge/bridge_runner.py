@@ -1826,10 +1826,8 @@ class Runner:
         for transport_name, session in transport_sessions:
             self._attach_runtime_metric_callback(session)
             session.set_on_state_change(lambda connected, transport_name=transport_name, session=session: self._on_state_change(transport_name, session, connected))
-            # Keep status snapshot callbacks wired on iOS too. We still disable
-            # the terminal dashboard there, but WebAdmin's /api/status needs
-            # the learned peer endpoint and traffic counters to reflect the
-            # active overlay session.
+            # Keep status snapshot callbacks wired on every platform so
+            # WebAdmin's /api/status reflects the active overlay session.
             session.set_on_peer_rx(self.stats.on_peer_rx_bytes)
             session.set_on_peer_tx(self.stats.on_peer_tx_bytes)
             mux = ChannelMux.from_args(
@@ -1874,9 +1872,7 @@ class Runner:
             self.mux = None
 
         
-        # 4) Provide references to StatsBoard and start it
-        # For UDP overlays we still expose the inner Session (to render retransmit histograms).
-        # For TCP overlays this will be None and the board will omit that section.
+        # 4) Provide references to StatsBoard and start WebAdmin metric sampling.
         inner = None
         real = getattr(self._session_obj, "_real", self._session_obj)  # unwrap SessionDebugShim if present
 
@@ -1886,15 +1882,11 @@ class Runner:
         except Exception:
             pass
 
-        if not ios_admin_ui:
-            if isinstance(real, UdpSession):
-                inner = real.inner_session
-            self.stats.set_session_ref(inner)  # now the dashboard can show inflight/ACKed/etc.
-            self.stats.set_mux_ref(self.mux)
-            if self.args.status:
-                await self._await_with_async_diag("StatsBoard.start", self.stats.start())
-        else:
-            self.log.info("[SERVER] iOS admin UI detected; stats board disabled")
+        if isinstance(real, UdpSession):
+            inner = real.inner_session
+        self.stats.set_session_ref(inner)
+        self.stats.set_mux_ref(self.mux)
+        await self._await_with_async_diag("StatsBoard.start", self.stats.start())
 
         self._last_connected_monotonic = time.monotonic() if self._session_obj and self._session_obj.is_connected() else None
         self._last_disconnected_monotonic = None if self._session_obj and self._session_obj.is_connected() else time.monotonic()
@@ -4580,7 +4572,7 @@ class ConfigAwareCLI:
 
 RUNTIME_CLI_DESCRIPTION = (
     'Bidirectional UDP/TCP multiplexed transfer with keepalive, '
-    'auto-discovery, meters, dashboard, and overlay state machine'
+    'auto-discovery, WebAdmin metrics, and overlay state machine'
 )
 
 
@@ -4602,7 +4594,6 @@ def default_runtime_registrars() -> List[Tuple[str, Callable[[argparse.ArgumentP
         ("debug_logging",      DebugLoggingConfigurator.register_cli),
         ("telemetry_client",   TelemetryRuntimeSettings.register_client_cli),
         ("telemetry_server",   TelemetryRuntimeSettings.register_server_cli),
-        ("stats_board",        StatsBoard.register_cli),
     ]
 
 

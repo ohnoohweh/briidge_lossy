@@ -519,7 +519,7 @@ The most important unit-level transport invariants are:
 - once a counter has been reported missing, later omission from feedback must not silently clear the resend obligation
 - a peer-reported missing counter should continue to be retransmitted on an RTT cadence until cumulative ACK state confirms it
 - acknowledged stream chunks should produce a transmit-delay sample from first-send time minus half the current RTT
-- the averaged transmit-delay metric should become observable through the runtime status/dashboard path
+- the averaged transmit-delay metric should become observable through the runtime status and WebAdmin path
 - tests should cover operation near the in-flight window limit so head-of-line recovery is validated under pressure, not only in tiny toy sequences
 - a batch must deliver multiple chunk records as one UDP datagram without changing per-counter ACK or loss behavior
 - a serializer record must decode correctly when split across arbitrary chunk and datagram boundaries, including a split at every byte of its length prefix

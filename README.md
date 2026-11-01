@@ -573,12 +573,6 @@ The CLI remains useful for bootstrap situations, automation, and remote-first se
 
 ## CLI parameter reference
 The tables below are generated from the current parser registrations in `bridge.py`, so the defaults and descriptions match the live code.
-### General / status
-| Option(s) | Default | Description |
-|---|---:|---|
-| `--status` | `True` | enable periodic status (default: on) |
-| `--no-dashboard` | `False` | disable non-scrolling dashboard (print multiline blocks instead) |
-
 ### UDP overlay
 | Option(s) | Default | Description |
 |---|---:|---|

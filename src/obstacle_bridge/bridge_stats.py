@@ -6,36 +6,14 @@ _bridge = export_bridge_globals(globals())
 
 class StatsBoard:
     """
-    Dashboard + statistics aggregator.
+    WebAdmin statistics aggregator.
 
     Responsibilities:
-      - Encapsulate UI flags via register_cli()
       - Track byte counters and state
-      - Render dashboard / line output periodically (status task)
+      - Sample aggregate rates periodically for status snapshots
       - Consume events from Runner (on_* methods)
       - Read RTT/inflight from a myUDP2 transport reference
     """
-
-    # ---- CLI integration -------------------------------------------------------
-    @staticmethod
-    def register_cli(p: argparse.ArgumentParser) -> None:
-        """
-        Register only the UI-related flags so other classes remain unaware.
-        Mirrors previous defaults/behavior.
-        """
-        def _has(opt: str) -> bool:
-            try:
-                return any(opt in a.option_strings for a in p._actions)
-            except Exception:
-                return False
-
-        if not _has('--status'):
-            # Keep previous behavior: status enabled by default.
-            p.add_argument('--status', action='store_true', default=True,
-                           help='enable periodic status (default: on)')
-        if not _has('--no-dashboard'):
-            p.add_argument('--no-dashboard', action='store_true',
-                           help='disable non-scrolling dashboard (print multiline blocks instead)')
 
     # ---- lifecycle & state -----------------------------------------------------
     def __init__(self, args: argparse.Namespace):
@@ -71,8 +49,7 @@ class StatsBoard:
         self._last_peer_rx = 0
         self._last_peer_tx = 0
 
-        # UI cosmetics
-        self._dashboard_enabled = not args.no_dashboard
+        # Status presentation is owned by WebAdmin; retain only snapshot data.
         self._overlay_peer_str = "n/a"
         first_transport = str(getattr(args, "overlay_transport", "myudp") or "myudp").split(",", 1)[0].strip().lower()
         self._has_fixed_overlay_peer = _has_configured_overlay_peer(args, first_transport)
@@ -165,11 +142,7 @@ class StatsBoard:
 
     # ---- lifecycle (status task) ----------------------------------------------
     async def start(self) -> None:
-        if not getattr(self.args, "status", True):
-            return
-        if self._dashboard_enabled:
-            sys.stdout.write(ANSI_HIDE_CURSOR)
-            sys.stdout.flush()
+        if self._task is None:
             loop = asyncio.get_running_loop()
             self._task = loop.create_task(self._status_task_fn())
 
@@ -181,171 +154,9 @@ class StatsBoard:
                 await self._task
             except Exception:
                 pass
-        if self._dashboard_enabled:
-            sys.stdout.write(ANSI_SHOW_CURSOR)
-            sys.stdout.flush()
-
-    # ---- helpers moved from Runner (unchanged strings) ------------------------
+    # ---- snapshot helpers ------------------------------------------------------
     def _summarize_local_sides(self, a: argparse.Namespace) -> str:
-#        if a.udp_role == 'server':
-#            udp = f"UDP srv {a.udp_listen_bind}:{a.udp_own_port}"
-#        else:
-#            udp = f"UDP cli -> {a.udp_target_host}:{a.udp_target_port} (bind {a.udp_bind}:ephem)"
-#        if a.tcp_role == 'server':
-#            tcp = f"TCP srv {a.tcp_listen_bind}:{a.tcp_own_port}"
-#        else:
-#            tcp = f"TCP cli -> {a.tcp_target_host}:{a.tcp_target_port} (bind {a.tcp_bind}:ephem)"
-#        return f"{udp}\n {tcp}"
         return f""
-
-    def _render_retx_stats(self) -> str:
-        s = self.session
-        if not s:
-            return ""
-        h = s.stats_hist
-        confirmed = max(1, int(h.get('confirmed_total', 0)))
-        def pct(n): return (100.0 * float(h.get(n, 0))) / confirmed
-        return (
-            "Retransmit distribution (confirmed app DATA only)\n"
-            f" once : {h.get('once', 0):6d} ({pct('once'):5.1f}%)\n"
-            f" twice : {h.get('twice', 0):6d} ({pct('twice'):5.1f}%)\n"
-            f" thrice : {h.get('thrice', 0):6d} ({pct('thrice'):5.1f}%)\n"
-            f" > three: {h.get('gt3', 0):6d} ({pct('gt3'):5.1f}%)\n"
-            f" confirmed / created : {h.get('confirmed_total', 0)} / {h.get('created_total', 0)}"
-        )
-
-    def _render_error_counters(self) -> str:
-        unknown = 0
-        pp = self.peer_proto
-        if pp is not None and hasattr(pp, "unidentified_frames"):
-            try:
-                unknown = int(getattr(pp, "unidentified_frames", 0))
-            except Exception:
-                pass
-        return (
-            "----------------------------------------------------------------\n"
-            f"Decode errors: Unidentified frames={unknown}\n"
-        )
-
-    def _render_status_block(
-        self,
-        dt: float,
-        app_rx_r: float,
-        app_tx_r: float,
-        peer_rx_r: float,
-        peer_tx_r: float,
-        *,
-        compact: bool,
-    ) -> str:
-        """
-        Unified renderer for both dashboard and line-by-line modes.
-        If compact=True -> minimal header/title and no ANSI/non-scrolling tips.
-        If compact=False -> full dashboard title and footer.
-        """
-        s = self.session
-        kb_tot = 1024.0
-        now_s = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        m = self.session_get_metrics()
-        last_ok = (
-            ((getattr(self.session, "last_rtt_ok_ns", 0) if self.session else 0) or 0)
-            or (m.last_rtt_ok_ns or 0)
-            or self._last_rtt_ok_ns
-        )
-        age_str = f"{max(0.0, (now_ns() - last_ok)/1e9):0.1f}s ago" if last_ok else "—"
-
-        udp_count = self.mux.udp_open_count() if self.mux else 0
-        tcp_count = self.mux.tcp_open_count() if self.mux else 0
-        tun_count = self.mux.tun_open_count() if self.mux and hasattr(self.mux, "tun_open_count") else 0
-
-        def _fmt(v, nd=None):
-            if v is None:
-                return "n/a"
-            if isinstance(v, float) and nd is not None:
-                return f"{v:.{nd}f}"
-            return str(v)
-
-        title = (
-            "UDP/TCP Multiplexed Transfer — DASHBOARD (non-scrolling)\n"
-            "----------------------------------------------------------------\n"
-            if not compact else
-            "=== STATUS =======================================================\n"
-        )
-
-        header = (
-            f"Updated: {now_s} (Δ~{dt:.1f}s) "
-            f"Peer State: {self._conn_state} "
-            f"Last RTT OK: {age_str}\n"
-            f"Overlay bind : {self._overlay_bind_str}\n"
-            f"Overlay peer : {self._overlay_peer_str}\n"
-            f"Local I/F : {self._local_side_str}\n"
-            f"Open Conns : UDP={udp_count} TCP={tcp_count}\n"
-        )
-
-        # RTT + flow (transport-agnostic: values may be 'n/a' on TCP)
-        rtt_and_flow = (
-            f"RTT(ms): "
-            f"cur={_fmt(m.rtt_sample_ms, 1)} "
-            f"est={_fmt(m.rtt_est_ms, 1)} "
-        )
-        if m.transmit_delay_sample_ms is not None or m.transmit_delay_est_ms is not None:
-            rtt_and_flow += (
-                f"TXDLY(ms): "
-                f"cur={_fmt(m.transmit_delay_sample_ms, 1)} "
-                f"est={_fmt(m.transmit_delay_est_ms, 1)} "
-            )
-        if s:
-           rtt_and_flow += ( 
-                f"inflight={_fmt(m.inflight)}/{_fmt(m.max_inflight)} "
-                f"waiting={_fmt(m.waiting_count)}\n"
-                f"ACKed={_fmt(m.last_ack_peer)} "
-                f"sent_ctr={_fmt(m.last_sent_ctr)} "
-                f"expected={_fmt(m.expected)} "
-                f"peer_missed={_fmt(m.peer_missed_count)} "
-                f"our_missed={_fmt(m.our_missed_count)}"
-           )
-        rtt_and_flow += ( f"\n" )
-    
-        meters = (
-            "----------------------------------------------------------------\n"
-            f"App I/F : RX={app_rx_r:7.1f} kB/s TX={app_tx_r:7.1f} kB/s "
-            f"(tot RX={self.app_rx_total/kb_tot:,.0f} kB, TX={self.app_tx_total/kb_tot:,.0f} kB)\n"
-            f"Peer I/F: RX={peer_rx_r:7.1f} kB/s TX={peer_tx_r:7.1f} kB/s "
-            f"(tot RX={self.peer_rx_total/kb_tot:,.0f} kB, TX={self.peer_tx_total/kb_tot:,.0f} kB)\n"
-        )
-
-        errors = self._render_error_counters()
-        retx = "----------------------------------------------------------------\n" + self._render_retx_stats() + "\n"
-
-        footer = (
-            "----------------------------------------------------------------\n"
-            "Press Ctrl+C to exit. Use --no-dashboard to switch to line-by-line output.\n"
-            if not compact else
-            "=================================================================\n"
-        )
-
-        return (title + header + rtt_and_flow + meters + errors + retx + footer)
-
-    def _render_dashboard(
-        self,
-        dt: float,
-        app_rx_r: float,
-        app_tx_r: float,
-        peer_rx_r: float,
-        peer_tx_r: float
-    ) -> str:
-        # Keep existing call sites: delegate to unified renderer
-        return self._render_status_block(
-            dt, app_rx_r, app_tx_r, peer_rx_r, peer_tx_r, compact=False
-        )
-
-    @staticmethod
-    def _stdout_safe_text(text: str) -> str:
-        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-        try:
-            text.encode(encoding)
-            return text
-        except UnicodeEncodeError:
-            return text.encode(encoding, "replace").decode(encoding, "replace")
 
     async def _status_task_fn(self) -> None:
         try:
@@ -374,19 +185,6 @@ class StatsBoard:
                 self._last_peer_tx_rate_kbps = peer_tx_r
 
                 self._conn_state = STATE_CONNECTED if self.session_is_connected() else STATE_DISCONNECTED
-
-                if self._dashboard_enabled:
-                    sys.stdout.write(ANSI_HOME_CLEAR)
-                    sys.stdout.write(self._stdout_safe_text(
-                        self._render_dashboard(dt, app_rx_r, app_tx_r, peer_rx_r, peer_tx_r)
-                    ))
-                    sys.stdout.flush()
-                else:
-                    # Reuse the unified renderer in compact mode (no ANSI, concise title/footer)
-                    block = self._render_status_block(
-                        dt, app_rx_r, app_tx_r, peer_rx_r, peer_tx_r, compact=True
-                    )
-                    print(self._stdout_safe_text(block), flush=True)
 
         except asyncio.CancelledError:
             return

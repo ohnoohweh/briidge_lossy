@@ -1678,8 +1678,6 @@ class PeerProtocol(asyncio.DatagramProtocol):
         setattr(self, count_attr, count)
         setattr(self, last_attr, gap_ms)
         setattr(self, max_attr, max(float(getattr(self, max_attr, 0.0) or 0.0), gap_ms))
-        if gap_ms >= 20.0 or count <= 3 or (count % 256) == 0:
-            self.session.log.info("[UDP/YIELD] stage=%s count=%s gap_ms=%.3f", stage, count, gap_ms)
 
     def _process_one_completed_payload(self) -> None:
         if not self._completed_pending:

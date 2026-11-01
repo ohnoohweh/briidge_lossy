@@ -287,8 +287,6 @@ def _record_yield_gap(log: Any, owner: Any, *, prefix: str, scheduled_at: float,
     setattr(owner, count_attr, count)
     setattr(owner, last_attr, gap_ms)
     setattr(owner, max_attr, max(float(getattr(owner, max_attr, 0.0) or 0.0), gap_ms))
-    if gap_ms >= 20.0 or count <= 3 or (count % 256) == 0:
-        log.info("[IOS/YIELD] stage=%s count=%s gap_ms=%.3f", stage, count, gap_ms)
 
 
 def _schedule_bridge_queue_drain(mux: Any, dev: Any) -> None:

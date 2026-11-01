@@ -373,10 +373,6 @@ def _transform_config_secrets(obj: Any, transform: Callable[[Any], Any]) -> Any:
         return [_transform_config_secrets(item, transform) for item in obj]
     return obj
 
-# ===== ANSI sequences (dashboard) =====
-ANSI_HIDE_CURSOR = "\x1b[?25l"
-ANSI_SHOW_CURSOR = "\x1b[?25h"
-ANSI_HOME_CLEAR = "\x1b[H\x1b[J"
 DEFAULT_ADMIN_WEB_LOG_MAX_LINES = 1200
 DEBUG_LOG_RING: Deque[str] = deque(maxlen=DEFAULT_ADMIN_WEB_LOG_MAX_LINES)
 
