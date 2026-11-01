@@ -198,7 +198,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     }
 
     private func acceptReadyClient() {
-        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxAdminServerTests
+        // OBSTACLEBRIDGE-CONCURRENCY: actor; test=ObstacleBridgeRuntimeMetricsTests
         guard listener >= 0 else { return }
         while true {
             let client = accept(listener, nil, nil)
