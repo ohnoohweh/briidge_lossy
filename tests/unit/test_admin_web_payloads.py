@@ -1687,6 +1687,8 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn('id="tunRoutingIcmpStageCounters"', index_html)
         self.assertIn('id="tunRoutingProbeBoundaryCounters"', index_html)
         self.assertIn('id="tunRoutingLocalReplyStageCounters"', index_html)
+        self.assertIn('<details class="technical-details">', index_html)
+        self.assertIn('<summary>Technical details</summary>', index_html)
         self.assertIn('id="tunVerificationConfigSummary"', index_html)
         self.assertIn('id="tunVerificationPeerSummary"', index_html)
         self.assertIn('id="tunVerificationGlobalSummary"', index_html)

@@ -1199,6 +1199,7 @@ REQ-LIFE-011:
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_provider_owns_restart_without_app_process
 
 REQ-LIFE-012:
+  # The TUN page keeps low-level ICMP/probe/reply counters in closed Technical details.
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_routing_enabled_on_startup_parses_from_mapping
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_can_start_with_included_routes_suspended_and_toggle_later

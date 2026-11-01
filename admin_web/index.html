@@ -386,36 +386,6 @@
           <section class="section-block card">
             <div class="section-header">
               <div>
-                <h2>ICMP Path Stage Counters</h2>
-                <p>End-to-end TUN ICMP pipeline stages counted since runtime start</p>
-              </div>
-            </div>
-            <pre id="tunRoutingIcmpStageCounters" class="meta-box">loading...</pre>
-          </section>
-
-          <section class="section-block card">
-            <div class="section-header">
-              <div>
-                <h2>Probe Boundary Counters</h2>
-                <p>Probe scheduling, injection mode, helper I/O, timeout, and reply-match counters</p>
-              </div>
-            </div>
-            <pre id="tunRoutingProbeBoundaryCounters" class="meta-box">loading...</pre>
-          </section>
-
-          <section class="section-block card">
-            <div class="section-header">
-              <div>
-                <h2>Local Reply Stage Counters</h2>
-                <p>Direct TUN reply-path decisions counted since runtime start</p>
-              </div>
-            </div>
-            <pre id="tunRoutingLocalReplyStageCounters" class="meta-box">loading...</pre>
-          </section>
-
-          <section class="section-block card">
-            <div class="section-header">
-              <div>
                 <h2>TUN Verification</h2>
                 <p>Checks that the interface is configured, reaches the tunnel peer, and reaches the configured global host</p>
               </div>
@@ -589,6 +559,28 @@
                 </table>
               </div>
             </div>
+          </section>
+
+          <section class="section-block card">
+            <details class="technical-details">
+              <summary>Technical details</summary>
+              <p>Low-level TUN probe and ICMP pipeline counters for troubleshooting.</p>
+              <section class="technical-details-group">
+                <h2>ICMP Path Stage Counters</h2>
+                <p>End-to-end TUN ICMP pipeline stages counted since runtime start</p>
+                <pre id="tunRoutingIcmpStageCounters" class="meta-box">loading...</pre>
+              </section>
+              <section class="technical-details-group">
+                <h2>Probe Boundary Counters</h2>
+                <p>Probe scheduling, injection mode, helper I/O, timeout, and reply-match counters</p>
+                <pre id="tunRoutingProbeBoundaryCounters" class="meta-box">loading...</pre>
+              </section>
+              <section class="technical-details-group">
+                <h2>Local Reply Stage Counters</h2>
+                <p>Direct TUN reply-path decisions counted since runtime start</p>
+                <pre id="tunRoutingLocalReplyStageCounters" class="meta-box">loading...</pre>
+              </section>
+            </details>
           </section>
         </section>
 

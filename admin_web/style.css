@@ -1796,6 +1796,30 @@ select.config-editor option:disabled {
   margin-top: 16px;
 }
 
+.technical-details > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.technical-details > p {
+  color: var(--muted);
+  margin: 10px 0 16px;
+}
+
+.technical-details-group + .technical-details-group {
+  margin-top: 18px;
+}
+
+.technical-details-group h2 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.technical-details-group p {
+  color: var(--muted);
+  margin: 6px 0 10px;
+}
+
 @media (max-width: 1200px) {
   .conn-table {
     min-width: 760px;
