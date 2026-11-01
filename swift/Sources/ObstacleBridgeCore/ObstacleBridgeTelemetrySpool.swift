@@ -4,7 +4,9 @@ import Foundation
 /// Fixed-capacity producer for telemetry events. `emit` uses an immediate
 /// semaphore acquisition: contention and saturation are loss signals, never a
 /// reason to wait on a bridge or packet callback.
-public final class ObstacleBridgeTelemetryEmitter: @unchecked Sendable {
+/// Non-Sendable telemetry producer state. Runtime owners exchange immutable
+/// telemetry events across execution boundaries rather than this owner.
+public final class ObstacleBridgeTelemetryEmitter {
     private let gate = DispatchSemaphore(value: 1)
     private let installationID: String
     private let sessionID: String
@@ -73,7 +75,9 @@ public final class ObstacleBridgeTelemetryEmitter: @unchecked Sendable {
 
 /// Bounded private file spool. Each segment is an atomic checksum envelope;
 /// failure is recorded locally and never propagated to the producer caller.
-public final class ObstacleBridgeTelemetrySpool: @unchecked Sendable {
+/// Non-Sendable telemetry spool state. Runtime owners exchange immutable
+/// telemetry events and upload requests rather than this file owner.
+public final class ObstacleBridgeTelemetrySpool {
     private struct Envelope: Codable { let event: ObstacleBridgeTelemetryEvent; let sha256: String }
     private let gate = DispatchSemaphore(value: 1)
     public let directory: URL
