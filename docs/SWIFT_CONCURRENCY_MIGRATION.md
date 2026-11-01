@@ -8,13 +8,13 @@ synchronous coordination primitives in a legacy unchecked owner are rejected
 by `scripts/check_swift_concurrency_guard.py`.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 47 declarations:
+approval to add lock-based ownership. The inventory contains 46 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
 | Shared Core | 0 |
 | Desktop shared | 0 |
-| Linux adapters/runtime | 37 |
+| Linux adapters/runtime | 36 |
 | Executable workers | 1 |
 | Test fixtures | 9 |
 
@@ -72,6 +72,8 @@ decoder and inherited descriptor on one readiness queue.
 The Linux Admin security and configuration owners are non-Sendable. HTTP
 handlers exchange decoded value requests, responses, snapshots, and updates
 without transferring either mutable owner.
+The Linux telemetry uploader is non-Sendable. Its private queue performs
+network I/O and publishes immutable status snapshots.
 
 The remaining unchecked owners still have shared mutable lifetime, I/O, or
 request-correlation state. They retain the existing compatibility boundaries

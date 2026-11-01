@@ -177,7 +177,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor {
             lock.lock(); listeners = initial; capabilities = advertised; generation = expectedGeneration; lastError = ""; lock.unlock()
             readerGroup.enter()
             let group = readerGroup
-            DispatchQueue.global().async { [weak self] in
+            let reader = DispatchWorkItem { [weak self] in
                 defer { group.leave() }
                 do {
                     while true {
@@ -198,6 +198,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor {
                     owner.lock.unlock()
                 }
             }
+            DispatchQueue.global().async(execute: reader)
         } catch {
             try? childInput.close()
             relay?.stop()
