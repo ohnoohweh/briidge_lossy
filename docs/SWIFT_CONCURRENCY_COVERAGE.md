@@ -20,6 +20,8 @@ python scripts/check_swift_concurrency_guard.py --base-ref <base-sha>
 The listed owners predate this policy and are the migration inventory. They are
 explicitly marked below so subsequent edits cannot silently extend an unchecked
 mutable-state boundary without recorded synchronization and test coverage.
+Their actor/serial-asynchronous conversion order and acceptance criteria are in
+[Swift concurrency migration inventory](SWIFT_CONCURRENCY_MIGRATION.md).
 
 ## Delivered coverage
 
