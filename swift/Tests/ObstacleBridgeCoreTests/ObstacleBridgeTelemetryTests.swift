@@ -110,6 +110,31 @@ struct ObstacleBridgeTelemetryTests {
         #expect(throttle["active"] as? Bool == false)
     }
 
+    @Test func liveTopicPayloadEvaluatesOnlyItsSelectedSnapshot() {
+        var statusCalls = 0
+        var peerCalls = 0
+        var connectionCalls = 0
+        func status() -> [String: Any] { statusCalls += 1; return ["app": "test"] }
+        func peers() -> [[String: Any]] { peerCalls += 1; return [["id": 1]] }
+        func connections() -> [String: Any] { connectionCalls += 1; return ["tcp": []] }
+
+        let connectionsPayload = ObstacleBridgeAdminLiveTopicPort.payload(
+            topic: "connections", status: status(), peers: peers(), connections: connections()
+        ) as? [String: Any]
+        #expect(connectionsPayload?["tcp"] as? [Any] != nil)
+        #expect(statusCalls == 0)
+        #expect(peerCalls == 0)
+        #expect(connectionCalls == 1)
+
+        let peersPayload = ObstacleBridgeAdminLiveTopicPort.payload(
+            topic: "peers", status: status(), peers: peers(), connections: connections()
+        ) as? [String: Any]
+        #expect((peersPayload?["peers"] as? [[String: Any]])?.count == 1)
+        #expect(statusCalls == 0)
+        #expect(peerCalls == 1)
+        #expect(connectionCalls == 1)
+    }
+
     @Test func adminStatusEnvelopeOwnsSharedDashboardFields() {
         let status = ObstacleBridgeAdminSnapshotSupport.statusEnvelope(
             runtimeOwner: "native",
