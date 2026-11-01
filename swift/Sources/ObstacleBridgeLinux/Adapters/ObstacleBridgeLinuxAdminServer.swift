@@ -59,6 +59,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private var source: DispatchSourceRead?
     private var clientSources: [Int32: DispatchSourceRead] = [:]
     private var clientRequests: [Int32: Data] = [:]
+    private var cachedRuntimeMetricsSnapshot: [String: Any] = [:]
     public private(set) var port: Int = 0
 
     public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil, connectionsProvider: @escaping () -> [String: Any] = { ["tcp": [], "udp": [], "tun": []] }, tunRoutingProvider: @escaping () -> [String: Any] = { ["ok": true, "configured": false, "enabled": false] }, tunRoutingControlHandler: ((Bool) -> [String: Any])? = nil, tunHelperRepairHandler: (() -> [String: Any])? = nil, logWorker: ObstacleBridgeLogWorkerSupervisor? = nil) {
@@ -779,7 +780,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             )),
             "build": buildInfoProvider(),
         ]
-        payload["runtime_metrics"] = ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()
+        payload["runtime_metrics"] = runtimeMetricsSnapshot()
         return ObstacleBridgeAdminSnapshotSupport.statusEnvelope(
             runtimeOwner: "ObstacleBridgeLinux",
             runtimeMode: "linux-swift",
@@ -803,6 +804,18 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             compressLayer: (payload["peer"] as? [String: Any])?["compression_layer"] ?? NSNull(),
             extra: payload
         )
+    }
+
+    private func runtimeMetricsSnapshot() -> [String: Any] {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxAdminServerTests
+        let cached = cachedRuntimeMetricsSnapshot
+        Task { [weak self] in
+            let snapshot = await ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()
+            self?.queue.async { [weak self] in
+                self?.cachedRuntimeMetricsSnapshot = snapshot
+            }
+        }
+        return cached.isEmpty ? ObstacleBridgeRuntimeMetrics.Reporter.emptySnapshotPayload() : cached
     }
 
     /// Host facts and actionable guidance for the Linux resource boundaries.

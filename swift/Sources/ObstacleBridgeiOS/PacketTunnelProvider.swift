@@ -103,6 +103,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var cachedTunRoutingSnapshot: [String: Any] = [:]
     private var cachedPeersSnapshot: [[String: Any]] = []
     private var cachedMetaSnapshot: [String: Any] = [:]
+    private var cachedRuntimeMetricsSnapshot: [String: Any] = [:]
     private let adminTunVerificationRefreshQueue = DispatchQueue(label: "PacketTunnelProvider.AdminTunVerificationRefresh", qos: .utility)
     private let adminTunVerificationQueue = DispatchQueue(label: "PacketTunnelProvider.AdminTunVerification")
     private var adminTunVerificationTimer: DispatchSourceTimer?
@@ -1784,6 +1785,17 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         return withCurrentUptime(cached)
     }
 
+    private func runtimeMetricsSnapshot() -> [String: Any] {
+        let cached = adminSnapshotQueue.sync { cachedRuntimeMetricsSnapshot }
+        Task { [weak self] in
+            let snapshot = await ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()
+            self?.adminSnapshotQueue.async { [weak self] in
+                self?.cachedRuntimeMetricsSnapshot = snapshot
+            }
+        }
+        return cached.isEmpty ? ObstacleBridgeRuntimeMetrics.Reporter.emptySnapshotPayload() : cached
+    }
+
     private func cachedConnectionsOrBuild() -> [String: Any] {
         let cached = adminSnapshotQueue.sync { cachedConnectionsSnapshot }
         return cached.isEmpty ? adminConnectionsSnapshotUncached() : cached
@@ -1875,7 +1887,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "runtime_health_record_count": runtimeHealth["runtime_health_record_count"] ?? 0,
                 "previous_runtime_lifetime_ended_cleanly": runtimeHealth["previous_runtime_lifetime_ended_cleanly"] ?? NSNull(),
                 "runtime_health_recent_records": runtimeHealth["runtime_health_recent_records"] ?? [],
-                "runtime_metrics": ObstacleBridgeRuntimeMetrics.shared.snapshotPayload(),
+                "runtime_metrics": runtimeMetricsSnapshot(),
                 "runtime_fifos": ((bridgeSnapshot["transport_runtime"] as? [String: Any])?["fifo_levels"] as? [String: Any]) ?? [:],
                 "bridge_state": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
                 "shared_overlay_bootstrap_state": sharedOverlayBootstrapState,

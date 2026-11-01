@@ -3,8 +3,54 @@ import Foundation
 
 /// Fixed-category, aggregate-only runtime timing shared by Linux and Apple
 /// runtime owners. No payload, peer identity, or individual callback is kept.
-public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
-    public static let shared = ObstacleBridgeRuntimeMetrics()
+/// Mutable aggregation belongs exclusively to this actor. Synchronous runtime
+/// callbacks report measurements through `shared`, while Admin projections
+/// receive the last completed immutable snapshot and request a refresh.
+public actor ObstacleBridgeRuntimeMetrics {
+    private static let store = ObstacleBridgeRuntimeMetrics()
+
+    public struct Reporter: Sendable {
+        @discardableResult public func measure<T>(_ category: Category, _ body: () throws -> T) rethrows -> T {
+            let started = DispatchTime.now().uptimeNanoseconds
+            defer { record(category, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
+            return try body()
+        }
+
+        public func record(_ category: Category, durationNS: UInt64, completedNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
+            Task { await ObstacleBridgeRuntimeMetrics.store.record(category, durationNS: durationNS, completedNS: completedNS) }
+        }
+
+        public func recordCPUSample(processCPUNS: UInt64, wallNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
+            Task { await ObstacleBridgeRuntimeMetrics.store.recordCPUSample(processCPUNS: processCPUNS, wallNS: wallNS) }
+        }
+
+        /// Reads the complete projection from the metrics actor. Platform
+        /// status owners publish this value into their existing asynchronous
+        /// status caches, leaving request reads nonblocking.
+        public func snapshotPayload() async -> [String: Any] {
+            let data = Data(await ObstacleBridgeRuntimeMetrics.store.snapshotBytes())
+            return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? Self.emptySnapshotPayload()
+        }
+
+        public static func emptySnapshotPayload() -> [String: Any] {
+            let rows: [[String: Any]] = Category.allCases.map { category in
+                ["category": category.rawValue, "count": 0, "total_ms": 0.0,
+                 "mean_ms": NSNull(), "p95_ms": NSNull(), "p99_ms": NSNull(),
+                 "max_ms": NSNull(), "last_2_seconds_max_ms": NSNull()]
+            }
+            return [
+                "cpu_cores_max": ["overall": NSNull(), "last_2_seconds": NSNull(),
+                                  "overall_contributor": NSNull(), "last_2_seconds_contributor": NSNull()],
+                "work_slice_ms_max": ["overall": NSNull(), "last_2_seconds": NSNull()],
+                "event_loop_lag_ms": ["last": NSNull(), "max": NSNull()],
+                "categories": rows,
+                "longest_uninterrupted_category": NSNull(),
+                "longest_uninterrupted_last_2_seconds_category": NSNull(),
+            ]
+        }
+    }
+
+    public static let shared = Reporter()
 
     public enum Category: String, CaseIterable, Sendable {
         case channelMuxCallback = "channelmux_callback"
@@ -69,7 +115,6 @@ public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
     private struct Recent { let completedNS: UInt64; let category: Category; let durationNS: UInt64 }
     private struct CPUPeak { let completedNS: UInt64; let cores: Double; let contributor: [String: Any]? }
 
-    private let lock = NSLock()
     private var lifetime = Dictionary(uniqueKeysWithValues: Category.allCases.map { ($0, Aggregate()) })
     private var recent: [Recent] = []
     private var intervalByCategory = [Category: UInt64]()
@@ -79,16 +124,7 @@ public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
     private var overallContributor: [String: Any]?
     private var recentCPUPeaks: [CPUPeak] = []
 
-    public init() {}
-
-    @discardableResult public func measure<T>(_ category: Category, _ body: () throws -> T) rethrows -> T {
-        let started = DispatchTime.now().uptimeNanoseconds
-        defer { record(category, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
-        return try body()
-    }
-
     public func record(_ category: Category, durationNS: UInt64, completedNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
-        lock.lock(); defer { lock.unlock() }
         lifetime[category, default: .init()].add(durationNS)
         recent.append(.init(completedNS: completedNS, category: category, durationNS: durationNS))
         intervalByCategory[category, default: 0] &+= durationNS
@@ -99,7 +135,6 @@ public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
     /// bounded contributor calculation.
     public func recordCPUSample(processCPUNS: UInt64, wallNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
         let wall = wallNS
-        lock.lock(); defer { lock.unlock() }
         defer { previousWallNS = wall; previousCPUNS = processCPUNS; intervalByCategory.removeAll(keepingCapacity: true) }
         guard let priorWall = previousWallNS, let priorCPU = previousCPUNS, wall > priorWall, processCPUNS >= priorCPU else { return }
         let wallDelta = wall - priorWall
@@ -114,7 +149,6 @@ public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
 
     public func snapshotPayload(nowNS: UInt64? = nil) -> [String: Any] {
         let observationNow = nowNS ?? DispatchTime.now().uptimeNanoseconds
-        lock.lock(); defer { lock.unlock() }
         trim(nowNS: observationNow)
         var recentMaxByCategory = [Category: UInt64]()
         for sample in recent {
@@ -149,6 +183,11 @@ public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
             "longest_uninterrupted_category": overallSlice?.1 ?? NSNull(),
             "longest_uninterrupted_last_2_seconds_category": recentSlice?.1 ?? NSNull(),
         ]
+    }
+
+    func snapshotBytes(nowNS: UInt64? = nil) -> [UInt8] {
+        let payload = snapshotPayload(nowNS: nowNS)
+        return Array((try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data("{}".utf8))
     }
 
     private func trim(nowNS: UInt64) {
