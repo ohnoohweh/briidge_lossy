@@ -18,8 +18,6 @@ class StatsBoard:
     # ---- lifecycle & state -----------------------------------------------------
     def __init__(self, args: argparse.Namespace):
         self.args = args
-        self.log = logging.getLogger("stats_board")
-        DebugLoggingConfigurator.debug_logger_status(self.log)
 
         # References provided by Runner
         self.session: Optional[MyUDP2Session] = None     # for RTT/inflight/ACK counters
@@ -94,31 +92,24 @@ class StatsBoard:
             self._overlay_peer_str = "n/a"
             return
         self._overlay_peer_str = f"[{host}]:{port}" if ':' in host and not host.startswith('[') else f"{host}:{port}"
-        self.log.debug(f"on_peer_set({host} {port} )")
 
     def on_state_change(self, connected: bool) -> None:
-        self.log.debug(f"on_state_change({self._conn_state} -> {connected})")
         self._conn_state = STATE_CONNECTED if connected else STATE_DISCONNECTED
 
     def on_rtt_success(self, echo_tx_ns: int) -> None:
         self._last_rtt_ok_ns = now_ns()
-        self.log.debug(f"on_rtt_success({echo_tx_ns})")
 
     def on_peer_rx_bytes(self, n: int) -> None:
         self.peer_rx_total += n
-        self.log.debug(f"on_peer_rx_bytes(+{int(n)})")
 
     def on_peer_tx_bytes(self, n: int) -> None:
         self.peer_tx_total += n
-        self.log.debug(f"on_peer_tx_bytes(+{int(n)})")
 
     def on_app_rx_bytes(self, n: int) -> None:
         self.app_rx_total += n
-        self.log.debug(f"on_app_rx_bytes(+{int(n)})")
 
-    def on_app_tx_bytes(self, n: int) -> None:        
+    def on_app_tx_bytes(self, n: int) -> None:
         self.app_tx_total += n
-        self.log.debug(f"on_app_tx_bytes(+{int(n)})")
 
 
     def bind_session(self, session: ISession):
@@ -299,17 +290,5 @@ class StatsBoard:
                 },
             },
         }
-        
-        self.log.debug(
-            "[STATS/SNAPSHOT] peer_state=%s overlay_peer=%s "
-            "peer_rx=%d peer_tx=%d app_rx=%d app_tx=%d rtt_est_ms=%s",
-            payload["peer_state"],
-            payload["overlay"]["peer"],
-            payload["traffic"]["peer"]["rx_total_bytes"],
-            payload["traffic"]["peer"]["tx_total_bytes"],
-            payload["traffic"]["app"]["rx_total_bytes"],
-            payload["traffic"]["app"]["tx_total_bytes"],
-            payload["transport"]["rtt_est_ms"],
-        )
 
 # ============================================================================

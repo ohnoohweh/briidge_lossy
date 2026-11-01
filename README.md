@@ -1096,6 +1096,7 @@ The Configuration tab normally keeps `secure_link_psk` write-only. When admin au
 The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) explains the applied auth, session, live-update, and secret-redaction concepts in more detail.
 
 An open WebAdmin page receives status and peer updates through the shared `/api/live` WebSocket subscription; if a browser cannot keep that subscription, the page falls back to bounded HTTP polling. The bounded Runtime Analysis metrics are retained in live status updates on Python and every Swift host, so the detailed runtime list remains populated after the first browser snapshot.
+Python's status aggregation updates those WebAdmin snapshots without emitting per-event `stats_board` trace records.
 
 On Linux native myUDP, authenticated receive uses nonblocking socket readiness and a separate protocol-timer source; it does not hold a receive thread in a timed `recv` wait while idle. Its isolated synchronous bootstrap/exchange fallback likewise uses `MSG_DONTWAIT` with only a configured bounded `poll` wait when no event-loop owner exists. Plain TCP and WebSocket use post-bootstrap readiness ownership with incremental frame buffers, while TLS WebSocket and QUIC surface their NIO inbound callbacks through the same pattern. A one-record asynchronous transport callback is re-armed after each successful record for the receiver lifetime. Partial records wait for the next callback rather than causing a blocking completion read.
 
