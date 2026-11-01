@@ -2,19 +2,21 @@
 
 ## Scope
 
-`@unchecked Sendable` is used only where an owner supplies an explicit
-synchronization boundary that Swift cannot prove. The concurrency guard rejects
-new mutable collection changes in these owners unless the changed diff includes
-an `OBSTACLEBRIDGE-CONCURRENCY` marker naming that boundary and its exercising
-test suite. The guard is run with the PR base SHA:
+Swift package targets and tests compile with
+`-strict-concurrency=complete`. New `@unchecked Sendable` conformances are
+forbidden: new ownership must use actor isolation, a serial executor, or a
+Sendable value type that the compiler can verify. The concurrency guard also
+requires any edit to a legacy unchecked owner to include an
+`OBSTACLEBRIDGE-CONCURRENCY` marker naming its synchronization boundary and
+exercising test suite. The guard is run with the PR base SHA:
 
 ```sh
 python scripts/check_swift_concurrency_guard.py --base-ref <base-sha>
 ```
 
-The listed owners were already present when the guard was introduced. They are
+The listed owners predate this policy and are the migration inventory. They are
 explicitly marked below so subsequent edits cannot silently extend an unchecked
-mutable state boundary without recorded synchronization and test coverage.
+mutable-state boundary without recorded synchronization and test coverage.
 
 ## Delivered coverage
 

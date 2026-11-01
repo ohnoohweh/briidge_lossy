@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require explicit synchronization evidence for changed unchecked Swift owners."""
+"""Reject unchecked Sendable additions and require evidence for legacy owners."""
 from __future__ import annotations
 
 import argparse
@@ -39,11 +39,13 @@ def validate(changes: dict[str, list[str]]) -> list[str]:
     for path, added in changes.items():
         if not path.startswith(SWIFT_SOURCE) or not path.endswith(".swift"):
             continue
-        source_path = ROOT / path
-        if not source_path.exists():
+        if any(UNCHECKED in line for line in added):
+            errors.append(
+                f"{path}: new {UNCHECKED} conformances are forbidden; use actor isolation, a serial executor, or a proven Sendable value type."
+            )
             continue
-        source = source_path.read_text(encoding="utf-8")
-        if UNCHECKED not in source:
+        source_path = ROOT / path
+        if not source_path.exists() or UNCHECKED not in source_path.read_text(encoding="utf-8"):
             continue
         evidence = "\n".join(added)
         if not EVIDENCE_FORMAT.search(evidence):
