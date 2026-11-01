@@ -140,15 +140,15 @@ private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
     }
 }
 
-private final class ObstacleBridgeLinuxTCPLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner, @unchecked Sendable {
+private final class ObstacleBridgeLinuxTCPLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner {
     init(runtime: ObstacleBridgeLinuxConfiguredRuntime) { super.init(runtime: runtime, expectedTransport: .tcp) }
 }
 
-private final class ObstacleBridgeLinuxQUICLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner, @unchecked Sendable {
+private final class ObstacleBridgeLinuxQUICLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner {
     init(runtime: ObstacleBridgeLinuxConfiguredRuntime) { super.init(runtime: runtime, expectedTransport: .quic) }
 }
 
-private final class ObstacleBridgeLinuxWebSocketLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner, @unchecked Sendable {
+private final class ObstacleBridgeLinuxWebSocketLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner {
     init(runtime: ObstacleBridgeLinuxConfiguredRuntime) { super.init(runtime: runtime, expectedTransport: .ws) }
 }
 
@@ -161,7 +161,7 @@ public enum ObstacleBridgeLinuxShutdownSignal: String, Sendable {
 }
 
 public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
-    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests (transport subclasses inherit this owner)
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
     public var onDiagnostic: ((String, [String: String]) -> Void)?
     public var onDebugDiagnostic: ((String, [String: String]) -> Void)?

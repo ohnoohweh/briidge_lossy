@@ -8,13 +8,13 @@ synchronous coordination primitives in a legacy unchecked owner are rejected
 by `scripts/check_swift_concurrency_guard.py`.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 17 declarations:
+approval to add lock-based ownership. The inventory contains 14 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
 | Shared Core | 0 |
 | Desktop shared | 0 |
-| Linux adapters/runtime | 17 |
+| Linux adapters/runtime | 14 |
 | Executable workers | 0 |
 | Test fixtures | 0 |
 
@@ -102,6 +102,9 @@ operation, packet, and JSON payload values remain isolated; tests inspect only
 immutable snapshots after the expected exchanges complete.
 The Linux reconnect supervisor is actor-owned; its timer asynchronously
 re-enters the actor, and retry state and snapshots never leave actor isolation.
+The transport-specific lifecycle subclasses inherit the base lifecycle owner's
+serialization boundary and introduce no mutable state or concurrency boundary
+of their own.
 The managed Linux TUN-helper process owner is non-Sendable and remains confined
 to its foreground runtime; the checked compiler accepts every existing use
 without a Sendable exemption.
