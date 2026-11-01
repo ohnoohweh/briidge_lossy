@@ -1303,7 +1303,8 @@ ARC-IO-001:
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_rejects_new_lock_in_legacy_owner
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_rejects_new_unchecked_owner
     # Also verifies coalesced cache warming after accepted records, so Admin
-    # can project completed logs without reintroducing a synchronous receive.
+    # can project completed logs without reintroducing a synchronous receive
+    # or transferring the non-Sendable supervisor through a callback.
     - tests/unit/test_native_log_supervisor.py::test_native_log_supervisor_query_uses_readiness_callback_not_polling
     - tests/unit/test_linux_native_peer_worker.py::test_linux_native_peer_worker_uses_readiness_decoder_after_bootstrap
     - tests/unit/test_telemetry.py::test_mtls_ingest_rejects_incomplete_body_with_timeout

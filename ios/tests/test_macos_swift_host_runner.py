@@ -153,6 +153,8 @@ def test_macos_log_worker_control_descriptors_survive_exec() -> None:
     assert "fcntl(descriptors[0], F_SETFD, FD_CLOEXEC) == 0" in supervisor
     assert "fcntl(descriptors[1], F_SETFD, FD_CLOEXEC)" not in supervisor
     assert "standard input or standard error during exec" in supervisor
+    assert "public final class ObstacleBridgeLogWorkerSupervisor {" in supervisor
+    assert "snapshotRefreshRequestID" in supervisor
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="native peer worker is macOS-only")
