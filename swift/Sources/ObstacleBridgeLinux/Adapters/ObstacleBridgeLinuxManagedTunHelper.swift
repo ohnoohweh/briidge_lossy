@@ -6,7 +6,7 @@ import Glibc
 /// Foreground-owned Swift helper process.  This keeps process ownership out of
 /// the IPC adapter: the adapter still sees only an authenticated Unix endpoint
 /// and can therefore interoperate with an externally supervised helper.
-public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
+public final class ObstacleBridgeLinuxManagedTunHelper {
     /// Linux capability numbers defined by `linux/capability.h`.  Either
     /// capability is sufficient for the helper's TUN and route ownership.
     private static let capNetAdminBit: UInt64 = 1 << 12
