@@ -1615,6 +1615,37 @@ function syncTelemetryTabVisibility() {
   if (!enabled && isTabActive('telemetry')) setActiveTab('status');
 }
 
+function tunRoutingConfigEnabled() {
+  const root = configState.config || {};
+  const cfg = root.TUN_routing && typeof root.TUN_routing === 'object'
+    ? root.TUN_routing
+    : root;
+  return Boolean(cfg.enabled_on_startup ?? root.enabled_on_startup);
+}
+
+function syncTunRoutingTabVisibility() {
+  const enabled = tunRoutingConfigEnabled();
+  const panel = document.getElementById('tab-tun-routing');
+  const nav = document.querySelector('.nav-tab[data-tab="tun-routing"]');
+  if (panel) panel.classList.toggle('hidden', !enabled);
+  if (nav) nav.classList.toggle('hidden', !enabled);
+  if (!enabled && isTabActive('tun-routing')) setActiveTab('status');
+}
+
+function secureLinkCertificateModeEnabled() {
+  const mode = String(configState.config?.secure_link_mode || '').trim().toLowerCase();
+  return mode === 'cert' || mode === 'certificate';
+}
+
+function syncSecureLinkTabVisibility() {
+  const enabled = secureLinkCertificateModeEnabled();
+  const panel = document.getElementById('tab-secure-link');
+  const nav = document.querySelector('.nav-tab[data-tab="secure-link"]');
+  if (panel) panel.classList.toggle('hidden', !enabled);
+  if (nav) nav.classList.toggle('hidden', !enabled);
+  if (!enabled && isTabActive('secure-link')) setActiveTab('status');
+}
+
 function proxyListenerRows(statusDoc) {
   const provider = statusDoc?.proxy_provider || {};
   const listeners = provider.listeners && typeof provider.listeners === 'object' ? provider.listeners : {};
@@ -3494,6 +3525,8 @@ async function loadConfig() {
     renderConfigSections(configState.schema, configState.config);
     syncProxyTabVisibility();
     syncTelemetryTabVisibility();
+    syncTunRoutingTabVisibility();
+    syncSecureLinkTabVisibility();
     applyProxyDoc();
     if (uiState.onboarding.initialized) {
       if ((uiState.onboarding.ownServersDraft || []).length === 0) {
