@@ -2129,6 +2129,7 @@ REQ-IO-001:
     # Also proves cache-refresh completion stays request-correlated and does
     # not transfer the non-Sendable desktop supervisor into a callback.
     - tests/unit/test_native_log_supervisor.py::test_native_log_supervisor_query_uses_readiness_callback_not_polling
+    # Also asserts the readiness owner remains non-Sendable after bootstrap.
     - tests/unit/test_linux_native_peer_worker.py::test_linux_native_peer_worker_uses_readiness_decoder_after_bootstrap
     - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap

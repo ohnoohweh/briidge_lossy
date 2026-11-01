@@ -8,6 +8,8 @@ def test_linux_native_peer_worker_uses_readiness_decoder_after_bootstrap() -> No
     source = (ROOT / "swift/Sources/ObstacleBridgeLinux/ObstacleBridgeLinuxNativePeerWorker.swift").read_text(encoding="utf-8")
     assert "import ObstacleBridgeDesktopShared" in source
     assert "DispatchSource.makeReadSource(fileDescriptor: descriptor" in source
+    assert "private final class ControlOwner {" in source
+    assert "ControlOwner: @unchecked Sendable" not in source
     assert "ObstacleBridgeWorkerIPCStreamDecoder" in source
     assert "decoder.append(Data(bytes.prefix(Int(received))))" in source
     assert "dispatchMain()" in source
