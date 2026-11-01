@@ -7,18 +7,22 @@ import ObstacleBridgeDesktopShared
 import Glibc
 #endif
 
-private final class NativeAdminStatusResponse: @unchecked Sendable {
-    private let lock = NSLock()
+private actor NativeAdminStatusResponse {
     private var value = Data()
 
     func store(_ response: Data?) {
-        lock.lock(); defer { lock.unlock() }
         value = response ?? Data()
     }
 
+    nonisolated func storeAndSignal(_ response: Data?, _ signal: DispatchSemaphore) {
+        Task {
+            await store(response)
+            signal.signal()
+        }
+    }
+
     func load() -> Data {
-        lock.lock(); defer { lock.unlock() }
-        return value
+        value
     }
 }
 
@@ -62,7 +66,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(try readExactly(outbound.count, from: pair.1) == outbound)
     }
 
-    @Test func nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss() throws {
+    @Test func nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss() async throws {
         let control = try makeSocketPair()
         let lifetime = try makeSocketPair()
         let log = try makeDatagramSocketPair()
@@ -190,9 +194,8 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let responseReady = DispatchSemaphore(value: 0)
         let response = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { responseReady.signal() }
             let result = try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/status", headers: ["Cookie": cookie])
-            response.store(result)
+            response.storeAndSignal(result, responseReady)
         }
         let statusRequest = try readControl(from: control.0)
         #expect(statusRequest["kind"] as? String == "admin.call")
@@ -200,42 +203,43 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let statusRequestID = statusRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": statusRequestID, "ok": true, "result": ["state": "ready", "redacted": true]]), to: control.0)
         #expect(responseReady.wait(timeout: .now() + 1) == .success)
-        let statusResponse = response.load()
+        let statusResponse = await response.load()
         #expect(String(data: statusResponse, encoding: .utf8)?.contains("HTTP/1.1 200 OK") == true)
         #expect(String(data: statusResponse, encoding: .utf8)?.contains("\"state\":\"ready\"") == true)
         let metaReady = DispatchSemaphore(value: 0)
         let metaResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { metaReady.signal() }
-            metaResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/meta", headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/meta", headers: ["Cookie": cookie])
+            metaResponse.storeAndSignal(result, metaReady)
         }
         let metaRequest = try readControl(from: control.0)
         #expect(metaRequest["method"] as? String == "get_status_snapshot")
         let metaRequestID = metaRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": metaRequestID, "ok": true, "result": ["build": ["commit": "abc123"]]]), to: control.0)
         #expect(metaReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"app\":\"ObstacleBridgeLinux\"") == true)
-        #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"commit\":\"abc123\"") == true)
-        #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"admin_web_name\":\"native-test\"") == true)
-        #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"overlay_transport\":\"tcp\"") == true)
-        #expect(String(data: metaResponse.load(), encoding: .utf8)?.contains("\"dashboard_enabled\":true") == true)
+        let metaWire = String(data: await metaResponse.load(), encoding: .utf8)
+        #expect(metaWire?.contains("\"app\":\"ObstacleBridgeLinux\"") == true)
+        #expect(metaWire?.contains("\"commit\":\"abc123\"") == true)
+        #expect(metaWire?.contains("\"admin_web_name\":\"native-test\"") == true)
+        #expect(metaWire?.contains("\"overlay_transport\":\"tcp\"") == true)
+        #expect(metaWire?.contains("\"dashboard_enabled\":true") == true)
         let telemetryReady = DispatchSemaphore(value: 0)
         let telemetryResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { telemetryReady.signal() }
-            telemetryResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/telemetry", headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/telemetry", headers: ["Cookie": cookie])
+            telemetryResponse.storeAndSignal(result, telemetryReady)
         }
         let telemetryRequest = try readControl(from: control.0)
         #expect(telemetryRequest["method"] as? String == "get_telemetry_client_snapshot")
         let telemetryRequestID = telemetryRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": telemetryRequestID, "ok": true, "result": ["enabled": true, "worker_state": "running"]]), to: control.0)
         #expect(telemetryReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: telemetryResponse.load(), encoding: .utf8)?.contains("\"worker_state\":\"running\"") == true)
+        #expect(String(data: await telemetryResponse.load(), encoding: .utf8)?.contains("\"worker_state\":\"running\"") == true)
         let tunStatusReady = DispatchSemaphore(value: 0)
         let tunStatusResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { tunStatusReady.signal() }
-            tunStatusResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/tun-routing/status", headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/tun-routing/status", headers: ["Cookie": cookie])
+            tunStatusResponse.storeAndSignal(result, tunStatusReady)
         }
         let tunStatusRequest = try readControl(from: control.0)
         #expect(tunStatusRequest["method"] as? String == "get_status_snapshot")
@@ -245,25 +249,26 @@ struct ObstacleBridgeLinuxTunDeviceTests {
             "result": ["tun": [["id": "tun0"]], "tun_helper": ["runtime": ["included_routes_active": true, "included_routes_toggle_supported": true]]],
         ]), to: control.0)
         #expect(tunStatusReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: tunStatusResponse.load(), encoding: .utf8)?.contains("\"id\":\"tun0\"") == true)
-        #expect(String(data: tunStatusResponse.load(), encoding: .utf8)?.contains("\"supported\":true") == true)
+        let tunStatusWire = String(data: await tunStatusResponse.load(), encoding: .utf8)
+        #expect(tunStatusWire?.contains("\"id\":\"tun0\"") == true)
+        #expect(tunStatusWire?.contains("\"supported\":true") == true)
         let liveReady = DispatchSemaphore(value: 0)
         let liveResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { liveReady.signal() }
-            liveResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/live?topic=peers", headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/live?topic=peers", headers: ["Cookie": cookie])
+            liveResponse.storeAndSignal(result, liveReady)
         }
         let liveRequest = try readControl(from: control.0)
         #expect(liveRequest["method"] as? String == "get_peer_connections_snapshot")
         let liveRequestID = liveRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": liveRequestID, "ok": true, "result": ["peers": [["id": "0:1"]]]]), to: control.0)
         #expect(liveReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: liveResponse.load(), encoding: .utf8)?.contains("\"id\":\"0:1\"") == true)
+        #expect(String(data: await liveResponse.load(), encoding: .utf8)?.contains("\"id\":\"0:1\"") == true)
         let configReady = DispatchSemaphore(value: 0)
         let configResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { configReady.signal() }
-            configResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/config", headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/config", headers: ["Cookie": cookie])
+            configResponse.storeAndSignal(result, configReady)
         }
         let configRequest = try readControl(from: control.0)
         #expect(configRequest["method"] as? String == "get_config_snapshot")
@@ -274,8 +279,9 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let schemaRequestID = schemaRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": schemaRequestID, "ok": true, "result": ["fields": ["debug_logging"]]]), to: control.0)
         #expect(configReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: configResponse.load(), encoding: .utf8)?.contains("\"redacted\":true") == true)
-        #expect(String(data: configResponse.load(), encoding: .utf8)?.contains("\"schema\":{\"fields\":[\"debug_logging\"]}") == true)
+        let configWire = String(data: await configResponse.load(), encoding: .utf8)
+        #expect(configWire?.contains("\"redacted\":true") == true)
+        #expect(configWire?.contains("\"schema\":{\"fields\":[\"debug_logging\"]}") == true)
         let updates: [String: Any] = ["debug_logging": ["debug_enabled": true]]
         let challengeRequestBody = try JSONSerialization.data(withJSONObject: ["updates": updates], options: [.sortedKeys])
         let configChallengeResponse = try nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/config/challenge", body: challengeRequestBody, headers: ["Cookie": cookie])
@@ -289,8 +295,8 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let updateReady = DispatchSemaphore(value: 0)
         let updateResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { updateReady.signal() }
-            updateResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/config", body: confirmedUpdateBody, headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/config", body: confirmedUpdateBody, headers: ["Cookie": cookie])
+            updateResponse.storeAndSignal(result, updateReady)
         }
         let updateRequest = try readControl(from: control.0)
         #expect(updateRequest["method"] as? String == "update_config")
@@ -302,14 +308,14 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let refreshedConfigRequestID = refreshedConfigRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": refreshedConfigRequestID, "ok": true, "result": ["debug_logging": ["debug_enabled": true]]]), to: control.0)
         #expect(updateReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: updateResponse.load(), encoding: .utf8)?.contains("\"ok\":true") == true)
-        #expect(String(data: updateResponse.load(), encoding: .utf8)?.contains("\"debug_enabled\":true") == true)
+        #expect(String(data: await updateResponse.load(), encoding: .utf8)?.contains("\"ok\":true") == true)
+        #expect(String(data: await updateResponse.load(), encoding: .utf8)?.contains("\"debug_enabled\":true") == true)
         let remoteServicesBody = try JSONSerialization.data(withJSONObject: ["remote_servers": [["service": "echo", "host": "127.0.0.1", "port": 7]]])
         let remoteServicesReady = DispatchSemaphore(value: 0)
         let remoteServicesResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { remoteServicesReady.signal() }
-            remoteServicesResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/channelmux/remote-services", body: remoteServicesBody, headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/channelmux/remote-services", body: remoteServicesBody, headers: ["Cookie": cookie])
+            remoteServicesResponse.storeAndSignal(result, remoteServicesReady)
         }
         let remoteServicesRequest = try readControl(from: control.0)
         #expect(remoteServicesRequest["method"] as? String == "replace_remote_services_catalog")
@@ -317,15 +323,15 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let remoteServicesRequestID = remoteServicesRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": remoteServicesRequestID, "ok": true, "result": [true, ""]]), to: control.0)
         #expect(remoteServicesReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: remoteServicesResponse.load(), encoding: .utf8)?.contains("\"service\":\"echo\"") == true)
+        #expect(String(data: await remoteServicesResponse.load(), encoding: .utf8)?.contains("\"service\":\"echo\"") == true)
         let reconnectBody = try JSONSerialization.data(withJSONObject: ["peer_id": "0:1"])
         let blockedReconnect = try nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/reconnect", body: reconnectBody, headers: ["Cookie": cookie])
         #expect(String(data: blockedReconnect, encoding: .utf8)?.contains("HTTP/1.1 403 Forbidden") == true)
         let reconnectReady = DispatchSemaphore(value: 0)
         let reconnectResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { reconnectReady.signal() }
-            reconnectResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/reconnect", body: reconnectBody, headers: ["Cookie": cookie, "Authorization": "Bearer control"]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/reconnect", body: reconnectBody, headers: ["Cookie": cookie, "Authorization": "Bearer control"])
+            reconnectResponse.storeAndSignal(result, reconnectReady)
         }
         let reconnectRequest = try readControl(from: control.0)
         #expect(reconnectRequest["method"] as? String == "request_overlay_reconnect")
@@ -333,12 +339,12 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let reconnectRequestID = reconnectRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": reconnectRequestID, "ok": true, "result": ["ok": true, "requested": 1]]), to: control.0)
         #expect(reconnectReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: reconnectResponse.load(), encoding: .utf8)?.contains("\"requested\":1") == true)
+        #expect(String(data: await reconnectResponse.load(), encoding: .utf8)?.contains("\"requested\":1") == true)
         let rekeyReady = DispatchSemaphore(value: 0)
         let rekeyResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { rekeyReady.signal() }
-            rekeyResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/secure-link/rekey", body: reconnectBody, headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/secure-link/rekey", body: reconnectBody, headers: ["Cookie": cookie])
+            rekeyResponse.storeAndSignal(result, rekeyReady)
         }
         let rekeyRequest = try readControl(from: control.0)
         #expect(rekeyRequest["method"] as? String == "request_secure_link_rekey")
@@ -346,13 +352,13 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let rekeyRequestID = rekeyRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": rekeyRequestID, "ok": true, "result": ["ok": true, "requested": 1]]), to: control.0)
         #expect(rekeyReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: rekeyResponse.load(), encoding: .utf8)?.contains("\"requested\":1") == true)
+        #expect(String(data: await rekeyResponse.load(), encoding: .utf8)?.contains("\"requested\":1") == true)
         let reloadBody = try JSONSerialization.data(withJSONObject: ["scope": "all", "peer_id": "0:1"])
         let reloadReady = DispatchSemaphore(value: 0)
         let reloadResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { reloadReady.signal() }
-            reloadResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/secure-link/reload", body: reloadBody, headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/secure-link/reload", body: reloadBody, headers: ["Cookie": cookie])
+            reloadResponse.storeAndSignal(result, reloadReady)
         }
         let reloadRequest = try readControl(from: control.0)
         #expect(reloadRequest["method"] as? String == "request_secure_link_reload")
@@ -361,27 +367,27 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let reloadRequestID = reloadRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": reloadRequestID, "ok": true, "result": ["ok": true, "reloaded": 1]]), to: control.0)
         #expect(reloadReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: reloadResponse.load(), encoding: .utf8)?.contains("\"reloaded\":1") == true)
+        #expect(String(data: await reloadResponse.load(), encoding: .utf8)?.contains("\"reloaded\":1") == true)
         let tunRepairReady = DispatchSemaphore(value: 0)
         let tunRepairResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { tunRepairReady.signal() }
-            tunRepairResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/tun-helper/repair", headers: ["Cookie": cookie, "Authorization": "Bearer control"]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/tun-helper/repair", headers: ["Cookie": cookie, "Authorization": "Bearer control"])
+            tunRepairResponse.storeAndSignal(result, tunRepairReady)
         }
         let tunRepairRequest = try readControl(from: control.0)
         #expect(tunRepairRequest["method"] as? String == "request_tun_helper_repair")
         let tunRepairRequestID = tunRepairRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": tunRepairRequestID, "ok": true, "result": ["ok": true, "repaired": ["tun0"], "failed": []]]), to: control.0)
         #expect(tunRepairReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: tunRepairResponse.load(), encoding: .utf8)?.contains("\"repaired\":[\"tun0\"]") == true)
+        #expect(String(data: await tunRepairResponse.load(), encoding: .utf8)?.contains("\"repaired\":[\"tun0\"]") == true)
         let tunControlBody = try JSONSerialization.data(withJSONObject: ["enabled": true])
         let blockedTunControl = try nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/tun-routing/control", body: tunControlBody, headers: ["Cookie": cookie])
         #expect(String(data: blockedTunControl, encoding: .utf8)?.contains("HTTP/1.1 403 Forbidden") == true)
         let tunControlReady = DispatchSemaphore(value: 0)
         let tunControlResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { tunControlReady.signal() }
-            tunControlResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/tun-routing/control", body: tunControlBody, headers: ["Cookie": cookie, "Authorization": "Bearer control"]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/tun-routing/control", body: tunControlBody, headers: ["Cookie": cookie, "Authorization": "Bearer control"])
+            tunControlResponse.storeAndSignal(result, tunControlReady)
         }
         let tunControlRequest = try readControl(from: control.0)
         #expect(tunControlRequest["method"] as? String == "request_tun_enabled")
@@ -389,12 +395,12 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let tunControlRequestID = tunControlRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": tunControlRequestID, "ok": true, "result": ["ok": true, "enabled": true]]), to: control.0)
         #expect(tunControlReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: tunControlResponse.load(), encoding: .utf8)?.contains("\"enabled\":true") == true)
+        #expect(String(data: await tunControlResponse.load(), encoding: .utf8)?.contains("\"enabled\":true") == true)
         let restartReady = DispatchSemaphore(value: 0)
         let restartResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { restartReady.signal() }
-            restartResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/restart", headers: ["Cookie": cookie, "Authorization": "Bearer control"]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/restart", headers: ["Cookie": cookie, "Authorization": "Bearer control"])
+            restartResponse.storeAndSignal(result, restartReady)
         }
         let restartRequest = try readControl(from: control.0)
         #expect(restartRequest["method"] as? String == "request_restart")
@@ -402,12 +408,12 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let restartRequestID = restartRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": restartRequestID, "ok": true, "result": NSNull()]), to: control.0)
         #expect(restartReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: restartResponse.load(), encoding: .utf8)?.contains("\"restarting\":true") == true)
+        #expect(String(data: await restartResponse.load(), encoding: .utf8)?.contains("\"restarting\":true") == true)
         let shutdownReady = DispatchSemaphore(value: 0)
         let shutdownResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { shutdownReady.signal() }
-            shutdownResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/shutdown", headers: ["Cookie": cookie, "Authorization": "Bearer control"]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/shutdown", headers: ["Cookie": cookie, "Authorization": "Bearer control"])
+            shutdownResponse.storeAndSignal(result, shutdownReady)
         }
         let shutdownRequest = try readControl(from: control.0)
         #expect(shutdownRequest["method"] as? String == "request_shutdown")
@@ -416,12 +422,12 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let shutdownRequestID = shutdownRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": shutdownRequestID, "ok": true, "result": NSNull()]), to: control.0)
         #expect(shutdownReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: shutdownResponse.load(), encoding: .utf8)?.contains("\"shutting_down\":true") == true)
+        #expect(String(data: await shutdownResponse.load(), encoding: .utf8)?.contains("\"shutting_down\":true") == true)
         let logsReady = DispatchSemaphore(value: 0)
         let logsResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { logsReady.signal() }
-            logsResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/logs?limit=7", headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/logs?limit=7", headers: ["Cookie": cookie])
+            logsResponse.storeAndSignal(result, logsReady)
         }
         let logsRequest = try readControl(from: control.0)
         #expect(logsRequest["method"] as? String == "fetch_logs")
@@ -429,54 +435,54 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let logsRequestID = logsRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": logsRequestID, "ok": true, "result": ["available": true, "lines": ["native_admin_ready"], "error": "", "worker_status": ["state": "running", "implementation": "swift", "pid": 42]]]), to: control.0)
         #expect(logsReady.wait(timeout: .now() + 1) == .success)
-        let logsWire = String(data: logsResponse.load(), encoding: .utf8) ?? ""
+        let logsWire = String(data: await logsResponse.load(), encoding: .utf8) ?? ""
         #expect(logsWire.contains("\"lines\":[\"native_admin_ready\"]"))
         #expect(logsWire.contains("\"available\":true"))
         #expect(logsWire.contains("\"source\":\"managed\""))
         let connectionsReady = DispatchSemaphore(value: 0)
         let connectionsResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { connectionsReady.signal() }
-            connectionsResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/connections", headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/connections", headers: ["Cookie": cookie])
+            connectionsResponse.storeAndSignal(result, connectionsReady)
         }
         let connectionsRequest = try readControl(from: control.0)
         #expect(connectionsRequest["method"] as? String == "get_connections_snapshot")
         let connectionsRequestID = connectionsRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": connectionsRequestID, "ok": true, "result": ["tcp": [["state": "open"]]]]), to: control.0)
         #expect(connectionsReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: connectionsResponse.load(), encoding: .utf8)?.contains("\"state\":\"open\"") == true)
+        #expect(String(data: await connectionsResponse.load(), encoding: .utf8)?.contains("\"state\":\"open\"") == true)
         let blueprintsReady = DispatchSemaphore(value: 0)
         let blueprintsResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { blueprintsReady.signal() }
-            blueprintsResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/onboarding/blueprints", headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/onboarding/blueprints", headers: ["Cookie": cookie])
+            blueprintsResponse.storeAndSignal(result, blueprintsReady)
         }
         let blueprintsRequest = try readControl(from: control.0)
         #expect(blueprintsRequest["method"] as? String == "get_connections_snapshot")
         let blueprintsRequestID = blueprintsRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": blueprintsRequestID, "ok": true, "result": ["tcp": [["state": "open", "peer_id": "peer-a", "local_port": 23001, "remote_destination": "198.51.100.7:443"]]]]), to: control.0)
         #expect(blueprintsReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: blueprintsResponse.load(), encoding: .utf8)?.contains("\"peer_id\":\"peer-a\"") == true)
-        #expect(String(data: blueprintsResponse.load(), encoding: .utf8)?.contains("\"host\":\"198.51.100.7\"") == true)
+        #expect(String(data: await blueprintsResponse.load(), encoding: .utf8)?.contains("\"peer_id\":\"peer-a\"") == true)
+        #expect(String(data: await blueprintsResponse.load(), encoding: .utf8)?.contains("\"host\":\"198.51.100.7\"") == true)
         let profilesReady = DispatchSemaphore(value: 0)
         let profilesResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { profilesReady.signal() }
-            profilesResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/onboarding/connection-profiles", headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/onboarding/connection-profiles", headers: ["Cookie": cookie])
+            profilesResponse.storeAndSignal(result, profilesReady)
         }
         let profilesRequest = try readControl(from: control.0)
         #expect(profilesRequest["method"] as? String == "get_peer_connections_snapshot")
         let profilesRequestID = profilesRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": profilesRequestID, "ok": true, "result": ["peers": [["id": "0:1", "transport": "tcp", "state": "connected", "peer": "198.51.100.9:8443"]]]]), to: control.0)
         #expect(profilesReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: profilesResponse.load(), encoding: .utf8)?.contains("\"id\":\"live:tcp:0:1\"") == true)
-        #expect(String(data: profilesResponse.load(), encoding: .utf8)?.contains("\"peer_host\":\"198.51.100.9\"") == true)
+        #expect(String(data: await profilesResponse.load(), encoding: .utf8)?.contains("\"id\":\"live:tcp:0:1\"") == true)
+        #expect(String(data: await profilesResponse.load(), encoding: .utf8)?.contains("\"peer_host\":\"198.51.100.9\"") == true)
         let inviteBody = try JSONSerialization.data(withJSONObject: ["connection_id": "live:tcp:0:1"])
         let inviteReady = DispatchSemaphore(value: 0)
         let inviteResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { inviteReady.signal() }
-            inviteResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/onboarding/invite/generate", body: inviteBody, headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "POST", path: "/api/onboarding/invite/generate", body: inviteBody, headers: ["Cookie": cookie])
+            inviteResponse.storeAndSignal(result, inviteReady)
         }
         let inviteConfigRequest = try readControl(from: control.0)
         #expect(inviteConfigRequest["method"] as? String == "get_onboarding_config_snapshot")
@@ -487,7 +493,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let invitePeersRequestID = invitePeersRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": invitePeersRequestID, "ok": true, "result": ["peers": [["id": "0:1", "transport": "tcp", "state": "connected", "peer": "198.51.100.9:8443"]]]]), to: control.0)
         #expect(inviteReady.wait(timeout: .now() + 1) == .success)
-        let invitePayload = try #require(try JSONSerialization.jsonObject(with: httpBody(inviteResponse.load())) as? [String: Any])
+        let invitePayload = try #require(try JSONSerialization.jsonObject(with: httpBody(await inviteResponse.load())) as? [String: Any])
         let inviteToken = try #require(invitePayload["invite_token"] as? String)
         #expect(inviteToken.hasPrefix("ob1."))
         let previewBody = try JSONSerialization.data(withJSONObject: ["invite_token": inviteToken])
@@ -498,15 +504,15 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let peersReady = DispatchSemaphore(value: 0)
         let peersResponse = NativeAdminStatusResponse()
         DispatchQueue.global().async {
-            defer { peersReady.signal() }
-            peersResponse.store(try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/peers", headers: ["Cookie": cookie]))
+            let result = try? self.nativeAdminHTTPRequest(port: port, method: "GET", path: "/api/peers", headers: ["Cookie": cookie])
+            peersResponse.storeAndSignal(result, peersReady)
         }
         let peersRequest = try readControl(from: control.0)
         #expect(peersRequest["method"] as? String == "get_peer_connections_snapshot")
         let peersRequestID = peersRequest["id"] as? String ?? ""
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": peersRequestID, "ok": true, "result": ["peers": [["id": "0:1"]]]]), to: control.0)
         #expect(peersReady.wait(timeout: .now() + 1) == .success)
-        #expect(String(data: peersResponse.load(), encoding: .utf8)?.contains("\"id\":\"0:1\"") == true)
+        #expect(String(data: await peersResponse.load(), encoding: .utf8)?.contains("\"id\":\"0:1\"") == true)
         let record = try JSONSerialization.jsonObject(with: readDatagram(from: log.0)) as? [String: Any]
         #expect(record?["name"] as? String == "admin.native")
         #expect(record?["message"] as? String == "native_admin_ready")
