@@ -1586,6 +1586,24 @@ function syncProxyTabVisibility() {
   if (!enabled && isTabActive('proxy')) setActiveTab('status');
 }
 
+function telemetryConfigEnabled() {
+  const root = configState.config || {};
+  const client = root.telemetry_client && typeof root.telemetry_client === 'object' ? root.telemetry_client : root;
+  const collector = root.telemetry_server && typeof root.telemetry_server === 'object' ? root.telemetry_server : root;
+  const clientEnabled = client.telemetry_enabled ?? root.telemetry_enabled;
+  const collectorEnabled = collector.telemetry_collector_enabled ?? root.telemetry_collector_enabled;
+  return Boolean(clientEnabled || collectorEnabled);
+}
+
+function syncTelemetryTabVisibility() {
+  const enabled = telemetryConfigEnabled();
+  const telemetryPanel = document.getElementById('tab-telemetry');
+  const telemetryNav = document.querySelector('.nav-tab[data-tab="telemetry"]');
+  if (telemetryPanel) telemetryPanel.classList.toggle('hidden', !enabled);
+  if (telemetryNav) telemetryNav.classList.toggle('hidden', !enabled);
+  if (!enabled && isTabActive('telemetry')) setActiveTab('status');
+}
+
 function proxyListenerRows(statusDoc) {
   const provider = statusDoc?.proxy_provider || {};
   const listeners = provider.listeners && typeof provider.listeners === 'object' ? provider.listeners : {};
@@ -3464,6 +3482,7 @@ async function loadConfig() {
     applyAdminInstanceName(configState.config.admin_web_name);
     renderConfigSections(configState.schema, configState.config);
     syncProxyTabVisibility();
+    syncTelemetryTabVisibility();
     applyProxyDoc();
     if (uiState.onboarding.initialized) {
       if ((uiState.onboarding.ownServersDraft || []).length === 0) {

@@ -578,10 +578,14 @@ class AdminWebPayloadTests(unittest.TestCase):
         index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
         app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn('data-tab="telemetry"', index_html)
-        self.assertIn('id="tab-telemetry"', index_html)
+        self.assertIn('class="nav-tab hidden" data-tab="telemetry"', index_html)
+        self.assertIn('id="tab-telemetry" class="tab-panel hidden"', index_html)
         self.assertIn("Telemetry collector", index_html)
         self.assertIn("function applyTelemetryDoc", app_js)
+        self.assertIn("function syncTelemetryTabVisibility()", app_js)
+        self.assertIn("function telemetryConfigEnabled()", app_js)
+        self.assertIn("if (!enabled && isTabActive('telemetry')) setActiveTab('status');", app_js)
+        self.assertIn("syncTelemetryTabVisibility();", app_js)
         self.assertIn("telemetry.collector", app_js)
 
     @staticmethod
