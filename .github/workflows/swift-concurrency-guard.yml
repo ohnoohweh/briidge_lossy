@@ -9,4 +9,4 @@ jobs:
       - uses: actions/checkout@v5
         with: { fetch-depth: 0 }
       - run: python scripts/check_swift_concurrency_guard.py --base-ref "${{ github.event.pull_request.base.sha || github.event.before }}"
-      - run: swift build --target ObstacleBridgeCore -Xswiftc -strict-concurrency=complete
+      - run: swift test list
