@@ -1696,6 +1696,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn('id="proxyWorkerMode"', index_html)
         self.assertIn('id="proxyWorkerFailedStarts"', index_html)
         self.assertIn('id="proxyWorkerControlSocket"', index_html)
+        proxy_start = index_html.index('id="tab-proxy"')
+        proxy_details = index_html.index('<summary>Technical details</summary>', proxy_start)
+        self.assertGreater(index_html.index('id="proxyWorkerMode"'), proxy_details)
 
     def test_tun_routing_frontend_uses_dedicated_tab_and_api(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]

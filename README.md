@@ -1029,7 +1029,7 @@ curl --socks5-hostname 127.0.0.1:13882 http://example.com/
 curl --socks5-hostname 127.0.0.1:13882 https://example.com/
 ```
 
-When the provider is enabled, WebAdmin shows its Proxy page with configured ports, listener state, active connections, standalone RX/s and TX/s values, byte counters, and last error. Its Proxy Worker section distinguishes in-process mode from a supervised, non-detached child and shows child PID, control-socket connectivity, server-started state, and lifecycle. Listener cards are vertically ordered. The page is omitted while the provider is disabled.
+When the provider is enabled, WebAdmin shows its Proxy page with configured ports, listener state, active connections, standalone RX/s and TX/s values, byte counters, and last error. A closed Technical details disclosure contains the Proxy Worker state: it distinguishes in-process mode from a supervised, non-detached child and shows child PID, control-socket connectivity, server-started state, and lifecycle. Listener cards are vertically ordered. The page is omitted while the provider is disabled.
 
 macOS setup:
 

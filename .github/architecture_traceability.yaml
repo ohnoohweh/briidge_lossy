@@ -936,6 +936,7 @@ ARC-CMP-005:
     # TUN navigation requires enabled startup routing; certificate material
     # controls are omitted for PSK mode.
     - tests/unit/test_admin_web_payloads.py::test_optional_tun_and_certificate_secure_link_tabs_follow_configuration
+    # The Proxy Worker lifecycle is available in the closed Proxy Technical details disclosure.
     - tests/unit/test_admin_web_payloads.py::test_proxy_page_renders_private_worker_lifecycle
     # Proxy observability keeps rates as plain fields and stacks listener cards.
     - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput
