@@ -388,8 +388,9 @@ suite, including Python/Swift agreement on O4/O5 and RS2/RS3 truncation and
 trailing-byte rejection. Linux WebSocket tests also negotiate and round-trip
 all shared text payload modes against a Python peer. The shared corpus also
 pins Python-compatible myUDP CONTROL bytes and malformed rejection; direct
-Core and Apple-probe tests pin the payload-derived 713-counter missing-list
-boundary. Linux TCP and WebSocket adapter probes additionally make independent
+Core, Python, and Apple-probe tests pin the payload-derived 713-counter
+missing-list boundary and prove an out-of-window counter leaves receiver state
+unchanged. Linux TCP and WebSocket adapter probes additionally make independent
 Python peers send malformed and duplicate protected frames after authentication;
 both must fail closed. Direct Core tests also cover portable ChannelMux reply admission. The
 macOS build-source

@@ -546,7 +546,7 @@ Implementation note: the live-config derivation for `REQ-MUX-010` now also inclu
 - `REQ-MYU-003`: The myudp transport shall recover from selected CONTROL frame loss.
 - `REQ-MYU-004`: The myudp transport shall correctly transfer large payloads under delayed and lossy conditions.
 - `REQ-MYU-005`: Bidirectional myudp traffic shall remain functional when both directions are active concurrently.
-- `REQ-MYU-006`: The myudp transport shall tolerate heavy early loss patterns without silently corrupting delivered payloads.
+- `REQ-MYU-006`: The myudp transport shall tolerate heavy early loss patterns without silently corrupting delivered payloads, while rejecting an out-of-window peer counter without materializing unreportable missing state.
 
 Implementation and verification note: the shared Core wire corpus derives a
 myUDP DATA_BATCH envelope from the Python reference `Protocol` and

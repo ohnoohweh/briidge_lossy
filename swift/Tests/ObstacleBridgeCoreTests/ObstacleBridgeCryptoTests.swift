@@ -109,6 +109,10 @@ struct ObstacleBridgeCryptoTests {
     }
     @Test func myudpCoreStreamReceiveStateUsesTheWireDerivedMissingLimit() throws {
         let state = ObstacleBridgeMyUDPStreamReceiveState()
+        let beyondWindow = UInt16(ObstacleBridgeMyUDPCodec.maximumControlMissingCount + 2)
+        #expect(try #require(state.process(.init(counter: beyondWindow, payload: Data([0])))).accepted == false)
+        #expect(state.expected == 1)
+        #expect(state.pending.isEmpty && state.missing.isEmpty)
         #expect(try #require(state.process(.init(counter: 714, payload: Data([0])))).accepted == false)
         let acknowledgement = state.acknowledgement
         #expect(acknowledgement.lastInOrder == 0)

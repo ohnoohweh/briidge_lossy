@@ -1109,6 +1109,11 @@ class MyUDP2Session(_MyUDP2SessionCore):
         if cmpv < 0:
             return False, completed
         if cmpv > 0:
+            # A peer-selected counter must not materialize an unbounded
+            # missing range. The CONTROL wire format cannot request more than
+            # this window, so a farther packet is not recoverable here.
+            if ((chunk.counter - self.expected) % 65535) > CONTROL_MAX_MISSED:
+                return False, completed
             self._enqueue_stream_chunk(chunk)
             return False, completed
         self.expected = c16_inc(self.expected)

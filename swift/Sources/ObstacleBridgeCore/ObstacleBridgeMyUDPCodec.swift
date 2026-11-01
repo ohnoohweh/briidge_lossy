@@ -588,7 +588,16 @@ public final class ObstacleBridgeMyUDPStreamReceiveState: @unchecked Sendable {
         guard chunk.counter != 0 else { return nil }
         let comparison = ringCompare(chunk.counter, expected)
         if comparison < 0 { return (false, []) }
-        if comparison > 0 { enqueue(chunk); return (false, []) }
+        // A peer-selected counter must not materialize an unbounded missing
+        // range.  The wire can report only this many missing counters, so a
+        // farther packet cannot be recovered through the current ACK window.
+        if comparison > 0 {
+            guard forwardDistance(chunk.counter, from: expected) <= ObstacleBridgeMyUDPCodec.maximumControlMissingCount else {
+                return (false, [])
+            }
+            enqueue(chunk)
+            return (false, [])
+        }
 
         var completed: [Data] = []
         guard appendContiguous(chunk.payload, completed: &completed) else { return nil }
@@ -694,6 +703,7 @@ public struct ObstacleBridgeMyUDPInboundIdleResult: Equatable, Sendable {
 /// RTT/liveness, and CONTROL pacing. Socket owners submit decoded chunks and
 /// execute the resulting delivery and outbound-control effects.
 public final class ObstacleBridgeMyUDPReceiverEngine: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeCryptoTests
     // Receiver state is shared by foreground sends/timer ticks and the Linux
     // readiness callback.  Keep the portable engine safe even when an adapter
     // accidentally reaches it from more than one owner queue.
@@ -740,20 +750,21 @@ public final class ObstacleBridgeMyUDPReceiverEngine: @unchecked Sendable {
             nowNanoseconds: nowNanoseconds, transmittedNanoseconds: transmittedNanoseconds,
             echoedNanoseconds: echoedNanoseconds, fromIdle: false, prior: heartbeat
         )
-        let priorMissing = receiveState.missing
         var records: [Data] = []
         var gapFilled = false
+        var grewMissing = false
         for chunk in chunks {
-            if priorMissing.contains(chunk.counter) { gapFilled = true }
+            if receiveState.missing.contains(chunk.counter) { gapFilled = true }
+            let missingBefore = receiveState.missing.count
             guard let result = receiveState.process(chunk) else {
                 receiveState.reset()
                 return nil
             }
+            grewMissing = grewMissing || receiveState.missing.count > missingBefore
             records.append(contentsOf: result.completedRecords)
         }
         var reasons: [String] = []
         if gapFilled && transportWritable { reasons.append("gap_filled_ack") }
-        let grewMissing = !receiveState.missing.subtracting(priorMissing).isEmpty
         let decision = ObstacleBridgeMyUDPControlPolicy.inbound(
             nowNanoseconds: nowNanoseconds, expectedCounter: receiveState.expected,
             missingCount: receiveState.missing.count, grewMissing: grewMissing,
