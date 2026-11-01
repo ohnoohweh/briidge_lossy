@@ -201,7 +201,9 @@ public struct ObstacleBridgeMyUDPOutboundBatch: Equatable, Sendable {
 /// Bounded application-record queue for myUDP DATA batches. It deliberately
 /// has no socket dependency: a runtime provides its outstanding count, emits
 /// the returned chunks, and records the resulting transport effects.
-public final class ObstacleBridgeMyUDPSendQueue: @unchecked Sendable {
+/// Non-Sendable protocol state, retained by one peer engine and mutated by
+/// that peer's serialized transport owner.
+public final class ObstacleBridgeMyUDPSendQueue {
     private struct QueuedRecord: Sendable {
         var bytes: Data
         let queuedAtNanoseconds: UInt64
@@ -277,7 +279,9 @@ public struct ObstacleBridgeMyUDPSenderFeedback: Equatable, Sendable {
 
 /// Core-owned sender bookkeeping for queued DATA chunks and cumulative CONTROL
 /// feedback. Envelope construction and socket writes remain adapter effects.
-public final class ObstacleBridgeMyUDPSenderLedger: @unchecked Sendable {
+/// Non-Sendable protocol state, retained by one peer engine and mutated by
+/// that peer's serialized transport owner.
+public final class ObstacleBridgeMyUDPSenderLedger {
     private let queue: ObstacleBridgeMyUDPSendQueue
     private var payloads: [UInt16: Data] = [:]
     private var firstTransmit: [UInt16: UInt64] = [:]
@@ -569,7 +573,9 @@ public enum ObstacleBridgeMyUDPIdlePolicy {
 /// counter-ring ordering, duplicate suppression, missing-counter discovery,
 /// and four-byte application-record buffering; adapters only submit chunks and
 /// deliver completed records.
-public final class ObstacleBridgeMyUDPStreamReceiveState: @unchecked Sendable {
+/// Non-Sendable receive state, retained by one receiver engine and mutated by
+/// that peer's serialized transport owner.
+public final class ObstacleBridgeMyUDPStreamReceiveState {
     public private(set) var expected: UInt16 = 1
     public private(set) var pending: [UInt16: ObstacleBridgeMyUDPStreamChunk] = [:]
     public private(set) var missing: Set<UInt16> = []
@@ -702,7 +708,9 @@ public struct ObstacleBridgeMyUDPInboundIdleResult: Equatable, Sendable {
 /// Peer-scoped receive-side myUDP runtime. It composes ordered stream state,
 /// RTT/liveness, and CONTROL pacing. Socket owners submit decoded chunks and
 /// execute the resulting delivery and outbound-control effects.
-public final class ObstacleBridgeMyUDPReceiverEngine: @unchecked Sendable {
+/// Non-Sendable receive state, retained by one peer engine. Its public effects
+/// and snapshots are immutable Sendable values for transport owners.
+public final class ObstacleBridgeMyUDPReceiverEngine {
     // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeCryptoTests
     // Receiver state is shared by foreground sends/timer ticks and the Linux
     // readiness callback.  Keep the portable engine safe even when an adapter
@@ -859,7 +867,9 @@ public final class ObstacleBridgeMyUDPReceiverEngine: @unchecked Sendable {
 /// Socket-independent myUDP peer state. Adapters submit application records,
 /// wire frames, timer ticks, and epoch resets; they only execute emitted wire
 /// effects and deliver completed records.
-public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
+/// Non-Sendable peer protocol state, confined to the serialized owner for one
+/// transport peer. It publishes only immutable Sendable effects and snapshots.
+public final class ObstacleBridgeMyUDPPeerEngine {
     public static let defaultIdleIntervalNanoseconds: UInt64 = 1_000_000_000
     public struct Metrics: Equatable, Sendable {
         public let outstandingCount: Int
@@ -1111,7 +1121,9 @@ public enum ObstacleBridgeMyUDPPeerRegistryError: Error, Equatable, Sendable {
     case staleEpoch
 }
 
-public final class ObstacleBridgeMyUDPPeerRegistry: @unchecked Sendable {
+/// Non-Sendable listener protocol state, confined to its serialized datagram
+/// owner. It returns immutable effects rather than sharing peer state.
+public final class ObstacleBridgeMyUDPPeerRegistry {
     public struct PeerKey: Hashable, Sendable { public let identity: String; public let epoch: UInt64; public init(identity: String, epoch: UInt64) { self.identity = identity; self.epoch = epoch } }
     private var peers: [PeerKey: ObstacleBridgeMyUDPPeerEngine] = [:]
     private var lastActivityNanoseconds: [PeerKey: UInt64] = [:]
