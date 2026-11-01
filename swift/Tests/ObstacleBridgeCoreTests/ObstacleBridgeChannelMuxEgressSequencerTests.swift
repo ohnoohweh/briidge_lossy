@@ -2,6 +2,24 @@ import Foundation
 import Testing
 @testable import ObstacleBridgeCore
 
+private actor EgressSequencerOwner {
+    private let scheduler = ObstacleBridgeChannelMuxEgressSequencer<Int>()
+
+    func enqueue(_ value: Int, from source: ObstacleBridgeChannelMuxEgressSource) {
+        scheduler.enqueue(value, from: source)
+    }
+
+    func drain() -> Set<Int> {
+        var delivered: Set<Int> = []
+        while let value = scheduler.dequeueNext() {
+            delivered.insert(value)
+        }
+        return delivered
+    }
+
+    func isEmpty() -> Bool { scheduler.isEmpty }
+}
+
 struct ObstacleBridgeChannelMuxEgressSequencerTests {
     @Test func allMuxMessageTypesSharePersistentSourceTurns() {
         let scheduler = ObstacleBridgeChannelMuxEgressSequencer<String>()
@@ -35,22 +53,19 @@ struct ObstacleBridgeChannelMuxEgressSequencerTests {
     }
 
     @Test func concurrentEnqueueAndDrainProtectsNativeSetStorage() async {
-        let scheduler = ObstacleBridgeChannelMuxEgressSequencer<Int>()
+        let scheduler = EgressSequencerOwner()
         await withTaskGroup(of: Void.self) { group in
             for sourceID in 0..<8 {
                 group.addTask {
                     let source = ObstacleBridgeChannelMuxEgressSource(protocolType: 1, channelID: UInt16(sourceID + 1))
                     for value in 0..<200 {
-                        scheduler.enqueue(sourceID * 1_000 + value, from: source)
+                        await scheduler.enqueue(sourceID * 1_000 + value, from: source)
                     }
                 }
             }
         }
-        var delivered: Set<Int> = []
-        while let value = scheduler.dequeueNext() {
-            delivered.insert(value)
-        }
+        let delivered = await scheduler.drain()
         #expect(delivered.count == 1_600)
-        #expect(scheduler.isEmpty)
+        #expect(await scheduler.isEmpty())
     }
 }

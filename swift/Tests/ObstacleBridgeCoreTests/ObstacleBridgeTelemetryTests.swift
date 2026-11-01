@@ -2,6 +2,24 @@ import Foundation
 import Testing
 @testable import ObstacleBridgeCore
 
+private actor TelemetryEmitterOwner {
+    private let emitter: ObstacleBridgeTelemetryEmitter
+
+    init() throws {
+        emitter = try ObstacleBridgeTelemetryEmitter(
+            installationID: "install-01", sessionID: "session-01", capacity: 8
+        )
+    }
+
+    func emitLowPriorityLoad() -> Bool {
+        emitter.emit(event: "runtime.load", priority: .low)
+    }
+
+    func drain() -> [ObstacleBridgeTelemetryEvent] {
+        emitter.drain(limit: 128)
+    }
+}
+
 struct ObstacleBridgeTelemetryTests {
     @Test func adminServiceConnectionRolesFollowThePortableCatalogContract() {
         #expect(ObstacleBridgeAdminSnapshotSupport.serviceConnectionRole(catalog: "own_servers") == "server")
@@ -258,12 +276,12 @@ struct ObstacleBridgeTelemetryTests {
     }
 
     @Test func concurrentEmissionStaysBoundedAndNeverThrows() async throws {
-        let emitter = try ObstacleBridgeTelemetryEmitter(installationID: "install-01", sessionID: "session-01", capacity: 8)
+        let emitter = try TelemetryEmitterOwner()
         await withTaskGroup(of: Bool.self) { group in
-            for _ in 0..<128 { group.addTask { emitter.emit(event: "runtime.load", priority: .low) } }
+            for _ in 0..<128 { group.addTask { await emitter.emitLowPriorityLoad() } }
             for await _ in group {}
         }
-        #expect(emitter.drain(limit: 128).count <= 8)
+        #expect(await emitter.drain().count <= 8)
     }
 
     @Test func spoolQuarantinesCorruptSegmentsAndEvictsLowPriorityFirst() throws {
