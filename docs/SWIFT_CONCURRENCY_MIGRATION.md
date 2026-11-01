@@ -8,7 +8,7 @@ synchronous coordination primitives in a legacy unchecked owner are rejected
 by `scripts/check_swift_concurrency_guard.py`.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 43 declarations:
+approval to add lock-based ownership. The inventory contains 40 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
@@ -16,7 +16,7 @@ approval to add lock-based ownership. The inventory contains 43 declarations:
 | Desktop shared | 0 |
 | Linux adapters/runtime | 35 |
 | Executable workers | 1 |
-| Test fixtures | 7 |
+| Test fixtures | 4 |
 
 The authoritative live inventory is deliberately machine-checkable rather than
 copied by hand:
@@ -80,6 +80,9 @@ The receive-worker delivery fixture is actor-owned; test callbacks await its
 immutable delivery snapshots instead of sharing lock-backed mutable state.
 The overlay async-delivery fixture is actor-owned; transport callbacks await
 its immutable payload snapshot rather than sharing lock-backed mutable data.
+The service-socket fixtures are actor-owned; listener and target callbacks
+asynchronously record immutable frame and datagram snapshots before signaling
+their test expectations.
 
 The remaining unchecked owners still have shared mutable lifetime, I/O, or
 request-correlation state. They retain the existing compatibility boundaries

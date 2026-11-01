@@ -89,12 +89,13 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         #expect(udpReset.withdrawnClientChannels.isEmpty)
     }
 
-    @Test func tcpListenerPublishesOpenAndDataFrames() throws {
-        let received = LockedFrames()
+    @Test func tcpListenerPublishesOpenAndDataFrames() async throws {
+        let received = ReceivedFrames()
         let ready = DispatchSemaphore(value: 0)
         let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: service(protocolType: .tcp), channelIDAllocation: .peerClient(ownerIndex: 2, ownerCount: 3)) { _, frames in
-            received.append(frames)
-            if received.all.count >= 2 { ready.signal() }
+            Task {
+                if await received.append(frames) >= 2 { ready.signal() }
+            }
         }
         try owner.start()
         defer { owner.stop() }
@@ -103,18 +104,19 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         let payload = Data("tcp-payload".utf8)
         #expect(payload.withUnsafeBytes { write(fd, $0.baseAddress, payload.count) } == payload.count)
         #expect(ready.wait(timeout: .now() + 3) == .success)
-        let frames = received.all
+        let frames = await received.all()
         #expect(frames.map(\.messageType) == [.open, .data])
         #expect(frames.allSatisfy { $0.channelID == 5 })
         if frames.count == 2 { #expect(frames[1].body == payload) }
     }
 
-    @Test func udpListenerPublishesOpenAndDataFrames() throws {
-        let received = LockedFrames()
+    @Test func udpListenerPublishesOpenAndDataFrames() async throws {
+        let received = ReceivedFrames()
         let ready = DispatchSemaphore(value: 0)
         let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: service(protocolType: .udp)) { _, frames in
-            received.append(frames)
-            if received.all.count >= 2 { ready.signal() }
+            Task {
+                if await received.append(frames) >= 2 { ready.signal() }
+            }
         }
         try owner.start()
         defer { owner.stop() }
@@ -123,17 +125,19 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         let payload = Data("udp-payload".utf8)
         #expect(payload.withUnsafeBytes { send(fd, $0.baseAddress, payload.count, 0) } == payload.count)
         #expect(ready.wait(timeout: .now() + 3) == .success)
-        #expect(received.all.map(\.messageType) == [.open, .data])
-        #expect(received.all[0].protocolType == .udp)
-        #expect(received.all[1].body == payload)
+        let frames = await received.all()
+        #expect(frames.map(\.messageType) == [.open, .data])
+        #expect(frames[0].protocolType == .udp)
+        #expect(frames[1].body == payload)
     }
 
-    @Test func udpListenerRoutesInboundReplyOnlyToTheOriginatingPeer() throws {
-        let received = LockedFrames()
+    @Test func udpListenerRoutesInboundReplyOnlyToTheOriginatingPeer() async throws {
+        let received = ReceivedFrames()
         let emitted = DispatchSemaphore(value: 0)
         let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: service(protocolType: .udp)) { _, frames in
-            received.append(frames)
-            if received.all.count >= 2 { emitted.signal() }
+            Task {
+                if await received.append(frames) >= 2 { emitted.signal() }
+            }
         }
         try owner.start()
         defer { owner.stop() }
@@ -143,7 +147,7 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         let request = Data("udp-request".utf8)
         #expect(request.withUnsafeBytes { send(client, $0.baseAddress, request.count, 0) } == request.count)
         #expect(emitted.wait(timeout: .now() + 3) == .success)
-        let frames = received.all
+        let frames = await received.all()
         let channelID = try #require(frames.first?.channelID)
         owner.handleInbound(.init(channelID: channelID, protocolType: .udp, counter: 1, messageType: .data, body: Data("udp-reply".utf8)))
 
@@ -152,15 +156,15 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         #expect(Data(bytes.prefix(9)) == Data("udp-reply".utf8))
         // A reply is sent to the local client, never re-admitted as another
         // listener datagram (which would allocate a new overlay channel).
-        let frameCount = received.all.count
+        let frameCount = await received.all().count
         Thread.sleep(forTimeInterval: 0.15)
-        #expect(received.all.count == frameCount)
+        #expect(await received.all().count == frameCount)
     }
 
-    @Test func tcpRemoteOpenDialsCoreAdmittedTargetAndDeliversData() throws {
+    @Test func tcpRemoteOpenDialsCoreAdmittedTargetAndDeliversData() async throws {
         let target = try listeningTCP()
         defer { _ = close(target.fd) }
-        let received = LockedData()
+        let received = ReceivedData()
         let connected = DispatchSemaphore(value: 0)
         let delivered = DispatchSemaphore(value: 0)
         DispatchQueue.global().async {
@@ -170,7 +174,10 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
             connected.signal()
             var bytes = [UInt8](repeating: 0, count: 64)
             let count = read(accepted, &bytes, bytes.count)
-            if count > 0 { received.set(Data(bytes.prefix(Int(count)))); delivered.signal() }
+            if count > 0 {
+                let payload = Data(bytes.prefix(Int(count)))
+                Task { await received.store(payload); delivered.signal() }
+            }
         }
         let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: .init(serviceID: 3, name: "owner", listenProtocol: .tcp, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: target.port)) { _, _ in }
         try owner.start(); defer { owner.stop() }
@@ -180,16 +187,16 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         #expect(connected.wait(timeout: .now() + 3) == .success)
         owner.handleInbound(.init(channelID: 9, protocolType: .tcp, counter: 1, messageType: .data, body: Data("remote-open".utf8)))
         #expect(delivered.wait(timeout: .now() + 3) == .success)
-        #expect(received.value == Data("remote-open".utf8))
+        #expect(await received.value() == Data("remote-open".utf8))
     }
 
-    @Test func tcpRemoteDialRejectsStaleDataAndEpochResetClosesDescriptor() throws {
+    @Test func tcpRemoteDialRejectsStaleDataAndEpochResetClosesDescriptor() async throws {
         let target = try listeningTCP()
         defer { _ = close(target.fd) }
         let connected = DispatchSemaphore(value: 0)
         let delivered = DispatchSemaphore(value: 0)
         let closed = DispatchSemaphore(value: 0)
-        let received = LockedData()
+        let received = ReceivedData()
         DispatchQueue.global().async {
             let accepted = accept(target.fd, nil, nil)
             guard accepted >= 0 else { return }
@@ -197,7 +204,10 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
             connected.signal()
             var bytes = [UInt8](repeating: 0, count: 64)
             let count = read(accepted, &bytes, bytes.count)
-            if count > 0 { received.set(Data(bytes.prefix(Int(count)))); delivered.signal() }
+            if count > 0 {
+                let payload = Data(bytes.prefix(Int(count)))
+                Task { await received.store(payload); delivered.signal() }
+            }
             if read(accepted, &bytes, bytes.count) == 0 { closed.signal() }
         }
         let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: .init(serviceID: 5, name: "owner", listenProtocol: .tcp, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: target.port)) { _, _ in }
@@ -209,7 +219,7 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         owner.handleInbound(.init(channelID: 11, protocolType: .tcp, counter: 0, messageType: .data, body: Data("stale".utf8)))
         owner.handleInbound(.init(channelID: 11, protocolType: .tcp, counter: 1, messageType: .data, body: Data("accepted".utf8)))
         #expect(delivered.wait(timeout: .now() + 3) == .success)
-        #expect(received.value == Data("accepted".utf8))
+        #expect(await received.value() == Data("accepted".utf8))
         let reset = owner.resetTransportEpoch(instanceID: 2, connectionSequence: 2)
         #expect(reset.withdrawnTCPChannels == [11])
         #expect(reset.withdrawnUDPChannels.isEmpty)
@@ -239,21 +249,26 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         #expect(closed.wait(timeout: .now() + 3) == .success)
     }
 
-    @Test func malformedRemoteOpenDoesNotClaimOrPoisonTCPDial() throws {
+    @Test func malformedRemoteOpenDoesNotClaimOrPoisonTCPDial() async throws {
         let target = try listeningTCP()
         defer { _ = close(target.fd) }
         let delivered = DispatchSemaphore(value: 0)
         let finished = DispatchSemaphore(value: 0)
-        let result = LockedDatagramResult()
+        let result = DatagramResult()
         DispatchQueue.global().async {
             let accepted = accept(target.fd, nil, nil)
             guard accepted >= 0 else { return }
             defer { _ = close(accepted) }
             var bytes = [UInt8](repeating: 0, count: 64)
             let count = read(accepted, &bytes, bytes.count)
-            if count > 0 { result.setFirst(Data(bytes.prefix(Int(count)))); delivered.signal() }
+            if count > 0 {
+                let payload = Data(bytes.prefix(Int(count)))
+                Task { await result.storeFirst(payload); delivered.signal() }
+            }
             var descriptor = pollfd(fd: target.fd, events: Int16(POLLIN), revents: 0)
-            if poll(&descriptor, 1, 350) > 0 { result.setSecond(Data("unexpected dial".utf8)) }
+            if poll(&descriptor, 1, 350) > 0 {
+                Task { await result.storeSecond(Data("unexpected dial".utf8)) }
+            }
             finished.signal()
         }
         let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: .init(serviceID: 9, name: "owner", listenProtocol: .tcp, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: target.port)) { _, _ in }
@@ -265,18 +280,21 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         owner.handleInbound(.init(channelID: 15, protocolType: .tcp, counter: 1, messageType: .data, body: Data("valid-after-malformed".utf8)))
         #expect(delivered.wait(timeout: .now() + 3) == .success)
         #expect(finished.wait(timeout: .now() + 3) == .success)
-        #expect(result.first == Data("valid-after-malformed".utf8))
-        #expect(result.second == nil)
+        #expect(await result.first() == Data("valid-after-malformed".utf8))
+        #expect(await result.second() == nil)
     }
 
-    @Test func udpRemoteOpenDialsCoreAdmittedTargetAndDeliversData() throws {
+    @Test func udpRemoteOpenDialsCoreAdmittedTargetAndDeliversData() async throws {
         let target = try boundUDP()
         defer { _ = close(target.fd) }
-        let received = LockedData(); let delivered = DispatchSemaphore(value: 0)
+        let received = ReceivedData(); let delivered = DispatchSemaphore(value: 0)
         DispatchQueue.global().async {
             var bytes = [UInt8](repeating: 0, count: 64)
             let count = recv(target.fd, &bytes, bytes.count, 0)
-            if count > 0 { received.set(Data(bytes.prefix(Int(count)))); delivered.signal() }
+            if count > 0 {
+                let payload = Data(bytes.prefix(Int(count)))
+                Task { await received.store(payload); delivered.signal() }
+            }
         }
         let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: .init(serviceID: 4, name: "owner", listenProtocol: .udp, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: .udp, targetHost: "127.0.0.1", targetPort: target.port)) { _, _ in }
         try owner.start(); defer { owner.stop() }
@@ -285,23 +303,29 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         owner.handleInbound(.init(channelID: 10, protocolType: .udp, counter: 0, messageType: .open, body: open))
         owner.handleInbound(.init(channelID: 10, protocolType: .udp, counter: 1, messageType: .data, body: Data("remote-udp".utf8)))
         #expect(delivered.wait(timeout: .now() + 3) == .success)
-        #expect(received.value == Data("remote-udp".utf8))
+        #expect(await received.value() == Data("remote-udp".utf8))
     }
 
-    @Test func udpRemoteDialEpochResetStopsFurtherDatagrams() throws {
+    @Test func udpRemoteDialEpochResetStopsFurtherDatagrams() async throws {
         let target = try boundUDP()
         defer { _ = close(target.fd) }
         let first = DispatchSemaphore(value: 0)
         let finished = DispatchSemaphore(value: 0)
-        let result = LockedDatagramResult()
+        let result = DatagramResult()
         DispatchQueue.global().async {
             var bytes = [UInt8](repeating: 0, count: 64)
             let count = recv(target.fd, &bytes, bytes.count, 0)
-            if count > 0 { result.setFirst(Data(bytes.prefix(Int(count)))); first.signal() }
+            if count > 0 {
+                let payload = Data(bytes.prefix(Int(count)))
+                Task { await result.storeFirst(payload); first.signal() }
+            }
             var descriptor = pollfd(fd: target.fd, events: Int16(POLLIN), revents: 0)
             if poll(&descriptor, 1, 350) > 0 {
                 let secondCount = recv(target.fd, &bytes, bytes.count, 0)
-                if secondCount > 0 { result.setSecond(Data(bytes.prefix(Int(secondCount)))) }
+                if secondCount > 0 {
+                    let payload = Data(bytes.prefix(Int(secondCount)))
+                    Task { await result.storeSecond(payload) }
+                }
             }
             finished.signal()
         }
@@ -317,24 +341,30 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         #expect(reset.withdrawnUDPChannels == [12])
         owner.handleInbound(.init(channelID: 12, protocolType: .udp, counter: 2, messageType: .data, body: Data("after-reset".utf8)))
         #expect(finished.wait(timeout: .now() + 3) == .success)
-        #expect(result.first == Data("before-reset".utf8))
-        #expect(result.second == nil)
+        #expect(await result.first() == Data("before-reset".utf8))
+        #expect(await result.second() == nil)
     }
 
-    @Test func udpRemoteCloseStopsFurtherDatagrams() throws {
+    @Test func udpRemoteCloseStopsFurtherDatagrams() async throws {
         let target = try boundUDP()
         defer { _ = close(target.fd) }
         let first = DispatchSemaphore(value: 0)
         let finished = DispatchSemaphore(value: 0)
-        let result = LockedDatagramResult()
+        let result = DatagramResult()
         DispatchQueue.global().async {
             var bytes = [UInt8](repeating: 0, count: 64)
             let count = recv(target.fd, &bytes, bytes.count, 0)
-            if count > 0 { result.setFirst(Data(bytes.prefix(Int(count)))); first.signal() }
+            if count > 0 {
+                let payload = Data(bytes.prefix(Int(count)))
+                Task { await result.storeFirst(payload); first.signal() }
+            }
             var descriptor = pollfd(fd: target.fd, events: Int16(POLLIN), revents: 0)
             if poll(&descriptor, 1, 350) > 0 {
                 let secondCount = recv(target.fd, &bytes, bytes.count, 0)
-                if secondCount > 0 { result.setSecond(Data(bytes.prefix(Int(secondCount)))) }
+                if secondCount > 0 {
+                    let payload = Data(bytes.prefix(Int(secondCount)))
+                    Task { await result.storeSecond(payload) }
+                }
             }
             finished.signal()
         }
@@ -348,22 +378,27 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         owner.handleInbound(.init(channelID: 14, protocolType: .udp, counter: 2, messageType: .close, body: Data()))
         owner.handleInbound(.init(channelID: 14, protocolType: .udp, counter: 3, messageType: .data, body: Data("after-close".utf8)))
         #expect(finished.wait(timeout: .now() + 3) == .success)
-        #expect(result.first == Data("before-close".utf8))
-        #expect(result.second == nil)
+        #expect(await result.first() == Data("before-close".utf8))
+        #expect(await result.second() == nil)
     }
 
-    @Test func malformedAndStaleUDPFramesDoNotClaimOrPoisonDial() throws {
+    @Test func malformedAndStaleUDPFramesDoNotClaimOrPoisonDial() async throws {
         let target = try boundUDP()
         defer { _ = close(target.fd) }
         let delivered = DispatchSemaphore(value: 0)
         let finished = DispatchSemaphore(value: 0)
-        let result = LockedDatagramResult()
+        let result = DatagramResult()
         DispatchQueue.global().async {
             var bytes = [UInt8](repeating: 0, count: 64)
             let count = recv(target.fd, &bytes, bytes.count, 0)
-            if count > 0 { result.setFirst(Data(bytes.prefix(Int(count)))); delivered.signal() }
+            if count > 0 {
+                let payload = Data(bytes.prefix(Int(count)))
+                Task { await result.storeFirst(payload); delivered.signal() }
+            }
             var descriptor = pollfd(fd: target.fd, events: Int16(POLLIN), revents: 0)
-            if poll(&descriptor, 1, 350) > 0 { result.setSecond(Data("unexpected datagram".utf8)) }
+            if poll(&descriptor, 1, 350) > 0 {
+                Task { await result.storeSecond(Data("unexpected datagram".utf8)) }
+            }
             finished.signal()
         }
         let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: .init(serviceID: 10, name: "owner", listenProtocol: .udp, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: .udp, targetHost: "127.0.0.1", targetPort: target.port)) { _, _ in }
@@ -376,8 +411,8 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         owner.handleInbound(.init(channelID: 16, protocolType: .udp, counter: 1, messageType: .data, body: Data("valid-after-invalid".utf8)))
         #expect(delivered.wait(timeout: .now() + 3) == .success)
         #expect(finished.wait(timeout: .now() + 3) == .success)
-        #expect(result.first == Data("valid-after-invalid".utf8))
-        #expect(result.second == nil)
+        #expect(await result.first() == Data("valid-after-invalid".utf8))
+        #expect(await result.second() == nil)
     }
 
     private func service(protocolType: ObstacleBridgeChannelMuxProtocol) -> ObstacleBridgeLinuxServiceSpec {
@@ -417,23 +452,30 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
     private enum Errno: Error { case failure }
 }
 
-private final class LockedFrames: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: [ObstacleBridgeChannelMuxFrame] = []
-    var all: [ObstacleBridgeChannelMuxFrame] { lock.lock(); defer { lock.unlock() }; return value }
-    func append(_ frames: [ObstacleBridgeChannelMuxFrame]) { lock.lock(); value.append(contentsOf: frames); lock.unlock() }
+private actor ReceivedFrames {
+    private var values: [ObstacleBridgeChannelMuxFrame] = []
+
+    func append(_ frames: [ObstacleBridgeChannelMuxFrame]) -> Int {
+        values.append(contentsOf: frames)
+        return values.count
+    }
+
+    func all() -> [ObstacleBridgeChannelMuxFrame] { values }
 }
 
-private final class LockedData: @unchecked Sendable {
-    private let lock = NSLock(); private var stored = Data()
-    var value: Data { lock.lock(); defer { lock.unlock() }; return stored }
-    func set(_ data: Data) { lock.lock(); stored = data; lock.unlock() }
+private actor ReceivedData {
+    private var stored = Data()
+
+    func store(_ data: Data) { stored = data }
+    func value() -> Data { stored }
 }
 
-private final class LockedDatagramResult: @unchecked Sendable {
-    private let lock = NSLock(); private var firstValue: Data?; private var secondValue: Data?
-    var first: Data? { lock.lock(); defer { lock.unlock() }; return firstValue }
-    var second: Data? { lock.lock(); defer { lock.unlock() }; return secondValue }
-    func setFirst(_ data: Data) { lock.lock(); firstValue = data; lock.unlock() }
-    func setSecond(_ data: Data) { lock.lock(); secondValue = data; lock.unlock() }
+private actor DatagramResult {
+    private var firstValue: Data?
+    private var secondValue: Data?
+
+    func storeFirst(_ data: Data) { firstValue = data }
+    func storeSecond(_ data: Data) { secondValue = data }
+    func first() -> Data? { firstValue }
+    func second() -> Data? { secondValue }
 }
