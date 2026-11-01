@@ -145,6 +145,8 @@ def test_macos_proxy_worker_control_descriptor_survives_exec() -> None:
     assert "fcntl(parentFD, F_SETFD, FD_CLOEXEC) == 0" in supervisor
     assert "fcntl(childFD, F_SETFD, FD_CLOEXEC)" not in supervisor
     assert "private proxy worker to exit before its ready frame" in supervisor
+    assert "public final class ObstacleBridgeProxyWorkerSupervisor {" in supervisor
+    assert "public final class ObstacleBridgeSupervisedProxyWorker {" in supervisor
 
 
 def test_macos_log_worker_control_descriptors_survive_exec() -> None:

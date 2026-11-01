@@ -11,7 +11,8 @@ private let proxySupervisorStreamType = Int32(SOCK_STREAM.rawValue)
 
 /// Native desktop owner for either proxy implementation. The control channel
 /// is an inherited Unix socket, not an externally discoverable endpoint.
-public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
+// OBSTACLEBRIDGE-CONCURRENCY: serial control-reader and lifecycle boundaries; test=test_swift_supervisor_owns_python_or_native_proxy
+public final class ObstacleBridgeProxyWorkerSupervisor {
     public enum Failure: Error, LocalizedError {
         case invalidConfiguration, invalidFrame, unavailable, timeout
         public var errorDescription: String? {
@@ -242,7 +243,8 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
 
 /// Restarts either selected proxy implementation without replacing it with an
 /// in-process listener. Each generation receives a fresh control capability.
-public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
+// OBSTACLEBRIDGE-CONCURRENCY: serial lifecycle boundary; test=test_swift_supervisor_owns_python_or_native_proxy
+public final class ObstacleBridgeSupervisedProxyWorker {
     private let implementation: String
     private let executable: String
     private let loggingWorker: ObstacleBridgeLogWorkerSupervisor?
