@@ -29,7 +29,7 @@ public final class ObstacleBridgeLinuxTelemetryUploader {
         guard let request = policy.nextRequest() else { return }
         lock.lock(); let active = !cancelled; if active { attempts &+= 1 }; lock.unlock()
         guard active else { policy.fail(); return }
-        queue.async { [weak self] in
+        let upload = DispatchWorkItem { [weak self] in
             guard let self else { return }
             do {
                 let reply = try self.executor(request)
@@ -45,6 +45,7 @@ public final class ObstacleBridgeLinuxTelemetryUploader {
                 self.lock.lock(); self.rejected &+= 1; self.lastError = String(describing: error).prefix(160).description; self.lock.unlock()
             }
         }
+        queue.async(execute: upload)
     }
 
     public func cancel() { lock.lock(); cancelled = true; lock.unlock(); policy.fail() }

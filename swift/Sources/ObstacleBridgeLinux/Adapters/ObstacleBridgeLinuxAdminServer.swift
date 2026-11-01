@@ -811,9 +811,12 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let cached = cachedRuntimeMetricsSnapshot
         Task { [weak self] in
             let snapshot = await ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()
-            self?.queue.async { [weak self] in
-                self?.cachedRuntimeMetricsSnapshot = snapshot
+            guard let encoded = try? JSONSerialization.data(withJSONObject: snapshot) else { return }
+            let publish = DispatchWorkItem { [weak self, encoded] in
+                guard let projected = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any] else { return }
+                self?.cachedRuntimeMetricsSnapshot = projected
             }
+            self?.queue.async(execute: publish)
         }
         return cached.isEmpty ? ObstacleBridgeRuntimeMetrics.Reporter.emptySnapshotPayload() : cached
     }

@@ -357,8 +357,8 @@ enum ObstacleBridgeLinuxMain {
     }
 
     private static func installForegroundShutdown(
-        stop: @escaping @Sendable () -> Void,
-        recordSignal: (@Sendable (ObstacleBridgeLinuxShutdownSignal) -> Void)? = nil,
+        stop: @escaping () -> Void,
+        recordSignal: ((ObstacleBridgeLinuxShutdownSignal) -> Void)? = nil,
         admin: ObstacleBridgeLinuxAdminServer?,
         holdSeconds: Int?
     ) -> [Any] {
@@ -369,7 +369,7 @@ enum ObstacleBridgeLinuxMain {
             guard !shutdownStarted else { shutdownLock.unlock(); return }
             shutdownStarted = true
             shutdownLock.unlock()
-            DispatchQueue.global(qos: .userInitiated).async {
+            let shutdownWork = DispatchWorkItem {
                 if let signal { recordSignal?(signal) }
                 stop()
                 admin?.stop()
@@ -378,6 +378,7 @@ enum ObstacleBridgeLinuxMain {
                     exit(0)
                 }
             }
+            DispatchQueue.global(qos: .userInitiated).async(execute: shutdownWork)
         }
         var resources: [Any] = []
         #if os(Linux)
