@@ -5,7 +5,7 @@ import ObstacleBridgeCore
 /// Foreground owner for a shared myudp listener.  It keeps the socket reader,
 /// Core registry, authenticated child sessions, and child runtime lifecycles
 /// separate so one admitted endpoint cannot replace another endpoint's epoch.
-public final class ObstacleBridgeLinuxMyUDPListenerRuntime: @unchecked Sendable {
+public final class ObstacleBridgeLinuxMyUDPListenerRuntime {
     public struct Peer: Sendable {
         public let identity: String
         public let snapshot: ObstacleBridgeLinuxPeerSnapshot
@@ -56,7 +56,8 @@ public final class ObstacleBridgeLinuxMyUDPListenerRuntime: @unchecked Sendable 
         guard stopped else { lock.unlock(); return }
         stopped = false
         lock.unlock()
-        queue.async { [weak self] in self?.run() }
+        let reader = DispatchWorkItem { [weak self] in self?.run() }
+        queue.async(execute: reader)
     }
 
     public func stop() {

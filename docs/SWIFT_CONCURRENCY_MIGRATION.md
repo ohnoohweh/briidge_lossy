@@ -8,13 +8,13 @@ synchronous coordination primitives in a legacy unchecked owner are rejected
 by `scripts/check_swift_concurrency_guard.py`.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 37 declarations:
+approval to add lock-based ownership. The inventory contains 36 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
 | Shared Core | 0 |
 | Desktop shared | 0 |
-| Linux adapters/runtime | 33 |
+| Linux adapters/runtime | 32 |
 | Executable workers | 1 |
 | Test fixtures | 3 |
 
@@ -90,6 +90,9 @@ re-enters the actor, and retry state and snapshots never leave actor isolation.
 The managed Linux TUN-helper process owner is non-Sendable and remains confined
 to its foreground runtime; the checked compiler accepts every existing use
 without a Sendable exemption.
+The shared myUDP listener runtime is non-Sendable and remains confined to its
+serialized listener queue; its reader handoff uses an explicit work item rather
+than transferring the owner through a Sendable closure.
 
 The remaining unchecked owners still have shared mutable lifetime, I/O, or
 request-correlation state. They retain the existing compatibility boundaries
