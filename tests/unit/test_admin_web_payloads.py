@@ -1777,7 +1777,7 @@ class AdminWebPayloadTests(unittest.TestCase):
 
         self.assertIn('<button class="nav-tab active" data-tab="status" type="button">Peers</button>', index_html)
         self.assertIn('<button class="nav-tab" data-tab="connections" type="button">UDP / TCP</button>', index_html)
-        self.assertIn('<button class="nav-tab" data-tab="proxy" type="button">Proxy</button>', index_html)
+        self.assertIn('<button class="nav-tab hidden" data-tab="proxy" type="button">Proxy</button>', index_html)
         self.assertIn("<span>Open Peers on startup</span>", index_html)
         self.assertIn("<h2>Peers</h2>", index_html)
         self.assertIn("<h2>UDP / TCP</h2>", index_html)
@@ -1790,6 +1790,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
 
         self.assertIn('id="tab-proxy"', index_html)
+        self.assertIn('id="tab-proxy" class="tab-panel hidden"', index_html)
         self.assertIn('proxy-summary-row-status', index_html)
         self.assertIn('proxy-summary-row-endpoints', index_html)
         self.assertIn('proxy-summary-row-counters', index_html)
@@ -1805,6 +1806,11 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn('id="proxyListenersGrid"', index_html)
         self.assertIn('class="proxy-rate-pair"', index_html)
         self.assertIn("function applyProxyDoc()", app_js)
+        self.assertIn("function syncProxyTabVisibility()", app_js)
+        self.assertIn("proxyPanel.classList.toggle('hidden', !enabled)", app_js)
+        self.assertIn("proxyNav.classList.toggle('hidden', !enabled)", app_js)
+        self.assertIn("if (!enabled && isTabActive('proxy')) setActiveTab('status');", app_js)
+        self.assertIn("syncProxyTabVisibility();", app_js)
         self.assertIn("function proxyListenerRate(listenerName, snapshot)", app_js)
         self.assertIn("function proxyRatePercents(rxRate, txRate)", app_js)
         self.assertIn("function renderProxyTrafficPair(rxBytes, txBytes, rxRate, txRate)", app_js)

@@ -1577,6 +1577,15 @@ function proxyConfigSnapshot() {
   };
 }
 
+function syncProxyTabVisibility() {
+  const enabled = proxyConfigSnapshot().enabled;
+  const proxyPanel = document.getElementById('tab-proxy');
+  const proxyNav = document.querySelector('.nav-tab[data-tab="proxy"]');
+  if (proxyPanel) proxyPanel.classList.toggle('hidden', !enabled);
+  if (proxyNav) proxyNav.classList.toggle('hidden', !enabled);
+  if (!enabled && isTabActive('proxy')) setActiveTab('status');
+}
+
 function proxyListenerRows(statusDoc) {
   const provider = statusDoc?.proxy_provider || {};
   const listeners = provider.listeners && typeof provider.listeners === 'object' ? provider.listeners : {};
@@ -3525,6 +3534,7 @@ async function loadConfig() {
     };
     applyAdminInstanceName(configState.config.admin_web_name);
     renderConfigSections(configState.schema, configState.config);
+    syncProxyTabVisibility();
     applyProxyDoc();
     if (uiState.onboarding.initialized) {
       if ((uiState.onboarding.ownServersDraft || []).length === 0) {
