@@ -1198,7 +1198,7 @@ the client section holds producer settings and the server section holds collecto
 The telemetry installation ID is always derived from
 the client-certificate common name rather than entered in configuration.
 The local telemetry-status CLI reports redacted spool occupancy and delivery metadata only.
-WebAdmin shows the Telemetry tab only when either the telemetry client or collector is enabled.
+WebAdmin shows the Telemetry tab only when either the telemetry client or collector is enabled, and shows each role's card only when that role is enabled.
 For a Linux Python collector/client reference deployment, the repository provides
 `generate_telemetry_ca.py`, `generate_telemetry_server_certificate.py`, and
 `generate_telemetry_client_certificate.py`; the server script can include an

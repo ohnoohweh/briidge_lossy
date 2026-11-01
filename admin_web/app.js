@@ -1586,21 +1586,32 @@ function syncProxyTabVisibility() {
   if (!enabled && isTabActive('proxy')) setActiveTab('status');
 }
 
-function telemetryConfigEnabled() {
+function telemetryConfigRoles() {
   const root = configState.config || {};
   const client = root.telemetry_client && typeof root.telemetry_client === 'object' ? root.telemetry_client : root;
   const collector = root.telemetry_server && typeof root.telemetry_server === 'object' ? root.telemetry_server : root;
-  const clientEnabled = client.telemetry_enabled ?? root.telemetry_enabled;
-  const collectorEnabled = collector.telemetry_collector_enabled ?? root.telemetry_collector_enabled;
-  return Boolean(clientEnabled || collectorEnabled);
+  return {
+    clientEnabled: Boolean(client.telemetry_enabled ?? root.telemetry_enabled),
+    collectorEnabled: Boolean(collector.telemetry_collector_enabled ?? root.telemetry_collector_enabled),
+  };
+}
+
+function telemetryConfigEnabled() {
+  const roles = telemetryConfigRoles();
+  return roles.clientEnabled || roles.collectorEnabled;
 }
 
 function syncTelemetryTabVisibility() {
-  const enabled = telemetryConfigEnabled();
+  const roles = telemetryConfigRoles();
+  const enabled = roles.clientEnabled || roles.collectorEnabled;
   const telemetryPanel = document.getElementById('tab-telemetry');
   const telemetryNav = document.querySelector('.nav-tab[data-tab="telemetry"]');
+  const clientSection = document.getElementById('telemetryClientSection');
+  const collectorSection = document.getElementById('telemetryCollectorSection');
   if (telemetryPanel) telemetryPanel.classList.toggle('hidden', !enabled);
   if (telemetryNav) telemetryNav.classList.toggle('hidden', !enabled);
+  if (clientSection) clientSection.classList.toggle('hidden', !roles.clientEnabled);
+  if (collectorSection) collectorSection.classList.toggle('hidden', !roles.collectorEnabled);
   if (!enabled && isTabActive('telemetry')) setActiveTab('status');
 }
 

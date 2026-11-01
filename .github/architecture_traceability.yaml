@@ -929,7 +929,8 @@ ARC-CMP-005:
     - tests/unit/test_admin_worker.py::test_admin_child_queries_python_logging_child
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebAdminLiveTopicPolicyTests.swift::tabsRestrictTopicsAndUnknownSubscriptionsAreRejected
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
-    # Telemetry navigation is omitted without an enabled client or collector.
+    # Telemetry navigation is omitted without an enabled client or collector;
+    # each role's card is independently conditional.
     - tests/unit/test_admin_web_payloads.py::test_telemetry_tab_renders_client_and_collector_status
     - tests/unit/test_admin_web_payloads.py::test_proxy_page_renders_private_worker_lifecycle
     # Proxy observability keeps rates as plain fields and stacks listener cards.
