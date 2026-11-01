@@ -486,7 +486,9 @@ public final class ObstacleBridgeLogProducerRelay: @unchecked Sendable {
 
 /// A native child-side endpoint for a producer-only inherited logging
 /// capability. It has no query or collector-lifecycle operations.
-public final class ObstacleBridgeLogProducer: @unchecked Sendable {
+/// Non-Sendable child-local log producer. It converts log fields into one
+/// immutable datagram and never shares mutable collector state.
+public final class ObstacleBridgeLogProducer {
     private static let maxDatagram = 8 * 1024
     private let descriptor: Int32
     private let minimumLevel: Int
