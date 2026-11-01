@@ -8,12 +8,12 @@ synchronous coordination primitives in a legacy unchecked owner are rejected
 by `scripts/check_swift_concurrency_guard.py`.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 62 declarations:
+approval to add lock-based ownership. The inventory contains 61 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
 | Shared Core | 4 |
-| Desktop shared | 4 |
+| Desktop shared | 3 |
 | Linux adapters/runtime | 42 |
 | Executable workers | 3 |
 | Test fixtures | 9 |
@@ -38,6 +38,8 @@ The desktop child log producer is non-Sendable child-local state. It publishes
 only immutable record datagrams to its inherited producer-only descriptor.
 The native Admin parent RPC is non-Sendable child-local state and returns only
 decoded value results from its inherited control descriptor.
+The desktop log relay is non-Sendable state owned by its descriptor-readiness
+source and forwards only immutable record datagrams.
 
 The remaining unchecked owners still have shared mutable lifetime, I/O, or
 request-correlation state. They retain the existing compatibility boundaries

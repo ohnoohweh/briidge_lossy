@@ -426,7 +426,9 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
 
 /// Bounded record-only ingress; malformed records and queries never reach the
 /// collector. Cancellation closes the read descriptor on its own queue.
-public final class ObstacleBridgeLogProducerRelay: @unchecked Sendable {
+/// Non-Sendable relay state. Its dedicated descriptor-readiness source owns
+/// draining; only immutable record datagrams reach the supervisor.
+public final class ObstacleBridgeLogProducerRelay {
     private weak var supervisor: ObstacleBridgeLogWorkerSupervisor?
     private let readFD: Int32
     public let childHandle: FileHandle
