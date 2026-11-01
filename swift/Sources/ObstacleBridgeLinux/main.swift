@@ -289,8 +289,7 @@ enum ObstacleBridgeLinuxMain {
             if let logWorker { resources.append(logWorker) }
             if configuration.listenerMode {
                 guard let psk = configuration.secureLinkPSK else { throw ObstacleBridgeLinuxRuntimeConfigurationError.missingPSK }
-                let acceptSession: @Sendable (Data) throws -> ObstacleBridgeLinuxConfiguredSession
-                let listenerOpen: @Sendable () -> Bool
+                let acceptor = DispatchQueue(label: "org.obstaclebridge.linux.\(configuration.transport.rawValue)-listener")
                 if configuration.transport == .ws, configuration.webSocketTLS {
                     let listener = try ObstacleBridgeLinuxTLSWebSocketPSKListener(
                         port: configuration.port,
@@ -299,28 +298,38 @@ enum ObstacleBridgeLinuxMain {
                         webSocketPath: configuration.webSocketPath,
                         timeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds
                     )
-                    acceptSession = { try listener.acceptConfiguredSession(psk: psk, serverNonce: $0) }
-                    listenerOpen = { listener.isOpen }
+                    let admissionLoop = DispatchWorkItem {
+                        while listener.isOpen {
+                            var generator = SystemRandomNumberGenerator()
+                            let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+                            do {
+                                runtime.adoptInboundSession(try listener.acceptConfiguredSession(psk: psk, serverNonce: nonce))
+                            } catch where listener.isOpen {
+                                writeError("ObstacleBridgeLinux: listener admission failed: \(error.localizedDescription)")
+                            } catch {
+                                break
+                            }
+                        }
+                    }
+                    acceptor.async(execute: admissionLoop)
                     resources.append(listener)
                 } else {
                     let listener = try ObstacleBridgeLinuxTCPPSKListener(port: configuration.port, transport: configuration.transport, webSocketPath: configuration.webSocketPath)
-                    acceptSession = { try listener.acceptConfiguredSession(psk: psk, serverNonce: $0) }
-                    listenerOpen = { listener.isOpen }
-                    resources.append(listener)
-                }
-                let acceptor = DispatchQueue(label: "org.obstaclebridge.linux.\(configuration.transport.rawValue)-listener")
-                acceptor.async {
-                    while listenerOpen() {
-                        var generator = SystemRandomNumberGenerator()
-                        let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
-                        do {
-                            runtime.adoptInboundSession(try acceptSession(nonce))
-                        } catch where listenerOpen() {
-                            writeError("ObstacleBridgeLinux: listener admission failed: \(error.localizedDescription)")
-                        } catch {
-                            break
+                    let admissionLoop = DispatchWorkItem {
+                        while listener.isOpen {
+                            var generator = SystemRandomNumberGenerator()
+                            let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+                            do {
+                                runtime.adoptInboundSession(try listener.acceptConfiguredSession(psk: psk, serverNonce: nonce))
+                            } catch where listener.isOpen {
+                                writeError("ObstacleBridgeLinux: listener admission failed: \(error.localizedDescription)")
+                            } catch {
+                                break
+                            }
                         }
                     }
+                    acceptor.async(execute: admissionLoop)
+                    resources.append(listener)
                 }
                 resources.append(acceptor)
             } else {
