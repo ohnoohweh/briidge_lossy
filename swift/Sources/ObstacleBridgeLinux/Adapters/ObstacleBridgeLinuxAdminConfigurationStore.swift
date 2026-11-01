@@ -2,7 +2,9 @@ import Foundation
 import ObstacleBridgeCore
 
 /// Linux owns persistence, while Core owns update shape/type validation.
-public final class ObstacleBridgeLinuxAdminConfigurationStore: @unchecked Sendable {
+/// Non-Sendable Linux Admin configuration state. Callers receive copied value
+/// snapshots and validated value updates rather than this mutable owner.
+public final class ObstacleBridgeLinuxAdminConfigurationStore {
     private let lock = NSLock()
     private let path: String?
     private var configuration: [String: Any]

@@ -4,7 +4,9 @@ import ObstacleBridgeCore
 /// Core-auth policy owner for the Linux HTTP adapter. It provides only the
 /// platform inputs (time, randomness, cookies); proof and update binding stay
 /// in the portable Core policies.
-final class ObstacleBridgeLinuxAdminSecurity: @unchecked Sendable {
+/// Non-Sendable Linux Admin security state. HTTP handlers exchange decoded
+/// value requests and responses instead of transferring this mutable owner.
+final class ObstacleBridgeLinuxAdminSecurity {
     private let lock = NSLock()
     private var authState = ObstacleBridgeAdminAuthPolicy.State()
     private var configChallenges: [String: ObstacleBridgeAdminConfigChallengePolicy.Challenge] = [:]
