@@ -8,13 +8,13 @@ synchronous coordination primitives in a legacy unchecked owner are rejected
 by `scripts/check_swift_concurrency_guard.py`.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 52 declarations:
+approval to add lock-based ownership. The inventory contains 51 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
 | Shared Core | 0 |
 | Desktop shared | 0 |
-| Linux adapters/runtime | 42 |
+| Linux adapters/runtime | 41 |
 | Executable workers | 1 |
 | Test fixtures | 9 |
 
@@ -63,6 +63,8 @@ The Linux foreground restart request is actor-owned; it records the request
 before raising the shutdown signal, and shutdown consumes it exactly once.
 The native log collector state is non-Sendable and owned by its main worker
 loop, which drains the bounded descriptor directly.
+The native proxy child logger is a checked Sendable immutable descriptor and
+threshold value; its level is fixed before listeners are published.
 
 The remaining unchecked owners still have shared mutable lifetime, I/O, or
 request-correlation state. They retain the existing compatibility boundaries

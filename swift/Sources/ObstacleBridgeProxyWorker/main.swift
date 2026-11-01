@@ -91,15 +91,17 @@ private func validateSocket(_ fd: Int32, type: Int32) -> Bool {
     return result == 0 && Int32(address.ss_family) == AF_UNIX
 }
 
-private final class ChildLogger: @unchecked Sendable {
+// OBSTACLEBRIDGE-CONCURRENCY: serial immutable child descriptor; test=test_swift_supervisor_owns_python_or_native_proxy
+private final class ChildLogger: Sendable {
     private let fd: Int32
-    var level: Int = 30
+    private let level: Int
 
-    init(fd: Int32) throws {
+    init(fd: Int32, level: Int) throws {
         guard validateSocket(fd, type: datagramType) else { throw WorkerError.invalid }
         let flags = fcntl(fd, F_GETFL)
         guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { throw WorkerError.io }
         self.fd = fd
+        self.level = level
     }
 
     func emit(_ level: Int, _ message: String) {
@@ -549,7 +551,6 @@ private final class ProxyListener: @unchecked Sendable {
 private func run(_ fd: Int32, logFD: Int32?) throws {
     guard validateSocket(fd, type: streamType), logFD != fd else { throw WorkerError.invalid }
     try makeNonBlocking(fd)
-    let logger = try logFD.map { try ChildLogger(fd: $0) }
     let hello = try readFrame(fd)
     guard hello["kind"] as? String == "worker.hello", hello["role"] as? String == "supervisor",
           hello["capabilities"] as? [String] == ["proxy.control"], let helloGeneration = hello["generation"] as? Int, helloGeneration > 0 else { throw WorkerError.invalid }
@@ -557,7 +558,7 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
     let initial = try readFrame(fd)
     let rootLevel = initial["log_root_level"] as? Int ?? 30
     let loggerLevel = (initial["log_levels"] as? [String: Int])?["proxy_provider"] ?? 0
-    logger?.level = loggerLevel == 0 ? rootLevel : loggerLevel
+    let logger = try logFD.map { try ChildLogger(fd: $0, level: loggerLevel == 0 ? rootLevel : loggerLevel) }
     guard initial["kind"] as? String == "proxy.start", let generation = initial["generation"] as? Int, generation == helloGeneration,
           let config = initial["config"] as? [String: Any],
           let bindHost = config["bind"] as? String, ["127.0.0.1", "::1"].contains(bindHost),
