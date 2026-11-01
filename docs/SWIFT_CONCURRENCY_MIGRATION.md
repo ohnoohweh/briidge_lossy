@@ -8,11 +8,11 @@ synchronous coordination primitives in a legacy unchecked owner are rejected
 by `scripts/check_swift_concurrency_guard.py`.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 60 declarations:
+approval to add lock-based ownership. The inventory contains 59 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
-| Shared Core | 3 |
+| Shared Core | 2 |
 | Desktop shared | 3 |
 | Linux adapters/runtime | 42 |
 | Executable workers | 3 |
@@ -42,6 +42,8 @@ The desktop log relay is non-Sendable state owned by its descriptor-readiness
 source and forwards only immutable record datagrams.
 
 The ChannelMux reply policy is non-Sendable and remains private to its session
+owner; it is not transferred between executors.
+The peer traffic-rate sampler is non-Sendable and remains private to its Admin
 owner; it is not transferred between executors.
 
 The remaining unchecked owners still have shared mutable lifetime, I/O, or

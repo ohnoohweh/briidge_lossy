@@ -77,7 +77,7 @@ public struct ObstacleBridgeAdminPeerFacts: Sendable {
 
 /// Retains only the last redacted total for each peer so `/api/peers` can
 /// expose rates without each platform inventing its own sampling schema.
-public final class ObstacleBridgeAdminPeerTrafficRateSampler: @unchecked Sendable {
+public final class ObstacleBridgeAdminPeerTrafficRateSampler {
     // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeTelemetryTests
     private let lock = NSLock()
     private var previous: [String: (uptime: TimeInterval, rxBytes: UInt64, txBytes: UInt64)] = [:]
