@@ -333,28 +333,15 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         #expect(listener.activePeerCount == 1)
     }
 
-    @Test func myudpListenerAuthenticatesIndependentPeersBeforeExposingSessions() throws {
-        let listener = try ObstacleBridgeLinuxMyUDPPSKListener(
-            port: 0, bindHost: "127.0.0.1", psk: Data("linux-swift-psk".utf8),
-            serverNonce: { Data(repeating: 9, count: 32) }
-        )
-        defer { listener.close() }
-        let admitted = DispatchSemaphore(value: 0)
-        let lock = NSLock()
-        var sessions: [ObstacleBridgeLinuxConfiguredSession] = []
-        listener.onAuthenticatedSession = { _, session in
-            lock.lock(); sessions.append(session); lock.unlock()
-            admitted.signal()
-        }
-        let pump = DispatchQueue(label: "org.obstaclebridge.tests.myudp-listener")
-        pump.async {
-            while true {
-                do { try listener.pump(); _ = try listener.serviceTimers() }
-                catch { return }
-            }
+    @Test func myudpListenerAuthenticatesIndependentPeersBeforeExposingSessions() async throws {
+        let listener = try MyUDPPSKListenerHarness(psk: Data("linux-swift-psk".utf8))
+        let pump = Task { await listener.run() }
+        defer {
+            pump.cancel()
+            Task { await listener.close() }
         }
         let configuration = ObstacleBridgeLinuxRuntimeConfiguration(
-            transport: .myudp, host: "127.0.0.1", port: listener.port,
+            transport: .myudp, host: "127.0.0.1", port: await listener.port,
             secureLinkPSK: Data("linux-swift-psk".utf8)
         )
         let clientsFinished = DispatchSemaphore(value: 0)
@@ -365,14 +352,14 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
                 clientsFinished.signal()
             }
         }
-        #expect(admitted.wait(timeout: .now() + 3) == .success)
-        #expect(admitted.wait(timeout: .now() + 3) == .success)
-        lock.lock(); let admittedSessions = sessions; lock.unlock()
-        #expect(admittedSessions.count == 2)
-        #expect(listener.activePeerCount == 2)
+        let deadline = Date().addingTimeInterval(3)
+        while await listener.admittedCount != 2, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await listener.admittedCount == 2)
+        #expect(await listener.activePeerCount == 2)
         #expect(clientsFinished.wait(timeout: .now() + 3) == .success)
         #expect(clientsFinished.wait(timeout: .now() + 3) == .success)
-        admittedSessions.forEach { $0.close() }
     }
 
     @Test func myudpForegroundOwnerRetainsDistinctAuthenticatedPeerProjections() throws {
@@ -939,4 +926,39 @@ private func waitUntil(timeout: TimeInterval = 2, _ predicate: () -> Bool) -> Bo
     }
 
     private enum SocketError: Error { case failure }
+}
+
+private actor MyUDPPSKListenerHarness {
+    private let listener: ObstacleBridgeLinuxMyUDPPSKListener
+    private let counter = SessionCounter()
+
+    init(psk: Data) throws {
+        listener = try .init(
+            port: 0, bindHost: "127.0.0.1", psk: psk,
+            serverNonce: { Data(repeating: 9, count: 32) }
+        )
+        listener.onAuthenticatedSession = { [counter] _, _ in
+            Task { await counter.increment() }
+        }
+    }
+
+    var port: Int { listener.port }
+    var activePeerCount: Int { listener.activePeerCount }
+    var admittedCount: Int { get async { await counter.value } }
+
+    func run() async {
+        while !Task.isCancelled {
+            do { try listener.pump(); _ = try listener.serviceTimers() }
+            catch { return }
+            await Task.yield()
+        }
+    }
+
+    func close() { listener.close() }
+}
+
+private actor SessionCounter {
+    private var count = 0
+    var value: Int { count }
+    func increment() { count += 1 }
 }

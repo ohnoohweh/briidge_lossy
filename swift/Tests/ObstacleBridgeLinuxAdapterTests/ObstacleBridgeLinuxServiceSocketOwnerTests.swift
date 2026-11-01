@@ -157,7 +157,7 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         // A reply is sent to the local client, never re-admitted as another
         // listener datagram (which would allocate a new overlay channel).
         let frameCount = await received.all().count
-        Thread.sleep(forTimeInterval: 0.15)
+        try? await Task.sleep(nanoseconds: 150_000_000)
         #expect(await received.all().count == frameCount)
     }
 

@@ -7,7 +7,7 @@ struct ObstacleBridgeLinuxReceiveWorkerTests {
     @Test func workerDeliversEpochTaggedFramesAndCancelsBlockingReceive() async {
         let gate = DispatchSemaphore(value: 0)
         let delivered = DispatchSemaphore(value: 0)
-        let values = LockedValues()
+        let values = DeliveredValues()
         var first = true
         let worker = ObstacleBridgeLinuxReceiveWorker(epoch: 7, capacity: 1, receive: {
             if first { first = false; return Data("one".utf8) }
@@ -33,7 +33,7 @@ struct ObstacleBridgeLinuxReceiveWorkerTests {
     @Test func asyncWorkerRearmsAfterEachDeliveredFrame() async {
         let source = AsyncReceiveSource()
         let delivered = DispatchSemaphore(value: 0)
-        let values = LockedValues()
+        let values = DeliveredValues()
         let worker = ObstacleBridgeLinuxReceiveWorker(
             epoch: 9,
             receive: { throw WorkerError.stopped },
@@ -75,7 +75,7 @@ private actor DeliveredValues {
     func append(_ value: (UInt64, Data)) { values.append(value) }
 }
 
-private final class AsyncReceiveSource: @unchecked Sendable {
+private final class AsyncReceiveSource {
     private let lock = NSLock()
     private let registered = DispatchSemaphore(value: 0)
     private var callbacks: [(Result<Data?, Error>) -> Void] = []

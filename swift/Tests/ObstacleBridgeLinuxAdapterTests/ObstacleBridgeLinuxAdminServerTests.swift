@@ -641,11 +641,12 @@ struct ObstacleBridgeLinuxAdminServerTests {
         try server.start()
         listener.start()
         defer { listener.stop(); server.stop() }
+        let listenerPort = listener.port
         let connected = DispatchSemaphore(value: 0)
         for identifier in 1...2 {
             DispatchQueue.global().async {
                 let client = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
-                    transport: .myudp, host: "127.0.0.1", port: listener.port,
+                    transport: .myudp, host: "127.0.0.1", port: listenerPort,
                     secureLinkPSK: Data(secret.utf8)
                 ))
                 _ = try? client.connect(sessionID: UInt64(identifier), clientNonce: Data(repeating: UInt8(identifier), count: 32))

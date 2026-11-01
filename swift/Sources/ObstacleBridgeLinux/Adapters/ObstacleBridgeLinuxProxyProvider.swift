@@ -8,7 +8,7 @@ import Glibc
 /// remain usable while the overlay is connecting and never creates a route
 /// dependency on the packet tunnel it helps bootstrap.
 public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
-    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxProxyProviderTests
+    // OBSTACLEBRIDGE-CONCURRENCY: actor; test=ObstacleBridgeLinuxProxyProviderTests (each relay is actor-owned)
     private let configuration: ObstacleBridgeLinuxProxyProviderConfiguration
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.proxy")
     private var listeners: [(fd: Int32, source: DispatchSourceRead)] = []
@@ -23,12 +23,12 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
     /// Owns both directions of a proxied stream. Each descriptor is drained
     /// only after Dispatch reports readiness; incomplete writes stay queued
     /// behind a write source instead of parking a worker in `poll`.
-    private final class Relay: @unchecked Sendable {
+    private actor Relay {
         // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxProxyProviderTests
         private let client: Int32
         private let remote: Int32
         private let queue: DispatchQueue
-        private let finished: (Int32, Bool) -> Void
+        private let finished: @Sendable (Int32, Bool) -> Void
         private var clientRead: DispatchSourceRead?
         private var remoteRead: DispatchSourceRead?
         private var clientWrite: DispatchSourceWrite?
@@ -39,7 +39,7 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
         private var remoteInputOpen = true
         private var stopped = false
 
-        init(client: Int32, remote: Int32, finished: @escaping (Int32, Bool) -> Void) {
+        init(client: Int32, remote: Int32, finished: @escaping @Sendable (Int32, Bool) -> Void) {
             self.client = client
             self.remote = remote
             self.queue = DispatchQueue(label: "org.obstaclebridge.linux.proxy.relay.\(client)")
@@ -47,19 +47,16 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
         }
 
         func start() {
-            queue.async { [weak self] in
-                guard let self else { return }
-                guard self.makeNonblocking(self.client), self.makeNonblocking(self.remote) else { self.finish(failed: true); return }
-                let clientRead = DispatchSource.makeReadSource(fileDescriptor: self.client, queue: self.queue)
-                let remoteRead = DispatchSource.makeReadSource(fileDescriptor: self.remote, queue: self.queue)
-                self.clientRead = clientRead; self.remoteRead = remoteRead
-                clientRead.setEventHandler { [weak self] in self?.drain(fromClient: true) }
-                remoteRead.setEventHandler { [weak self] in self?.drain(fromClient: false) }
-                clientRead.resume(); remoteRead.resume()
-            }
+            guard makeNonblocking(client), makeNonblocking(remote) else { finish(failed: true); return }
+            let clientRead = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
+            let remoteRead = DispatchSource.makeReadSource(fileDescriptor: remote, queue: queue)
+            self.clientRead = clientRead; self.remoteRead = remoteRead
+            clientRead.setEventHandler { [weak self] in Task { await self?.drain(fromClient: true) } }
+            remoteRead.setEventHandler { [weak self] in Task { await self?.drain(fromClient: false) } }
+            clientRead.resume(); remoteRead.resume()
         }
 
-        func stop() { queue.async { [weak self] in self?.finish(failed: false) } }
+        func stop() { finish(failed: false) }
 
         private func drain(fromClient: Bool) {
             let source = fromClient ? client : remote
@@ -108,7 +105,7 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
             if toClient, clientWrite != nil { return }
             if !toClient, remoteWrite != nil { return }
             let source = DispatchSource.makeWriteSource(fileDescriptor: toClient ? client : remote, queue: queue)
-            source.setEventHandler { [weak self] in self?.flush(toClient: toClient) }
+            source.setEventHandler { [weak self] in Task { await self?.flush(toClient: toClient) } }
             if toClient { clientWrite = source } else { remoteWrite = source }
             source.resume()
         }
@@ -144,7 +141,7 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
     public func stop() {
         listeners.forEach { $0.source.cancel() }; listeners.removeAll()
         let active = relays.values; relays.removeAll()
-        active.forEach { $0.stop() }
+        active.forEach { relay in Task { await relay.stop() } }
     }
 
     public func snapshot() -> [String: Any] {
@@ -191,7 +188,10 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
                     self.lock.unlock()
                 }
             }
-            queue.async { [weak self] in self?.relays[client] = relay; relay.start() }
+            queue.async { [weak self] in
+                self?.relays[client] = relay
+                Task { await relay.start() }
+            }
         } catch {
             _ = close(client)
             lock.lock(); failed += 1; lock.unlock()

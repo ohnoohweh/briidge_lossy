@@ -517,7 +517,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     }
 }
 
-private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
+private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend {
     private let lock = NSLock(); private var receivedPackets: [Data] = []
     private let receivedPacket = DispatchSemaphore(value: 0)
     private let emitEventBeforeReply: Bool

@@ -300,12 +300,26 @@ private struct ProxySettings: Sendable {
     let egressMode: String
 }
 
-private final class ProxyListener: @unchecked Sendable {
-    private let settings: ProxySettings
-    private let logger: ChildLogger?
+private struct ProxyListenerSnapshot: Sendable {
+    let accepted: Int, active: Int, completed: Int, failed: Int, received: Int, sent: Int
+    let lastError, bindHost, egressMode: String
+    let configuredPort, boundPort: Int
+    let socks, authRequired: Bool
+
+    var value: [String: Any] {
+        ["accepted_connections": accepted, "active_connections": active, "completed_connections": completed,
+         "failed_connections": failed, "rx_bytes": received, "tx_bytes": sent, "last_error": lastError,
+         "bind_host": bindHost, "port": configuredPort, "bound_port": boundPort,
+         "http_enabled": !socks, "socks5_enabled": socks, "auth_required": authRequired,
+         "egress_mode": egressMode, "destination_policy_enforced": true]
+    }
+}
+
+private actor ProxyListener {
+    nonisolated private let settings: ProxySettings
+    nonisolated private let logger: ChildLogger?
     private let fd: Int32
     private let source: DispatchSourceRead
-    private let lock = NSLock()
     private var accepted = 0, active = 0, completed = 0, failed = 0, rx = 0, tx = 0
     private var lastError = ""
     let boundPort: Int
@@ -342,66 +356,76 @@ private final class ProxyListener: @unchecked Sendable {
         }
         fd = listener
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
-        source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue(label: "org.obstaclebridge.proxy.accept.\(fd)"))
-        source.setEventHandler { [weak self] in self?.acceptClients() }
-        source.setCancelHandler { close(listener) }
-        source.resume()
+        let readiness = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue(label: "org.obstaclebridge.proxy.accept.\(fd)"))
+        source = readiness
+        readiness.setEventHandler { [weak self] in
+            Task { await self?.acceptClients() }
+        }
+        readiness.setCancelHandler { close(listener) }
+        readiness.resume()
     }
 
     func stop() { source.cancel() }
 
-    func snapshot() -> [String: Any] {
-        lock.lock(); defer { lock.unlock() }
-        return ["accepted_connections": accepted, "active_connections": active, "completed_connections": completed,
-                "failed_connections": failed, "rx_bytes": rx, "tx_bytes": tx, "last_error": lastError,
-                "bind_host": settings.bindHost, "port": settings.configuredPort, "bound_port": boundPort,
-                "http_enabled": !settings.socks, "socks5_enabled": settings.socks,
-                "auth_required": settings.username != nil, "egress_mode": settings.egressMode,
-                "destination_policy_enforced": true]
+    func snapshot() -> ProxyListenerSnapshot {
+        .init(accepted: accepted, active: active, completed: completed, failed: failed,
+              received: rx, sent: tx, lastError: lastError, bindHost: settings.bindHost,
+              egressMode: settings.egressMode, configuredPort: settings.configuredPort,
+              boundPort: boundPort, socks: settings.socks, authRequired: settings.username != nil)
     }
 
     private func acceptClients() {
         while true {
             let client = accept(fd, nil, nil)
             if client < 0 { return }
-            lock.lock()
-            guard active < 128 else { lock.unlock(); close(client); continue }
+            guard active < 128 else { close(client); continue }
             accepted += 1; active += 1
-            lock.unlock()
             let flags = fcntl(client, F_GETFL)
             guard flags >= 0, fcntl(client, F_SETFL, flags & ~O_NONBLOCK) == 0 else {
                 close(client)
-                lock.lock(); active -= 1; failed += 1; lastError = "proxy session setup failed"; lock.unlock()
+                active -= 1; failed += 1; lastError = "proxy session setup failed"
                 continue
             }
             setTimeout(client, seconds: 30)
             // Session I/O is allowed to wait independently of the shared
             // dispatch pool, whose bounded worker count can otherwise let
             // idle clients starve unrelated accepted connections.
-            Thread.detachNewThread { [self] in
-                var success = false
-                defer {
+            let owner = self
+            Task.detached { [owner, settings, logger] in
+                do { try await ProxyListener.serve(client, settings: settings, logger: logger, recordTraffic: { received, sent in
+                    await owner.recordTraffic(received: received, sent: sent)
+                })
                     close(client)
-                    lock.lock(); active -= 1
-                    if success { completed += 1 } else { failed += 1; lastError = "proxy session failed" }
-                    lock.unlock()
+                    await owner.finishClient(success: true)
+                } catch {
+                    logger?.emit(30, "[PROXY] client failed")
+                    close(client)
+                    await owner.finishClient(success: false)
                 }
-                do { try serve(client); success = true } catch { logger?.emit(30, "[PROXY] client failed") }
             }
         }
     }
 
-    private func serve(_ client: Int32) throws {
-        if settings.socks { try serveSOCKS(client) } else { try serveHTTP(client) }
+    private func finishClient(success: Bool) {
+        active -= 1
+        if success { completed += 1 } else { failed += 1; lastError = "proxy session failed" }
     }
 
-    private func connectOutbound(_ host: String, _ port: Int, secure: Bool) throws -> Int32 {
+    private func recordTraffic(received: Int, sent: Int) {
+        rx += received; tx += sent
+    }
+
+    nonisolated private static func serve(_ client: Int32, settings: ProxySettings, logger: ChildLogger?, recordTraffic: @escaping @Sendable (Int, Int) async -> Void) async throws {
+        if settings.socks { try await serveSOCKS(client, settings: settings, logger: logger, recordTraffic: recordTraffic) } else { try await serveHTTP(client, settings: settings, logger: logger, recordTraffic: recordTraffic) }
+    }
+
+    nonisolated private static func connectOutbound(_ host: String, _ port: Int, secure: Bool, settings: ProxySettings) throws -> Int32 {
         settings.egressMode == "system"
             ? try connectSystem(host, port, secure: secure, policy: settings.policy)
             : try connectDirect(host, port, policy: settings.policy)
     }
 
-    private func serveHTTP(_ client: Int32) throws {
+    nonisolated private static func serveHTTP(_ client: Int32, settings: ProxySettings, logger: ChildLogger?, recordTraffic: @escaping @Sendable (Int, Int) async -> Void) async throws {
         var header = Data()
         while header.count < 65_536 {
             header.append(try readExact(client, 1))
@@ -432,7 +456,7 @@ private final class ProxyListener: @unchecked Sendable {
             host = value; port = url.port ?? (scheme.lowercased() == "https" ? 443 : 80)
         }
         let remote: Int32
-        do { remote = try connectOutbound(host, port, secure: parts[0].uppercased() == "CONNECT" || port == 443) }
+        do { remote = try connectOutbound(host, port, secure: parts[0].uppercased() == "CONNECT" || port == 443, settings: settings) }
         catch WorkerError.destinationDenied {
             try writeAll(client, Data("HTTP/1.1 403 Forbidden\r\nContent-Length: 30\r\nConnection: close\r\n\r\ndestination blocked by policy\n".utf8))
             throw WorkerError.destinationDenied
@@ -447,12 +471,12 @@ private final class ProxyListener: @unchecked Sendable {
             let retained = rows.dropFirst().filter { !$0.isEmpty && !$0.lowercased().hasPrefix("proxy-authorization:") && !$0.lowercased().hasPrefix("proxy-connection:") }
             let rewritten = (["\(parts[0]) \(target) \(parts[2])"] + retained).joined(separator: "\r\n") + "\r\n\r\n"
             try writeAll(remote, Data(rewritten.utf8))
-            lock.lock(); rx += rewritten.utf8.count; lock.unlock()
+            await recordTraffic(rewritten.utf8.count, 0)
         }
-        relay(client, remote)
+        await relay(client, remote, recordTraffic: recordTraffic)
     }
 
-    private func serveSOCKS(_ client: Int32) throws {
+    nonisolated private static func serveSOCKS(_ client: Int32, settings: ProxySettings, logger: ChildLogger?, recordTraffic: @escaping @Sendable (Int, Int) async -> Void) async throws {
         let greeting = [UInt8](try readExact(client, 2))
         guard greeting[0] == 5 else { throw WorkerError.invalid }
         let methods = [UInt8](try readExact(client, Int(greeting[1])))
@@ -484,17 +508,17 @@ private final class ProxyListener: @unchecked Sendable {
         }
         let port = [UInt8](try readExact(client, 2))
         let remote: Int32
-        do { remote = try connectOutbound(host, Int(port[0]) << 8 | Int(port[1]), secure: Int(port[0]) << 8 | Int(port[1]) == 443) }
+        do { remote = try connectOutbound(host, Int(port[0]) << 8 | Int(port[1]), secure: Int(port[0]) << 8 | Int(port[1]) == 443, settings: settings) }
         catch WorkerError.destinationDenied {
             try writeAll(client, Data([5, 2, 0, 1, 0, 0, 0, 0, 0, 0]))
             throw WorkerError.destinationDenied
         }
         defer { close(remote) }
         try writeAll(client, Data([5, 0, 0, 1, 0, 0, 0, 0, 0, 0]))
-        relay(client, remote)
+        await relay(client, remote, recordTraffic: recordTraffic)
     }
 
-    private func relay(_ left: Int32, _ right: Int32) {
+    nonisolated private static func relay(_ left: Int32, _ right: Int32, recordTraffic: @escaping @Sendable (Int, Int) async -> Void) async {
         // A session owns one dispatch thread. Waiting on nested dispatch jobs
         // can starve the shared pool under simultaneous proxy connections.
         // Bounded nonblocking buffers preserve independent duplex progress and
@@ -532,7 +556,7 @@ private final class ProxyListener: @unchecked Sendable {
                     let sent = pending[incoming].withUnsafeBytes { send(fds[direction], $0.baseAddress, $0.count, Int32(MSG_DONTWAIT)) }
                     if sent > 0 {
                         pending[incoming].removeFirst(sent)
-                        lock.lock(); if incoming == 0 { rx += sent } else { tx += sent }; lock.unlock()
+                        if incoming == 0 { await recordTraffic(sent, 0) } else { await recordTraffic(0, sent) }
                     } else if sent == 0 || (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) { return }
                 }
                 if !eof[direction] && pending[direction].count < capacity && events & Int16(POLLIN | POLLHUP) != 0 {
@@ -548,7 +572,7 @@ private final class ProxyListener: @unchecked Sendable {
     }
 }
 
-private func run(_ fd: Int32, logFD: Int32?) throws {
+private func run(_ fd: Int32, logFD: Int32?) async throws {
     guard validateSocket(fd, type: streamType), logFD != fd else { throw WorkerError.invalid }
     try makeNonBlocking(fd)
     let hello = try readFrame(fd)
@@ -592,7 +616,7 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
     }
     var listeners: [String: ProxyListener] = [:]
     let destinationPolicy = DestinationPolicy(allowPrivateDestinations: allowPrivateDestinations, blockedHostPatterns: blocked.map(policyHost))
-    defer { listeners.values.forEach { $0.stop() } }
+    defer { listeners.values.forEach { listener in Task { await listener.stop() } } }
     if !Set(protocols).isDisjoint(with: ["http", "http-connect"]) {
         listeners["http"] = try ProxyListener(settings: .init(configuredPort: httpPort, bindHost: bindHost, socks: false, username: username, password: password, policy: destinationPolicy, egressMode: mode.lowercased()), logger: logger)
     }
@@ -602,14 +626,18 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
     guard !listeners.isEmpty else { throw WorkerError.invalid }
     logger?.emit(20, "[PROXY] listener started")
     defer { logger?.emit(20, "[PROXY] listener stopped") }
-    func snapshot() -> [String: Any] { listeners.mapValues { $0.snapshot() } }
+    func snapshot() async -> [String: Any] {
+        var values: [String: [String: Any]] = [:]
+        for (name, listener) in listeners { values[name] = await listener.snapshot().value }
+        return values
+    }
     let capabilities: [String: Any] = ["contract_version": 1, "bind_families": ["ipv4", "ipv6"],
                                         "protocols": ["http-connect", "socks5-connect"],
                                         "auth_modes": ["none", "basic", "token", "password"],
                                         "egress_modes": ["direct", "system"],
                                         "destination_policy": ["enforced": true, "requires_unrestricted": false]]
     try writeFrame(fd, ["v": 1, "kind": "proxy.ready", "implementation": "native", "generation": generation,
-                        "capabilities": capabilities, "listeners": snapshot()])
+                        "capabilities": capabilities, "listeners": await snapshot()])
     while true {
         var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
         let count = poll(&descriptor, 1, 250)
@@ -625,7 +653,7 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
             }
             break
         }
-        try writeFrame(fd, ["v": 1, "kind": "proxy.snapshot", "generation": generation, "listeners": snapshot()])
+        try writeFrame(fd, ["v": 1, "kind": "proxy.snapshot", "generation": generation, "listeners": await snapshot()])
     }
 }
 
@@ -644,7 +672,7 @@ while index + 1 < args.count {
 }
 guard index == args.count, let fd = controlFD else { exit(1) }
 do {
-    try run(fd, logFD: logFD)
+    try await run(fd, logFD: logFD)
     close(fd)
 } catch {
     let code: String

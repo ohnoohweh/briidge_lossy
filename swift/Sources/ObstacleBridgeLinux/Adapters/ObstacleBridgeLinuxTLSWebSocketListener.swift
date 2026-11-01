@@ -7,15 +7,15 @@ import ObstacleBridgeCore
 
 /// TLS-terminating WebSocket listener.  NIO owns the accepted TLS channels;
 /// SecureLink is admitted only after the HTTP upgrade has completed.
-public final class ObstacleBridgeLinuxTLSWebSocketPSKListener: @unchecked Sendable {
-    private final class Inbound: ChannelInboundHandler, @unchecked Sendable {
+public final class ObstacleBridgeLinuxTLSWebSocketPSKListener {
+    private final class Inbound: ChannelInboundHandler {
         typealias InboundIn = ByteBuffer
         let condition = NSCondition(); var bytes = Data(); var inactive = false
         func channelRead(context: ChannelHandlerContext, data: NIOAny) { var b = unwrapInboundIn(data); if let v = b.readBytes(length: b.readableBytes) { condition.lock(); bytes.append(contentsOf: v); condition.broadcast(); condition.unlock() } }
         func channelInactive(context: ChannelHandlerContext) { condition.lock(); inactive = true; condition.broadcast(); condition.unlock(); context.fireChannelInactive() }
         func read(_ count: Int, timeout: Int) throws -> Data { let deadline = Date().addingTimeInterval(Double(timeout) / 1_000); condition.lock(); defer { condition.unlock() }; while bytes.count < count && !inactive { guard condition.wait(until: deadline) else { throw ObstacleBridgeLinuxOverlayTransportError.ioFailure(ETIMEDOUT) } }; guard bytes.count >= count else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }; let result = Data(bytes.prefix(count)); bytes.removeFirst(count); return result }
     }
-    private final class Connection: ObstacleBridgeLinuxWebSocketByteConnection, @unchecked Sendable {
+    private final class Connection: ObstacleBridgeLinuxWebSocketByteConnection {
         let channel: any Channel; let inbound: Inbound; let timeout: Int
         init(_ channel: any Channel, _ inbound: Inbound, _ timeout: Int) { self.channel = channel; self.inbound = inbound; self.timeout = timeout }
         func write(_ data: Data) throws { var b = channel.allocator.buffer(capacity: data.count); b.writeBytes(data); try channel.writeAndFlush(b).wait() }
@@ -23,7 +23,7 @@ public final class ObstacleBridgeLinuxTLSWebSocketPSKListener: @unchecked Sendab
         func readUntil(_ delimiter: Data, maximum: Int) throws -> Data { var r = Data(); while r.count < maximum { r.append(try readExactly(1)); if r.suffix(delimiter.count) == delimiter { return r } }; throw ObstacleBridgeLinuxOverlayTransportError.webSocketHandshakeFailed }
         func close() { channel.close(promise: nil) }
     }
-    private final class Acceptor: ChannelInboundHandler, @unchecked Sendable {
+    private final class Acceptor: ChannelInboundHandler {
         typealias InboundIn = ByteBuffer
         unowned let owner: ObstacleBridgeLinuxTLSWebSocketPSKListener
         let timeout: Int

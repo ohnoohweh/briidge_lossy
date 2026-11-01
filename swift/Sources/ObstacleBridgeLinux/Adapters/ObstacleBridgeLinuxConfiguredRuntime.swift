@@ -66,7 +66,7 @@ public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
 /// session is explicit: callers must close it when their higher-level runtime
 /// decides the transport epoch has ended.
 public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
-    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests (connection admission is confined to its lifecycle owner)
     // The lower session's closures deliberately retain the client weakly to
     // avoid a client/session cycle. Keep the client alive for this configured
     // epoch so those closures remain usable after `connect` returns.
@@ -473,7 +473,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
 /// `ObstacleBridgeLinuxConfiguredRuntime` only publishes the active state's
 /// redacted projection for Admin and ChannelMux consumers; it does not retain
 /// candidate rotation or a SecureLink handshake across transport owners.
-final class ObstacleBridgeLinuxConnectionAdmission: @unchecked Sendable {
+final class ObstacleBridgeLinuxConnectionAdmission {
     let configuration: ObstacleBridgeLinuxRuntimeConfiguration
     var snapshot: ObstacleBridgeLinuxOverlaySnapshot
     var activeSession: ObstacleBridgeLinuxConfiguredSession?

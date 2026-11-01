@@ -8,15 +8,15 @@ synchronous coordination primitives in a legacy unchecked owner are rejected
 by `scripts/check_swift_concurrency_guard.py`.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 34 declarations:
+approval to add lock-based ownership. The inventory contains 18 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
 | Shared Core | 0 |
 | Desktop shared | 0 |
-| Linux adapters/runtime | 30 |
-| Executable workers | 1 |
-| Test fixtures | 3 |
+| Linux adapters/runtime | 17 |
+| Executable workers | 0 |
+| Test fixtures | 1 |
 
 The authoritative live inventory is deliberately machine-checkable rather than
 copied by hand:
@@ -45,7 +45,9 @@ correlated and completed inside its query-state boundary, so no Sendable
 completion captures the supervisor.
 The desktop proxy-worker control and lifecycle supervisors are non-Sendable;
 their inherited-control reader and restart state remain within their serialized
-ownership boundaries.
+ownership boundaries. The native proxy listener is actor-owned; every client
+session receives immutable settings and reports immutable traffic deltas back to
+the listener actor.
 
 The ChannelMux reply policy is non-Sendable and remains private to its session
 owner; it is not transferred between executors.
@@ -69,6 +71,16 @@ Linux stream-listener peer accounting is non-Sendable and remains private to
 the listener owner that serializes admission and write tracking.
 The Linux native peer child control owner is non-Sendable and keeps its stream
 decoder and inherited descriptor on one readiness queue.
+The Linux QUIC and TLS-WebSocket connection, pipeline handlers, TLS
+configuration handoff, and TLS-WebSocket accepted connection are non-Sendable
+and remain owned by their channel pipelines.
+The configured-runtime connection admission is non-Sendable and remains owned
+by its transport lifecycle.
+The Linux proxy relay is actor-owned; descriptor readiness callbacks re-enter
+the relay actor and completion returns only a descriptor and outcome value.
+The native-Admin live session is actor-owned; its descriptor and timer
+callbacks asynchronously re-enter the actor and only its immutable control
+values cross the boundary.
 The Linux Admin security and configuration owners are non-Sendable. HTTP
 handlers exchange decoded value requests, responses, snapshots, and updates
 without transferring either mutable owner.
@@ -76,8 +88,8 @@ The Linux telemetry uploader is non-Sendable. Its private queue performs
 network I/O and publishes immutable status snapshots.
 The Linux observability owner is non-Sendable. Its dedicated file-I/O queue
 publishes only telemetry and diagnostic value snapshots.
-The receive-worker delivery fixture is actor-owned; test callbacks await its
-immutable delivery snapshots instead of sharing lock-backed mutable state.
+The receive-worker delivery fixture records immutable delivery snapshots in an
+actor; its synchronous callback source remains test-local and non-Sendable.
 The overlay async-delivery fixture is actor-owned; transport callbacks await
 its immutable payload snapshot rather than sharing lock-backed mutable data.
 The service-socket fixtures are actor-owned; listener and target callbacks
@@ -90,6 +102,9 @@ re-enters the actor, and retry state and snapshots never leave actor isolation.
 The managed Linux TUN-helper process owner is non-Sendable and remains confined
 to its foreground runtime; the checked compiler accepts every existing use
 without a Sendable exemption.
+The native Linux TUN-helper backend is non-Sendable and remains confined to
+the helper server's request-processing boundary; callers exchange decoded
+request and response values rather than transferring the backend.
 The shared myUDP listener runtime is non-Sendable and remains confined to its
 serialized listener queue; its reader handoff uses an explicit work item rather
 than transferring the owner through a Sendable closure.
@@ -100,10 +115,10 @@ The shared myUDP transport listener is non-Sendable and remains in its
 foreground listener runtime. Its per-peer synchronous receive handoff is a
 separate remaining owner.
 
-The remaining unchecked owners still have shared mutable lifetime, I/O, or
-request-correlation state. They retain the existing compatibility boundaries
-until their callers expose asynchronous actor operations. A new lock,
-semaphore, synchronous wait, or `Mutex` is not an accepted replacement.
+Each remaining unchecked owner has shared mutable lifetime, I/O, or
+request-correlation state. Its migration requires callers to expose
+asynchronous actor operations; a new lock, semaphore, synchronous wait, or
+`Mutex` is not an accepted replacement.
 
 ## Compliance checks
 

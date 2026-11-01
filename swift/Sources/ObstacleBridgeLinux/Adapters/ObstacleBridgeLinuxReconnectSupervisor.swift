@@ -15,6 +15,10 @@ public actor ObstacleBridgeLinuxReconnectSupervisor {
     private let runtime: ObstacleBridgeLinuxConfiguredRuntime
     private let coordinator: ObstacleBridgeOverlayCoordinator
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.reconnect")
+
+    /// Returns the runtime's immutable Admin projection without exposing the
+    /// non-Sendable configured-runtime owner beyond this actor boundary.
+    public func runtimeStatus() -> ObstacleBridgeLinuxRuntimeStatus { runtime.status() }
     private var timer: DispatchSourceTimer?
     private var stopped = true
     private var payload = Data(); private var baseSessionID: UInt64 = 0; private var baseNonce = Data()

@@ -20,16 +20,16 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(peers.snapshot == .init(activePeerCount: 0, writesInFlight: 0, backpressureRejections: 1))
     }
 
-    @Test func tcpPSKListenerAuthenticatesAndEchoesProtectedClientPayload() throws {
+    @Test func tcpPSKListenerAuthenticatesAndEchoesProtectedClientPayload() async throws {
         let psk = Data("tcp-listener-psk".utf8)
-        let listener = try ObstacleBridgeLinuxTCPPSKListener(port: 0)
-        defer { listener.close() }
+        let listener = TCPPSKListenerHarness()
+        defer { Task { await listener.close() } }
         let served = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
-            _ = try? listener.serveOne(psk: psk, serverNonce: Data(0..<32))
+        Task {
+            await listener.serveOne(psk: psk, serverNonce: Data(0..<32))
             served.signal()
         }
-        let lower = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: listener.port, transport: .tcp)
+        let lower = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: await listener.port, transport: .tcp)
         let session = try lower.openSession()
         let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
         let nonce = Data(0x20..<0x40)
@@ -38,7 +38,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try client.unprotect(session.exchange(client.protect(Data("python-client".utf8)))) == Data("python-client".utf8))
         session.close()
         #expect(served.wait(timeout: .now() + 2) == .success)
-        #expect(listener.listenerSnapshot.activePeerCount == 0)
+        #expect((await listener.snapshot).activePeerCount == 0)
     }
 
     @Test func tcpFramingRoundTripsAgainstPythonPeer() throws {
@@ -497,7 +497,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         await supervisor.start(probe: Data("rotate-myudp".utf8), sessionID: 130, clientNonce: Data(repeating: 12, count: 32))
         #expect(connected.wait(timeout: .now() + 3) == .success)
         #expect(await supervisor.snapshot.attempts == 2)
-        #expect(runtime.status().activeHost == "127.0.0.1")
+        #expect((await supervisor.runtimeStatus()).activeHost == "127.0.0.1")
         await supervisor.stop()
     }
 
@@ -733,7 +733,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         await supervisor.stop()
         let stopped = await expectationSnapshot(supervisor, state: "stopped")
         #expect(stopped)
-        #expect(runtime.status().state == "disconnected")
+        #expect((await supervisor.runtimeStatus()).state == "disconnected")
     }
 
     @Test func reconnectSupervisorReportsBoundedRetryExhaustion() async {
@@ -780,7 +780,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         let limit = Date().addingTimeInterval(1)
         while Date() < limit {
             if await supervisor.snapshot.state == state { return true }
-            Thread.sleep(forTimeInterval: 0.005)
+            try? await Task.sleep(nanoseconds: 5_000_000)
         }
         return false
     }
@@ -874,6 +874,19 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         // close rather than the internal SecureLink validation error.
         #expect(throws: ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF) { try second.receiveInbound() }
     }
+}
+
+private actor TCPPSKListenerHarness {
+    private let listener = try! ObstacleBridgeLinuxTCPPSKListener(port: 0)
+
+    var port: Int { listener.port }
+    var snapshot: ObstacleBridgeLinuxStreamListenerSnapshot { listener.listenerSnapshot }
+
+    func serveOne(psk: Data, serverNonce: Data) {
+        try? listener.serveOne(psk: psk, serverNonce: serverNonce)
+    }
+
+    func close() { listener.close() }
 }
 
 final class PythonOverlayPeer {
