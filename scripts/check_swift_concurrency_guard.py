@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SWIFT_SOURCE = "swift/Sources/"
 UNCHECKED = "@unchecked Sendable"
+SYNCHRONOUS_PRIMITIVES = ("NSLock", "DispatchSemaphore", "Mutex")
 EVIDENCE = "OBSTACLEBRIDGE-CONCURRENCY:"
 EVIDENCE_FORMAT = re.compile(
     r"OBSTACLEBRIDGE-CONCURRENCY:\s*(?:lock|actor|serial)\b.*\btest=\S+"
@@ -46,6 +47,13 @@ def validate(changes: dict[str, list[str]]) -> list[str]:
             continue
         source_path = ROOT / path
         if not source_path.exists() or UNCHECKED not in source_path.read_text(encoding="utf-8"):
+            continue
+        introduced = [primitive for primitive in SYNCHRONOUS_PRIMITIVES if any(primitive in line for line in added)]
+        if introduced:
+            errors.append(
+                f"{path}: legacy {UNCHECKED} owners may not introduce synchronous coordination "
+                f"({', '.join(introduced)}); migrate the owner to actor or serial asynchronous ownership."
+            )
             continue
         evidence = "\n".join(added)
         if not EVIDENCE_FORMAT.search(evidence):

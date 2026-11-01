@@ -40,3 +40,15 @@ def test_accepts_lock_marker_with_named_test(monkeypatch) -> None:
         lambda _args: {"swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTunHelperServer.swift": ["// OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxTunHelperAdapterTests", "private var clients: [Int32: Int] = [:]"]},
     )
     assert guard.validate(guard.changed_lines(["--staged"])) == []
+
+
+def test_rejects_new_synchronous_primitive_in_legacy_owner(monkeypatch) -> None:
+    guard = _load()
+    monkeypatch.setattr(
+        guard,
+        "changed_lines",
+        lambda _args: {"swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTunHelperServer.swift": ["private let replacementLock = NSLock()"]},
+    )
+    errors = guard.validate(guard.changed_lines(["--staged"]))
+    assert len(errors) == 1
+    assert "synchronous coordination" in errors[0]

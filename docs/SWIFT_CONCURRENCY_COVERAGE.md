@@ -8,7 +8,10 @@ forbidden: new ownership must use actor isolation, a serial executor, or a
 Sendable value type that the compiler can verify. The concurrency guard also
 requires any edit to a legacy unchecked owner to include an
 `OBSTACLEBRIDGE-CONCURRENCY` marker naming its synchronization boundary and
-exercising test suite. The guard is run with the PR base SHA:
+exercising test suite. A legacy owner may not introduce `NSLock`,
+`DispatchSemaphore`, or `Mutex`; its migration must instead move state onto an
+actor or an existing serial asynchronous owner. The guard is run with the PR
+base SHA:
 
 ```sh
 python scripts/check_swift_concurrency_guard.py --base-ref <base-sha>
