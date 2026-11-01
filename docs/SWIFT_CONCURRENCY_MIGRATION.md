@@ -8,7 +8,7 @@ synchronous coordination primitives in a legacy unchecked owner are rejected
 by `scripts/check_swift_concurrency_guard.py`.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 18 declarations:
+approval to add lock-based ownership. The inventory contains 17 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
@@ -16,7 +16,7 @@ approval to add lock-based ownership. The inventory contains 18 declarations:
 | Desktop shared | 0 |
 | Linux adapters/runtime | 17 |
 | Executable workers | 0 |
-| Test fixtures | 1 |
+| Test fixtures | 0 |
 
 The authoritative live inventory is deliberately machine-checkable rather than
 copied by hand:
@@ -97,6 +97,9 @@ asynchronously record immutable frame and datagram snapshots before signaling
 their test expectations.
 The native-Admin HTTP response fixture is actor-owned; each HTTP worker records
 its immutable response before asynchronously releasing its test expectation.
+The Unix helper test peer is actor-owned. Its socket server and captured
+operation, packet, and JSON payload values remain isolated; tests inspect only
+immutable snapshots after the expected exchanges complete.
 The Linux reconnect supervisor is actor-owned; its timer asynchronously
 re-enters the actor, and retry state and snapshots never leave actor isolation.
 The managed Linux TUN-helper process owner is non-Sendable and remains confined
