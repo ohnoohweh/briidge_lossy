@@ -808,6 +808,7 @@ ARC-CMP-004:
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_open_uses_pending_peer_listener_before_async_catalog_start
     - tests/unit/test_launcher_entrypoint.py::test_launcher_forwards_unknown_args_to_bridge
     - tests/unit/test_launcher_entrypoint.py::test_launcher_restarts_for_code_75
+    - tests/unit/test_linux_native_main.py::test_foreground_restart_request_is_actor_owned_before_shutdown_signal
     - tests/unit/test_launcher_entrypoint.py::test_launcher_waits_interval_for_code_77
     - tests/unit/test_launcher_entrypoint.py::test_launcher_appends_unknown_args_to_custom_command
     - tests/unit/test_launcher_entrypoint.py::test_launcher_offers_dependency_install_before_default_command

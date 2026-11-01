@@ -7,9 +7,18 @@ import Glibc
 #endif
 
 enum ObstacleBridgeLinuxMain {
-    private final class ForegroundRestartState: @unchecked Sendable {
-        let lock = NSLock()
-        var requested = false
+    private actor ForegroundRestartState {
+        private var requested = false
+
+        func request() {
+            requested = true
+            ObstacleBridgeLinuxMain.requestForegroundShutdown()
+        }
+
+        func consume() -> Bool {
+            defer { requested = false }
+            return requested
+        }
     }
 
     private static let foregroundRestartState = ForegroundRestartState()
@@ -364,8 +373,10 @@ enum ObstacleBridgeLinuxMain {
                 if let signal { recordSignal?(signal) }
                 stop()
                 admin?.stop()
-                if consumeForegroundRestartRequest() { restartForegroundProcess() }
-                exit(0)
+                Task {
+                    if await foregroundRestartState.consume() { restartForegroundProcess() }
+                    exit(0)
+                }
             }
         }
         var resources: [Any] = []
@@ -400,18 +411,7 @@ enum ObstacleBridgeLinuxMain {
     }
 
     private static func requestForegroundRestart() {
-        foregroundRestartState.lock.lock()
-        foregroundRestartState.requested = true
-        foregroundRestartState.lock.unlock()
-        requestForegroundShutdown()
-    }
-
-    private static func consumeForegroundRestartRequest() -> Bool {
-        foregroundRestartState.lock.lock()
-        defer { foregroundRestartState.lock.unlock() }
-        let requested = foregroundRestartState.requested
-        foregroundRestartState.requested = false
-        return requested
+        Task { await foregroundRestartState.request() }
     }
 
     private static func restartForegroundProcess() -> Never {
