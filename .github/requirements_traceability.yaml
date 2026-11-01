@@ -723,6 +723,8 @@ REQ-PRX-001:
   # worker, and error fields are runtime state. WebAdmin omits the Proxy tab
   # until that configured intent is enabled. Its enabled UI uses plain RX/TX
   # rate fields and vertically ordered listener cards instead of nested tiles.
+  # Python worker status additionally distinguishes its supervised child from an
+  # in-process provider and exposes PID/control-socket readiness without secrets.
   # Python and native Admin both project selected collector lifecycle/drop state;
   # native child records serialize behind a collector lifecycle transition rather
   # than being silently discarded.

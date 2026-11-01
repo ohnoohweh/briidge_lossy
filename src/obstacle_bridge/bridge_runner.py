@@ -1180,6 +1180,12 @@ class Runner:
         configured["auth"] = ({key: auth[key] for key in ("mode", "username") if key in auth}
                               if isinstance(auth, Mapping) else {})
         worker = self._proxy_provider_worker
+        worker_running = bool(
+            worker is not None
+            and worker.process is not None
+            and worker.process.returncode is None
+            and not worker.last_error
+        )
         return {
             "enabled": bool(cfg["enabled"]),
             "configured": configured,
@@ -1189,7 +1195,17 @@ class Runner:
             },
             "last_error": worker.last_error if worker is not None else self._proxy_provider_last_error,
             **({"worker": {"implementation": worker.implementation,
-                            "state": "running" if worker.process is not None and worker.process.returncode is None and not worker.last_error else "unavailable",
+                            "state": "running" if worker_running else "unavailable",
+                            "process_model": "supervised_child",
+                            "detached": False,
+                            "pid": worker.process.pid if worker.process is not None else None,
+                            "server_started": bool(worker_running and worker.listeners),
+                            "control_socket": "inherited_unix_socketpair",
+                            "control_connected": bool(
+                                worker_running
+                                and worker.writer is not None
+                                and not worker.writer.is_closing()
+                            ),
                             "generation": worker.generation, "restarts": worker.restarts,
                             "failed_starts": worker.failed_starts,
                             "capabilities": worker.capabilities}} if worker is not None else {}),

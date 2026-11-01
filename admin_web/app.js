@@ -1683,6 +1683,7 @@ function applyProxyDoc() {
   const capabilities = worker?.capabilities && typeof worker.capabilities === 'object'
     ? Object.entries(worker.capabilities).filter(([, enabled]) => Boolean(enabled)).map(([name]) => name).join(', ')
     : '';
+  const usesChild = Boolean(worker);
   setText('proxyConfigured', cfg.enabled ? 'enabled' : 'disabled');
   setText('proxyRuntime', provider.enabled || rows.length ? 'active' : 'inactive');
   setText('proxyBind', fmtText(cfg.bind));
@@ -1696,8 +1697,14 @@ function applyProxyDoc() {
   setText('proxyTxRate', fmtBytesPerSecond(totals.txRate));
   setText('proxyLastError', totals.lastError || 'n/a');
   setText('proxyWorkerMode', cfg.worker);
+  setText('proxyWorkerProcess', worker?.process_model === 'supervised_child' ? 'separate process (supervised)' : 'in-process');
+  setText('proxyWorkerDetached', usesChild ? (worker?.detached ? 'yes' : 'no (supervised)') : 'n/a');
   setText('proxyWorkerImplementation', worker?.implementation || (cfg.worker === 'off' ? 'in-process' : 'starting'));
   setText('proxyWorkerState', worker?.state || (cfg.worker === 'off' ? 'in-process' : 'unavailable'));
+  setText('proxyWorkerServerStarted', usesChild ? fmtBool(worker?.server_started) : fmtBool(provider.enabled || rows.length));
+  setText('proxyWorkerControlSocket', worker?.control_socket || 'n/a');
+  setText('proxyWorkerControlConnected', usesChild ? fmtBool(worker?.control_connected) : 'n/a');
+  setText('proxyWorkerPid', worker?.pid == null ? 'n/a' : fmtInteger(worker.pid));
   setText('proxyWorkerGeneration', fmtInteger(worker?.generation ?? 0));
   setText('proxyWorkerRestarts', fmtInteger(worker?.restarts ?? 0));
   setText('proxyWorkerFailedStarts', fmtInteger(worker?.failed_starts ?? 0));

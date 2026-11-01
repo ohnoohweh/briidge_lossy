@@ -163,8 +163,11 @@ def test_runner_proxy_child_owns_http_socks_and_snapshots(backend):
             assert "private-token" not in command
             snap = runner._proxy_provider_snapshot()
             assert {"enabled", "configured", "listeners", "last_error", "worker"} <= set(snap)
-            assert snap["worker"] == {"implementation": backend[0], "state": "running", "generation": 1, "restarts": 0,
-                                       "failed_starts": 0, "capabilities": worker_capabilities(backend[0])}
+            assert snap["worker"] == {"implementation": backend[0], "state": "running", "process_model": "supervised_child",
+                                       "detached": False, "pid": worker.process.pid, "server_started": True,
+                                       "control_socket": "inherited_unix_socketpair", "control_connected": True,
+                                       "generation": 1, "restarts": 0, "failed_starts": 0,
+                                       "capabilities": worker_capabilities(backend[0])}
             assert snap["last_error"] == ""
             assert snap["configured"]["auth"] == {"mode": "basic", "username": "user"}
             assert "private-token" not in json.dumps(snap, sort_keys=True)

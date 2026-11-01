@@ -67,6 +67,7 @@ ARC-CMP-001:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::nativeRuntimeOwnsEitherProxyWorkerAndReportsLoss
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::proxyWorkerConfigurationPreservesPolicyAndSelection
+    # Python snapshots distinguish the supervised child and its inherited control socket.
     - tests/unit/test_proxy_worker.py::test_runner_proxy_child_owns_http_socks_and_snapshots
     - tests/unit/test_proxy_worker.py::test_proxy_worker_owner_loss_closes_listeners
     - tests/unit/test_proxy_worker.py::test_proxy_worker_failed_start_cleans_up_and_never_uses_incomplete_auth

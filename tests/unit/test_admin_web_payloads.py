@@ -1662,8 +1662,11 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("const worker = provider.worker", app_js)
         self.assertIn("setText('proxyWorkerGeneration'", app_js)
         self.assertIn("setText('proxyWorkerCapabilities'", app_js)
+        self.assertIn("setText('proxyWorkerProcess'", app_js)
+        self.assertIn("setText('proxyWorkerControlConnected'", app_js)
         self.assertIn('id="proxyWorkerMode"', index_html)
         self.assertIn('id="proxyWorkerFailedStarts"', index_html)
+        self.assertIn('id="proxyWorkerControlSocket"', index_html)
 
     def test_tun_routing_frontend_uses_dedicated_tab_and_api(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
