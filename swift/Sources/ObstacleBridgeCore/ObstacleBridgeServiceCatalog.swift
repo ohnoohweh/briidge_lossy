@@ -17,7 +17,10 @@ public struct ObstacleBridgeServiceCatalogInstall: Equatable, Sendable {
     public let connectionSequence: UInt32?
 }
 
-public final class ObstacleBridgeServiceCatalogStore: @unchecked Sendable {
+/// Catalog mutation is confined to the transport owner that admits one peer's
+/// control stream. Accepted installs are immutable `Sendable` values; the
+/// mutable store itself must not cross that owner boundary.
+public final class ObstacleBridgeServiceCatalogStore {
     private var instanceID: UInt64?
     private var connectionSequence: UInt32?
     private var services: [ObstacleBridgeServiceSpec] = []

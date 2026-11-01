@@ -25,7 +25,9 @@ public struct ObstacleBridgeChannelMuxEgressSource: Hashable, Sendable {
 /// Owners call `dequeueNext()` once per lower-layer send opportunity.  A source
 /// appears at most once in the ready ring, so continuously ready traffic
 /// cannot regain the turn before every other ready source has had one record.
-public final class ObstacleBridgeChannelMuxEgressSequencer<Element>: @unchecked Sendable {
+/// The enclosing transport owner serializes scheduler access. This type stays
+/// non-Sendable so a queue cannot be transferred independently of that owner.
+public final class ObstacleBridgeChannelMuxEgressSequencer<Element> {
     // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeChannelMuxEgressSequencerTests
     // Linux service owners and Apple framework callbacks may enqueue on a
     // different executor while a transport drain is in flight.  The owner

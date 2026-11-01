@@ -8,11 +8,12 @@ synchronous coordination primitives in a legacy unchecked owner are rejected
 by `scripts/check_swift_concurrency_guard.py`.
 
 The remaining unchecked conformances are a migration inventory, not an
-approval to add lock-based ownership. The baseline is 83 declarations:
+approval to add lock-based ownership. The remaining inventory contains 75
+declarations:
 
 | Area | Owners | Migration direction |
 | --- | ---: | --- |
-| Shared Core | 23 | Isolate mutable protocol, telemetry, catalog, and metrics state in actors; return immutable `Sendable` effects and snapshots. |
+| Shared Core | 15 | Isolate mutable protocol, telemetry, catalog, and metrics state in actors; return immutable `Sendable` effects and snapshots. |
 | Desktop shared | 6 | Put worker lifecycle and IPC request state behind actor-owned asynchronous continuations. |
 | Linux adapters/runtime | 42 | Keep descriptor callbacks on their existing serial asynchronous owner, expose actor-facing state/effects, and remove cross-queue mutable access. |
 | Executable workers | 3 | Make the event-loop-owned state an actor or a non-Sendable executor-local value. |
@@ -46,9 +47,12 @@ The migration is ordered by execution model rather than line count:
 1. Core telemetry upload/emission and metrics state: these have bounded
    request/effect surfaces and can become actors without placing file or
    network work on the packet callback path.
-2. Core protocol state machines (myUDP, SecureLink, ChannelMux, catalog,
-   packet reassembly): convert their state transition to actor methods and
-   retain pure codecs as `Sendable` values.
+2. Core protocol state machines (myUDP and SecureLink): convert their state
+   transition to actor methods and retain pure codecs as `Sendable` values.
+   ChannelMux sessions, egress scheduling, packet reassembly, TUN binding
+   state, TUN drop accounting, overlay lifecycle coordination, and service
+   catalogs are executor-confined non-Sendable state inside their transport
+   runtimes; they publish only immutable effects, results, and snapshots.
 3. Desktop worker supervisors: replace correlated reply maps and lifecycle
    flags with actor-owned continuations before changing child-process I/O.
 4. Linux descriptor owners: preserve the existing nonblocking
