@@ -692,7 +692,6 @@ def _python_peer_config(*, overlay_port: int, admin_port: int, server_ifname: st
             "mtu": 1400,
         },
         "runner": {"overlay_transport": "myudp"},
-        "stats_board": {"status": False},
         "udp_session": {"udp_bind": "127.0.0.1", "udp_own_port": overlay_port},
     }
 

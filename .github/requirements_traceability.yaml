@@ -1450,7 +1450,6 @@ REQ-MUX-009:
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_supports_excluded_route_programming
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_waits_for_interface_and_uses_onlink_default_routes
     - tests/unit/test_tun_hook_scripts.py::test_server_tun_hook_supports_optional_tcpdump_capture
-    - tests/unit/test_runner_ios_status_callbacks.py::test_runner_keeps_status_callbacks_wired_on_ios
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_server_tun_stop_skips_on_stopped_hook_when_device_is_retained
     - tests/unit/test_channel_mux_listener_mode.py::test_overlay_disconnect_retains_server_owned_shared_tun
@@ -1645,8 +1644,7 @@ REQ-MYU-006:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreStreamReceiveStateUsesTheWireDerivedMissingLimit
 
 REQ-MYU-007:
-  # WebAdmin renders the shared runtime transmit-delay field alongside RTT
-  # without StatsBoard emitting a per-event trace record.
+  # WebAdmin renders the shared per-peer transmit-delay field alongside RTT.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
   unit_tests:
@@ -1990,7 +1988,6 @@ REQ-ADM-006:
     - tests/unit/test_connection_snapshots.py::test_snapshot_hides_requested_remote_servers_when_overlay_disconnected
     - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
     - tests/unit/test_connection_snapshots.py::test_wrapped_myudp_client_snapshot_uses_inner_configured_peer_endpoint
-    - tests/unit/test_connection_snapshots.py::test_status_snapshot_includes_tun_open_connection_count
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_ws_multi_peer.py::test_server_peer_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_ws_multi_peer.py::test_client_peer_snapshot_includes_last_incoming_age_seconds

@@ -405,8 +405,6 @@ def test_runner_selects_and_stops_admin_worker(monkeypatch, tmp_path):
 
     async def exercise():
         runner = _runner()
-        runner.args.status = False
-        runner.stats.bind_session = lambda _session: None
         try:
             await runner.start()
             worker = runner.admin_web

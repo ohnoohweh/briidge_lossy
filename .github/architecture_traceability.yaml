@@ -802,7 +802,6 @@ ARC-CMP-004:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalization_can_be_disabled
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalization_disabled_warns_once
     - tests/unit/test_tun_hook_scripts.py::test_server_tun_hook_supports_optional_tcpdump_capture
-    - tests/unit/test_runner_ios_status_callbacks.py::test_runner_keeps_status_callbacks_wired_on_ios
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_open_uses_pending_peer_listener_before_async_catalog_start
     - tests/unit/test_launcher_entrypoint.py::test_launcher_forwards_unknown_args_to_bridge
@@ -1049,7 +1048,6 @@ ARC-CMP-005:
     - tests/unit/test_connection_snapshots.py::test_wrapped_myudp_client_snapshot_uses_inner_configured_peer_endpoint
     - tests/unit/test_connection_snapshots.py::test_ws_client_snapshot_prefers_applied_peer_over_multi_host_config
     - tests/unit/test_connection_snapshots.py::test_quic_client_snapshot_prefers_applied_peer_over_multi_host_config
-    - tests/unit/test_connection_snapshots.py::test_status_snapshot_includes_tun_open_connection_count
     - tests/unit/test_admin_web_payloads.py::test_runner_peer_snapshot_coalesces_null_overlay_metrics
     - tests/unit/test_admin_web_payloads.py::test_runner_peer_snapshot_preserves_null_listener_overlay_metrics
     - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt

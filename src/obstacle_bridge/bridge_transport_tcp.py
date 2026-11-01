@@ -317,7 +317,7 @@ class TcpStreamSession(ISession):
     def get_connection_lifecycle_snapshot(self) -> dict[str, object]:
         return self._connection_lifecycle.snapshot()
 
-    # ---- metrics surface for StatsBoard (RTT plumbing) ----
+    # ---- transport metrics surface (RTT plumbing) ----
     def get_metrics(self) -> SessionMetrics:
         """
         Publish RTT numbers to the dashboard (transport-agnostic).

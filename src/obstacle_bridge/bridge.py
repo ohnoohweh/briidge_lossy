@@ -599,7 +599,6 @@ from .bridge_channelmux import (
     ProcessSharedTunRegistry,
 )
 from .bridge_webadmin import AdminWebUI
-from .bridge_stats import StatsBoard
 
 from .bridge_runner import (
     RunnerMuxAggregate,
