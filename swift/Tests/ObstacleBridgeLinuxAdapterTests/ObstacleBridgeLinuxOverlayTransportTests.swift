@@ -487,21 +487,21 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(plain.rejectedFramesTotal == 0)
     }
 
-    @Test func myudpSupervisorRotatesCandidateAfterFailedEpoch() throws {
+    @Test func myudpSupervisorRotatesCandidateAfterFailedEpoch() async throws {
         let peer = try PythonOverlayPeer(mode: "myudp")
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .myudp, host: "127.0.0.2,127.0.0.1", port: peer.port))
         let supervisor = ObstacleBridgeLinuxReconnectSupervisor(runtime: runtime, policy: .init(initialDelayMilliseconds: 5, maximumDelayMilliseconds: 10, maximumAttempts: 2))
         let connected = DispatchSemaphore(value: 0)
-        supervisor.onSnapshot = { if $0.state == "connected" { connected.signal() } }
-        supervisor.start(probe: Data("rotate-myudp".utf8), sessionID: 130, clientNonce: Data(repeating: 12, count: 32))
+        await supervisor.setSnapshotHandler { if $0.state == "connected" { connected.signal() } }
+        await supervisor.start(probe: Data("rotate-myudp".utf8), sessionID: 130, clientNonce: Data(repeating: 12, count: 32))
         #expect(connected.wait(timeout: .now() + 3) == .success)
-        #expect(supervisor.snapshot.attempts == 2)
+        #expect(await supervisor.snapshot.attempts == 2)
         #expect(runtime.status().activeHost == "127.0.0.1")
-        supervisor.stop()
+        await supervisor.stop()
     }
 
-    @Test func myudpSupervisorUsesCoreTimerRecoveryBeforeReconnect() throws {
+    @Test func myudpSupervisorUsesCoreTimerRecoveryBeforeReconnect() async throws {
         let peer = try PythonOverlayPeer(mode: "myudp-drop-first")
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
@@ -510,11 +510,11 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         ))
         let supervisor = ObstacleBridgeLinuxReconnectSupervisor(runtime: runtime, policy: .init(initialDelayMilliseconds: 5, maximumDelayMilliseconds: 10, maximumAttempts: 2))
         let connected = DispatchSemaphore(value: 0)
-        supervisor.onSnapshot = { if $0.state == "connected" { connected.signal() } }
-        supervisor.start(probe: Data("silent-myudp".utf8), sessionID: 140, clientNonce: Data(repeating: 13, count: 32))
+        await supervisor.setSnapshotHandler { if $0.state == "connected" { connected.signal() } }
+        await supervisor.start(probe: Data("silent-myudp".utf8), sessionID: 140, clientNonce: Data(repeating: 13, count: 32))
         #expect(connected.wait(timeout: .now() + 3) == .success)
-        #expect(supervisor.snapshot.attempts == 1)
-        supervisor.stop()
+        #expect(await supervisor.snapshot.attempts == 1)
+        await supervisor.stop()
     }
 
     @Test func tcpSecureLinkPskSessionAuthenticatesAndCarriesDataAgainstPythonPeer() throws {
@@ -714,7 +714,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         runtime.disconnect()
     }
 
-    @Test func reconnectSupervisorRecoversAndStopsPendingTimers() throws {
+    @Test func reconnectSupervisorRecoversAndStopsPendingTimers() async throws {
         let peer = try PythonOverlayPeer(mode: "tcp-drop-then-echo")
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: peer.port))
@@ -723,37 +723,37 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
             policy: .init(initialDelayMilliseconds: 10, maximumDelayMilliseconds: 20, maximumAttempts: 2)
         )
         let connected = DispatchSemaphore(value: 0)
-        supervisor.onSnapshot = { snapshot in
+        await supervisor.setSnapshotHandler { snapshot in
             if snapshot.state == "connected" { connected.signal() }
         }
-        supervisor.start(probe: Data("supervisor".utf8), sessionID: 90, clientNonce: Data(repeating: 6, count: 32))
+        await supervisor.start(probe: Data("supervisor".utf8), sessionID: 90, clientNonce: Data(repeating: 6, count: 32))
         #expect(connected.wait(timeout: .now() + 2) == .success)
-        #expect(supervisor.snapshot.attempts == 2)
-        #expect(supervisor.snapshot.state == "connected")
-        supervisor.stop()
-        let stopped = expectationSnapshot(supervisor, state: "stopped")
+        #expect(await supervisor.snapshot.attempts == 2)
+        #expect(await supervisor.snapshot.state == "connected")
+        await supervisor.stop()
+        let stopped = await expectationSnapshot(supervisor, state: "stopped")
         #expect(stopped)
         #expect(runtime.status().state == "disconnected")
     }
 
-    @Test func reconnectSupervisorReportsBoundedRetryExhaustion() {
+    @Test func reconnectSupervisorReportsBoundedRetryExhaustion() async {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let supervisor = ObstacleBridgeLinuxReconnectSupervisor(
             runtime: runtime,
             policy: .init(initialDelayMilliseconds: 5, maximumDelayMilliseconds: 10, maximumAttempts: 2)
         )
         let failed = DispatchSemaphore(value: 0)
-        supervisor.onSnapshot = { snapshot in
+        await supervisor.setSnapshotHandler { snapshot in
             if snapshot.state == "failed" { failed.signal() }
         }
-        supervisor.start(probe: Data("exhaust".utf8), sessionID: 100, clientNonce: Data(repeating: 7, count: 32))
+        await supervisor.start(probe: Data("exhaust".utf8), sessionID: 100, clientNonce: Data(repeating: 7, count: 32))
         #expect(failed.wait(timeout: .now() + 2) == .success)
-        #expect(supervisor.snapshot.attempts == 2)
-        #expect(supervisor.snapshot.failureReason != nil)
-        supervisor.stop()
+        #expect(await supervisor.snapshot.attempts == 2)
+        #expect(await supervisor.snapshot.failureReason != nil)
+        await supervisor.stop()
     }
 
-    @Test func reconnectSupervisorStopCancelsPendingRetry() {
+    @Test func reconnectSupervisorStopCancelsPendingRetry() async {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let supervisor = ObstacleBridgeLinuxReconnectSupervisor(
             runtime: runtime,
@@ -762,24 +762,24 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         let retryPending = DispatchSemaphore(value: 0)
         let stopped = DispatchSemaphore(value: 0)
         let secondAttempt = DispatchSemaphore(value: 0)
-        supervisor.onSnapshot = { snapshot in
+        await supervisor.setSnapshotHandler { snapshot in
             if snapshot.state == "reconnecting", snapshot.attempts == 1, snapshot.nextRetryMilliseconds == 250 { retryPending.signal() }
             if snapshot.state == "stopped" { stopped.signal() }
             if snapshot.attempts >= 2 { secondAttempt.signal() }
         }
-        supervisor.start(probe: Data("cancel".utf8), sessionID: 110, clientNonce: Data(repeating: 8, count: 32))
+        await supervisor.start(probe: Data("cancel".utf8), sessionID: 110, clientNonce: Data(repeating: 8, count: 32))
         #expect(retryPending.wait(timeout: .now() + 2) == .success)
-        supervisor.stop()
+        await supervisor.stop()
         #expect(stopped.wait(timeout: .now() + 2) == .success)
         #expect(secondAttempt.wait(timeout: .now() + 0.4) == .timedOut)
-        #expect(supervisor.snapshot.attempts == 1)
-        #expect(supervisor.snapshot.state == "stopped")
+        #expect(await supervisor.snapshot.attempts == 1)
+        #expect(await supervisor.snapshot.state == "stopped")
     }
 
-    private func expectationSnapshot(_ supervisor: ObstacleBridgeLinuxReconnectSupervisor, state: String) -> Bool {
+    private func expectationSnapshot(_ supervisor: ObstacleBridgeLinuxReconnectSupervisor, state: String) async -> Bool {
         let limit = Date().addingTimeInterval(1)
         while Date() < limit {
-            if supervisor.snapshot.state == state { return true }
+            if await supervisor.snapshot.state == state { return true }
             Thread.sleep(forTimeInterval: 0.005)
         }
         return false
