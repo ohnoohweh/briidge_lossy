@@ -1069,7 +1069,7 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_verification_checks
     - tests/unit/test_admin_web_payloads.py::test_tun_helper_repair_endpoint_returns_runner_payload
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_ui_binds_tun_helper_fields
-    # TUN technical counters stay available without competing with operator status.
+    # TUN helper diagnostics and technical counters stay available without competing with operator status.
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_shared_ownership_renders_one_row_per_configured_peer
     - tests/unit/test_admin_web_payloads.py::test_admin_web_does_not_embed_ios_native_tunnel_controls

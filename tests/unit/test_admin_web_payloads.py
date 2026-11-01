@@ -1718,6 +1718,8 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn('id="tunRoutingLocalReplyStageCounters"', index_html)
         self.assertIn('<details class="technical-details">', index_html)
         self.assertIn('<summary>Technical details</summary>', index_html)
+        self.assertIn('id="tunHelperRepairBtn"', index_html)
+        self.assertGreater(index_html.index('id="tunHelperRepairBtn"'), index_html.index('<summary>Technical details</summary>'))
         self.assertIn('id="tunVerificationConfigSummary"', index_html)
         self.assertIn('id="tunVerificationPeerSummary"', index_html)
         self.assertIn('id="tunVerificationGlobalSummary"', index_html)
