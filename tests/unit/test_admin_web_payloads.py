@@ -1643,6 +1643,7 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("if (normalized === 'connected') return 'role-pill role-server';", text)
                 self.assertIn("if (normalized === 'disconnected') return 'role-pill role-disconnected';", text)
                 self.assertIn(".conn-table .role-disconnected", (repo_root / "admin_web" / "style.css").read_text(encoding="utf-8"))
+
                 self.assertIn("renderMetric('Throttle', fmtThrottleIndicator(row.throttle), { pill: true })", text)
                 self.assertIn("function fmtThrottleIndicator(throttle)", text)
                 self.assertIn("escapeHtml(fmtThrottleIndicator(row.throttle))", text)
@@ -1653,6 +1654,16 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("renderMetric('Restart In', fmtUptime(row.restart_in_seconds))", text)
                 self.assertIn("const negative = numeric < 0;", text)
                 self.assertIn("return negative ? `-${formatted}` : formatted;", text)
+
+    def test_proxy_page_renders_private_worker_lifecycle(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
+        index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("const worker = provider.worker", app_js)
+        self.assertIn("setText('proxyWorkerGeneration'", app_js)
+        self.assertIn("setText('proxyWorkerCapabilities'", app_js)
+        self.assertIn('id="proxyWorkerMode"', index_html)
+        self.assertIn('id="proxyWorkerFailedStarts"', index_html)
 
     def test_tun_routing_frontend_uses_dedicated_tab_and_api(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]

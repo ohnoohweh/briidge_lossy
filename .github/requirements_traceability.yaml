@@ -782,6 +782,7 @@ REQ-PRX-001:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeProxyProtocolPolicyTests.swift::validatesBasicCredentialsAndParsesSocks5Domain
     - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_includes_proxy_provider_fields
     - tests/unit/test_embeddable_core.py::test_runner_starts_proxy_provider_and_exposes_status_snapshot
+    - tests/unit/test_admin_web_payloads.py::test_proxy_page_renders_private_worker_lifecycle
     - tests/unit/test_proxy_server.py::test_python_proxy_server_default_egress_mode_is_system
     - tests/unit/test_proxy_server.py::test_python_proxy_server_default_system_egress_auth_is_platform_scoped
     - tests/unit/test_proxy_server.py::test_python_proxy_server_rewrites_http_absolute_form

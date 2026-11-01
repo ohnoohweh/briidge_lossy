@@ -1568,6 +1568,7 @@ function proxyConfigSnapshot() {
     : (Array.isArray(root.proxy_provider_protocols) ? root.proxy_provider_protocols : []);
   return {
     enabled: Boolean(cfg.enabled ?? root.proxy_provider_enabled),
+    worker: String(cfg.worker ?? root.proxy_provider_worker ?? 'off').trim() || 'off',
     bind: cfg.bind ?? root.proxy_provider_bind ?? '127.0.0.1',
     http_port: cfg.http_port ?? root.proxy_provider_http_port ?? 13881,
     socks5_port: cfg.socks5_port ?? root.proxy_provider_socks5_port ?? 13882,
@@ -1744,6 +1745,10 @@ function applyProxyDoc() {
   const totals = renderProxyListeners(rows);
   const authMode = String(cfg.auth?.mode || 'none').trim() || 'none';
   const authUser = String(cfg.auth?.username || '').trim();
+  const worker = provider.worker && typeof provider.worker === 'object' ? provider.worker : null;
+  const capabilities = worker?.capabilities && typeof worker.capabilities === 'object'
+    ? Object.entries(worker.capabilities).filter(([, enabled]) => Boolean(enabled)).map(([name]) => name).join(', ')
+    : '';
   setText('proxyConfigured', cfg.enabled ? 'enabled' : 'disabled');
   setText('proxyRuntime', provider.enabled || rows.length ? 'active' : 'inactive');
   setText('proxyBind', fmtText(cfg.bind));
@@ -1759,6 +1764,13 @@ function applyProxyDoc() {
   setPercentWidth('proxyRxRateFill', summaryRates.rxPct);
   setPercentWidth('proxyTxRateFill', summaryRates.txPct);
   setText('proxyLastError', totals.lastError || 'n/a');
+  setText('proxyWorkerMode', cfg.worker);
+  setText('proxyWorkerImplementation', worker?.implementation || (cfg.worker === 'off' ? 'in-process' : 'starting'));
+  setText('proxyWorkerState', worker?.state || (cfg.worker === 'off' ? 'in-process' : 'unavailable'));
+  setText('proxyWorkerGeneration', fmtInteger(worker?.generation ?? 0));
+  setText('proxyWorkerRestarts', fmtInteger(worker?.restarts ?? 0));
+  setText('proxyWorkerFailedStarts', fmtInteger(worker?.failed_starts ?? 0));
+  setText('proxyWorkerCapabilities', capabilities || 'n/a');
 }
 
 function applyTelemetryDoc(statusDoc) {
