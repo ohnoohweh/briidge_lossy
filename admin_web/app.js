@@ -1611,56 +1611,9 @@ function proxyListenerRate(listenerName, snapshot) {
   return { rxRate, txRate };
 }
 
-function renderProxyProtocolSockets(cfg) {
+function proxyProtocolSocket(cfg, protocol, port) {
   const protocols = Array.isArray(cfg?.protocols) ? cfg.protocols : [];
-  const hasHttp = protocols.includes('http-connect');
-  const hasSocks5 = protocols.includes('socks5-connect');
-  return `
-    <div>
-      <span>HTTP / CONNECT</span>
-      <strong class="mono">${escapeHtml(hasHttp ? fmtInteger(cfg.http_port) : 'disabled')}</strong>
-    </div>
-    <div>
-      <span>SOCKS5</span>
-      <strong class="mono">${escapeHtml(hasSocks5 ? fmtInteger(cfg.socks5_port) : 'disabled')}</strong>
-    </div>
-  `;
-}
-
-function proxyRatePercents(rxRate, txRate) {
-  const rx = Math.max(0, Number(rxRate || 0));
-  const tx = Math.max(0, Number(txRate || 0));
-  const scale = Math.max(rx, tx, 1);
-  return {
-    rx,
-    tx,
-    rxPct: Math.max(0, Math.min(100, (rx / scale) * 100)),
-    txPct: Math.max(0, Math.min(100, (tx / scale) * 100)),
-  };
-}
-
-function renderProxyTrafficPair(rxBytes, txBytes, rxRate, txRate) {
-  const rates = proxyRatePercents(rxRate, txRate);
-  return `
-    <div class="proxy-rate-pair proxy-rate-pair-stacked">
-      <div class="proxy-rate-box">
-        <span>RX</span>
-        <strong class="mono">${escapeHtml(fmtBytes(rxBytes))}</strong>
-        <em class="mono">${escapeHtml(fmtBytesPerSecond(rates.rx))}</em>
-        <div class="proxy-rate-track">
-          <div class="proxy-rate-fill proxy-rate-fill-rx" style="width: ${rates.rxPct.toFixed(1)}%"></div>
-        </div>
-      </div>
-      <div class="proxy-rate-box">
-        <span>TX</span>
-        <strong class="mono">${escapeHtml(fmtBytes(txBytes))}</strong>
-        <em class="mono">${escapeHtml(fmtBytesPerSecond(rates.tx))}</em>
-        <div class="proxy-rate-track">
-          <div class="proxy-rate-fill proxy-rate-fill-tx" style="width: ${rates.txPct.toFixed(1)}%"></div>
-        </div>
-      </div>
-    </div>
-  `;
+  return protocols.includes(protocol) ? fmtInteger(port) : 'disabled';
 }
 
 function renderProxyListeners(rows) {
@@ -1698,47 +1651,19 @@ function renderProxyListeners(rows) {
           </div>
           <span class="proxy-listener-endpoint mono">${escapeHtml(fmtEndpoint({ host: snapshot.bind_host, port: snapshot.port }))}</span>
         </div>
-        <div class="proxy-listener-grid-inner">
-          <div class="proxy-stat-card">
-            <span>Protocols</span>
-            <strong>${escapeHtml([
+        <div class="kv-list">
+          <div class="kv-row"><span>Protocols</span><strong>${escapeHtml([
               snapshot.http_enabled ? 'HTTP' : '',
               snapshot.socks5_enabled ? 'SOCKS5' : '',
-            ].filter(Boolean).join(' + ') || 'disabled')}</strong>
-          </div>
-          <div class="proxy-stat-card">
-            <span>Auth</span>
-            <strong>${escapeHtml(fmtBool(snapshot.auth_required))}</strong>
-          </div>
-          <div class="proxy-stat-card proxy-sockets-card">
-            <span>Sockets</span>
-            <div class="proxy-mini-grid">
-              <div>
-                <span>Active</span>
-                <strong class="mono">${escapeHtml(fmtInteger(active))}</strong>
-              </div>
-              <div>
-                <span>Accepted</span>
-                <strong class="mono">${escapeHtml(fmtInteger(accepted))}</strong>
-              </div>
-              <div>
-                <span>Completed</span>
-                <strong class="mono">${escapeHtml(fmtInteger(completed))}</strong>
-              </div>
-              <div>
-                <span>Failed</span>
-                <strong class="mono">${escapeHtml(fmtInteger(failed))}</strong>
-              </div>
-            </div>
-          </div>
-          <div class="proxy-stat-card proxy-listener-traffic-card">
-            <span>Traffic</span>
-            ${renderProxyTrafficPair(rx, tx, rates.rxRate, rates.txRate)}
-          </div>
-          <div class="proxy-stat-card proxy-error-card">
-            <span>Last Error</span>
-            <strong class="mono">${escapeHtml(lastError || 'n/a')}</strong>
-          </div>
+            ].filter(Boolean).join(' + ') || 'disabled')}</strong></div>
+          <div class="kv-row"><span>Auth</span><strong>${escapeHtml(fmtBool(snapshot.auth_required))}</strong></div>
+          <div class="kv-row"><span>Active</span><strong class="mono">${escapeHtml(fmtInteger(active))}</strong></div>
+          <div class="kv-row"><span>Accepted</span><strong class="mono">${escapeHtml(fmtInteger(accepted))}</strong></div>
+          <div class="kv-row"><span>Completed</span><strong class="mono">${escapeHtml(fmtInteger(completed))}</strong></div>
+          <div class="kv-row"><span>Failed</span><strong class="mono">${escapeHtml(fmtInteger(failed))}</strong></div>
+          <div class="kv-row"><span>Traffic RX</span><strong class="mono">${escapeHtml(`${fmtBytes(rx)} · ${fmtBytesPerSecond(rates.rxRate)}`)}</strong></div>
+          <div class="kv-row"><span>Traffic TX</span><strong class="mono">${escapeHtml(`${fmtBytes(tx)} · ${fmtBytesPerSecond(rates.txRate)}`)}</strong></div>
+          <div class="kv-row"><span>Last Error</span><strong class="mono">${escapeHtml(lastError || 'n/a')}</strong></div>
         </div>
       </article>
     `;
@@ -1761,17 +1686,14 @@ function applyProxyDoc() {
   setText('proxyConfigured', cfg.enabled ? 'enabled' : 'disabled');
   setText('proxyRuntime', provider.enabled || rows.length ? 'active' : 'inactive');
   setText('proxyBind', fmtText(cfg.bind));
-  const protocolSockets = document.getElementById('proxyProtocolSockets');
-  if (protocolSockets) protocolSockets.innerHTML = renderProxyProtocolSockets(cfg);
+  setText('proxyHttpSocket', proxyProtocolSocket(cfg, 'http-connect', cfg.http_port));
+  setText('proxySocks5Socket', proxyProtocolSocket(cfg, 'socks5-connect', cfg.socks5_port));
   setText('proxyAuth', authMode === 'none' ? 'none' : `${authMode}${authUser ? `:${authUser}` : ''}`);
   setText('proxyActiveConnections', fmtInteger(totals.active));
   setText('proxyAcceptedConnections', fmtInteger(totals.accepted));
   setText('proxyFailedConnections', fmtInteger(totals.failed));
   setText('proxyRxRate', fmtBytesPerSecond(totals.rxRate));
   setText('proxyTxRate', fmtBytesPerSecond(totals.txRate));
-  const summaryRates = proxyRatePercents(totals.rxRate, totals.txRate);
-  setPercentWidth('proxyRxRateFill', summaryRates.rxPct);
-  setPercentWidth('proxyTxRateFill', summaryRates.txPct);
   setText('proxyLastError', totals.lastError || 'n/a');
   setText('proxyWorkerMode', cfg.worker);
   setText('proxyWorkerImplementation', worker?.implementation || (cfg.worker === 'off' ? 'in-process' : 'starting'));

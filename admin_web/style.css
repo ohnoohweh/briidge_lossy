@@ -1801,3 +1801,15 @@ select.config-editor option:disabled {
     min-width: 760px;
   }
 }
+
+/* Proxy listener cards use the same vertically ordered operator layout as peers. */
+.proxy-listener-grid {
+  grid-template-columns: 1fr;
+}
+
+.proxy-listener-endpoint {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
