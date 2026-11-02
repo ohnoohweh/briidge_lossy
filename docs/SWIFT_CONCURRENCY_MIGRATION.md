@@ -25,6 +25,59 @@ copied by hand:
 rg -n '@unchecked Sendable' swift --glob '*.swift'
 ```
 
+## Apple product strict-concurrency findings
+
+The SwiftPM graph is not the full Apple product compile surface. The macOS
+packaging build compiles the HostRunner, macOS application, shared Apple
+transports, and the shared iOS tunnel-control source. Its initial complete
+checking run produced 410 compiler warning records across 14 source files. The
+first migration slice isolated the macOS AppKit entry point; the verified
+current baseline is 409 warning records across 13 source files. The same
+source can be compiled into more than one product, so this number is a
+compiler-output baseline rather than a count of distinct code locations.
+
+| Compile area | Warning records | Affected source files |
+| --- | ---: | --- |
+| macOS host | 114 | `ObstacleBridgeHostRunner.swift` (114) |
+| Shared Apple transport, proxy, Admin, helper, and telemetry owners | 283 | `ObstacleBridgeTcpOverlayTransportOwner.swift` (50), `ObstacleBridgeWebSocketOverlayTransportOwner.swift` (42), `ObstacleBridgeProxyServer.swift` (40), `ObstacleBridgeChannelMuxTCPTransportOwner.swift` (32), `ObstacleBridgeQuicOverlayTransportOwner.swift` (24), `ObstacleBridgeUdpOverlayTransportOwner.swift` (22), `ObstacleBridgeWebAdminServer.swift` (18), `ObstacleBridgeOverlayConnectionSupport.swift` (18), `ObstacleBridgeNativeProxyConnections.swift` (16), `ObstacleBridgeTunHelperXPCTransport.swift` (15), and `ObstacleBridgeTelemetryMTLSUploader.swift` (6) |
+| Shared iOS tunnel-control source compiled by the macOS bundle | 12 | `ObstacleBridgeTunnelControl.swift` |
+
+The macOS application entry point now isolates its AppKit and WebKit state with
+`@MainActor`, and its timer callback explicitly re-enters that actor before
+probing WebAdmin. Its control-request completion is an
+`@MainActor @Sendable` closure so URLSession can transfer it back to the UI
+owner without sharing non-Sendable state. The full macOS package build verifies
+that `ObstacleBridgeMacAppMain.swift` emits no strict-concurrency diagnostics.
+
+The findings fall into four migration groups:
+
+1. Dispatch, Network, URLSession, XPC, and Network Extension callbacks capture
+   non-Sendable owners, `self`, completion closures, or values such as
+   `[String: Any]`, service specifications, and `NETunnelProviderManager`.
+   Several of these diagnostics become errors in Swift 6 language mode.
+2. Long-lived Network transport and proxy classes are inferred Sendable through
+   imported callback protocols, while retaining mutable state or non-Sendable
+   runtime and callback properties. The TCP, UDP, QUIC, ChannelMux, WebSocket,
+   proxy, and telemetry owners require explicit actor or serial-executor
+   ownership before they can satisfy that contract.
+3. Shared mutable statics are not isolated: the helper XPC reachability cache,
+   HostRunner reference, Admin-Web proxy reference, and active tunnel manager
+   are reported as non-concurrency-safe global state.
+4. Callback implementations also capture mutable local variables such as
+   `self`, connections, proxy references, forwarded bytes, and tunnel-control
+   response payloads. Those values must be represented by immutable snapshots
+   or retained inside the owning actor/serial boundary rather than captured by
+   concurrently executing closures.
+
+The remediation order is: first isolate global and callback-owner state, then
+replace cross-boundary dictionaries and closures with Sendable value snapshots
+or actor operations, then make each completion route re-enter its owner. Do
+not address this baseline by adding `@unchecked Sendable`, locks, semaphores,
+or warning suppression; those mechanisms would hide the ownership defects that
+complete checking identifies. `@preconcurrency` is only appropriate at a
+documented imported-framework boundary after the repository-owned callback
+ownership is otherwise sound.
+
 ## Current ownership model
 
 ChannelMux sessions, egress scheduling, packet reassembly, TUN binding state,
