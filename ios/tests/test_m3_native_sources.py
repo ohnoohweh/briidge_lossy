@@ -1929,3 +1929,13 @@ def test_overlay_connection_drivers_keep_callbacks_on_owner_queue() -> None:
     assert "final class ObstacleBridgeUDPClientConnectionDriver: @unchecked Sendable" in source
     assert "guard let driver = self else { return }" in source
     assert "driver.queue.async" in source
+
+
+def test_native_proxy_connections_keep_callbacks_on_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeNativeProxyConnections.swift").read_text(encoding="utf-8")
+
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue") == 2
+    assert "final class ObstacleBridgeTCPProxyConnection: @unchecked Sendable" in source
+    assert "final class ObstacleBridgeUDPProxyConnection: @unchecked Sendable" in source
+    assert "localConnection.start(queue: queue)" in source
+    assert "remoteConnection.start(queue: queue)" in source

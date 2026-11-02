@@ -31,6 +31,12 @@ AUDITED_SYNCHRONOUS_OWNERS = (
         "ObstacleBridgeUDPClientConnectionDriver: @unchecked Sendable",
         "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_overlay_connection_drivers_keep_callbacks_on_owner_queue",
     ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeProxyConnections.swift",
+        "ObstacleBridgeTCPProxyConnection: @unchecked Sendable",
+        "ObstacleBridgeUDPProxyConnection: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue",
+    ),
 )
 
 def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:
