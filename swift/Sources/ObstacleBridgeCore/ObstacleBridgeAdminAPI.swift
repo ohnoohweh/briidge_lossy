@@ -3,11 +3,20 @@ import Foundation
 /// Portable admission for live Admin topics. Resource owners supply already
 /// redacted snapshots; Core decides supported names and stable envelopes.
 public enum ObstacleBridgeAdminLiveTopicPort {
-    public static func payload(topic: String, status: [String: Any], peers: [[String: Any]], connections: [String: Any] = [:]) -> Any? {
+    /// Select one live payload without evaluating snapshots for unrelated
+    /// topics.  Snapshot providers may advance rate windows, so this is a
+    /// correctness requirement as well as an efficiency boundary shared by
+    /// Linux, macOS, and iOS hosts.
+    public static func payload(
+        topic: String,
+        status: @autoclosure () -> [String: Any],
+        peers: @autoclosure () -> [[String: Any]],
+        connections: @autoclosure () -> [String: Any] = [:]
+    ) -> Any? {
         switch topic {
-        case "status": return ObstacleBridgeAdminSnapshotSupport.liveStatusEnvelope(status)
-        case "peers": return ["peers": ObstacleBridgeAdminSnapshotSupport.peersSnapshotForAPI(peers)]
-        case "connections": return connections
+        case "status": return ObstacleBridgeAdminSnapshotSupport.liveStatusEnvelope(status())
+        case "peers": return ["peers": ObstacleBridgeAdminSnapshotSupport.peersSnapshotForAPI(peers())]
+        case "connections": return connections()
         default: return nil
         }
     }

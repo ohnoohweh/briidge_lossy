@@ -118,7 +118,10 @@ public struct ObstacleBridgeOverlayCoordinatorTransition: Equatable, Sendable {
 /// Single owner for portable overlay epoch, readiness, retry, and receive
 /// admission decisions. It is synchronous by design: serialization, timers,
 /// and I/O remain platform-adapter mechanics.
-public final class ObstacleBridgeOverlayCoordinator: @unchecked Sendable {
+/// Mutable lifecycle policy state belongs to one overlay adapter runtime. It
+/// emits immutable transitions and intentionally cannot be transferred apart
+/// from that owner.
+public final class ObstacleBridgeOverlayCoordinator {
     private let policy: ObstacleBridgeOverlayReconnectPolicy
     private let livenessPolicy: ObstacleBridgeOverlayLivenessPolicy
     private var candidateCount: Int

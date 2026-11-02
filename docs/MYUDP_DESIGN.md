@@ -283,7 +283,11 @@ One recovery rule is especially important under loss:
 
 That rule exists because `CONTROL` frames are lossy too. A sender must not assume that a previously missing counter is repaired merely because one later feedback sample did not mention it.
 
-The missing list is also intentionally bounded by `CONTROL_MAX_MISSED`.
+The missing list is also intentionally bounded by `CONTROL_MAX_MISSED`. A
+received counter farther ahead than that recoverable window is ignored without
+adding pending or missing state. This keeps receive-side memory and work bounded
+by the same limit as the CONTROL wire format, including for malformed or hostile
+peer input.
 When feedback reaches that cap, omission from the list is even less trustworthy as evidence of repair, because the receiver may be truncating loss feedback rather than signaling successful delivery.
 
 ## RTT measurement
@@ -519,7 +523,7 @@ The most important unit-level transport invariants are:
 - once a counter has been reported missing, later omission from feedback must not silently clear the resend obligation
 - a peer-reported missing counter should continue to be retransmitted on an RTT cadence until cumulative ACK state confirms it
 - acknowledged stream chunks should produce a transmit-delay sample from first-send time minus half the current RTT
-- the averaged transmit-delay metric should become observable through the runtime status/dashboard path
+- the averaged transmit-delay metric should become observable through the runtime status and WebAdmin path
 - tests should cover operation near the in-flight window limit so head-of-line recovery is validated under pressure, not only in tiny toy sequences
 - a batch must deliver multiple chunk records as one UDP datagram without changing per-counter ACK or loss behavior
 - a serializer record must decode correctly when split across arbitrary chunk and datagram boundaries, including a split at every byte of its length prefix

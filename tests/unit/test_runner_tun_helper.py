@@ -58,7 +58,6 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
         return build_runtime_args_from_config(
             {
                 "admin_web": {"admin_web": False},
-                "stats_board": {"status": False},
                 "tun_execution": {
                     "mode": "helper",
                     "helper_backend": "linux-python",
@@ -72,7 +71,6 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
         return build_runtime_args_from_config(
             {
                 "admin_web": {"admin_web": False},
-                "stats_board": {"status": False},
                 "tun_execution": {
                     "mode": "inline",
                 },

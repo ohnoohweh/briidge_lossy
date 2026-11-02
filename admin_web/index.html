@@ -85,10 +85,10 @@
           <button class="nav-tab" data-tab="home" type="button">Home</button>
           <button class="nav-tab active" data-tab="status" type="button">Peers</button>
           <button class="nav-tab" data-tab="connections" type="button">UDP / TCP</button>
-          <button class="nav-tab" data-tab="proxy" type="button">Proxy</button>
-          <button class="nav-tab" data-tab="telemetry" type="button">Telemetry</button>
-          <button class="nav-tab" data-tab="tun-routing" type="button">TUN / Routing</button>
-          <button class="nav-tab" data-tab="secure-link" type="button">Secure-Link</button>
+          <button class="nav-tab hidden" data-tab="proxy" type="button">Proxy</button>
+          <button class="nav-tab hidden" data-tab="telemetry" type="button">Telemetry</button>
+          <button class="nav-tab hidden" data-tab="tun-routing" type="button">TUN / Routing</button>
+          <button class="nav-tab hidden" data-tab="secure-link" type="button">Secure-Link</button>
           <button class="nav-tab" data-tab="configuration" type="button">Configuration</button>
           <button class="nav-tab" data-tab="logs" type="button">Debug Logs</button>
           <button class="nav-tab" data-tab="runtime-analysis" type="button">Runtime Analysis</button>
@@ -257,7 +257,7 @@
           </section>
         </section>
 
-        <section id="tab-proxy" class="tab-panel">
+        <section id="tab-proxy" class="tab-panel hidden">
           <section class="section-block card">
             <div class="section-header">
               <div>
@@ -265,82 +265,49 @@
                 <p>Explicit HTTP/CONNECT and SOCKS5 proxy listener state.</p>
               </div>
             </div>
-            <div class="proxy-summary-grid">
-              <div class="proxy-summary-row proxy-summary-row-status">
-                <div class="proxy-stat-card">
-                  <span>Configured</span>
-                  <strong id="proxyConfigured">n/a</strong>
-                </div>
-                <div class="proxy-stat-card">
-                  <span>Runtime</span>
-                  <strong id="proxyRuntime">n/a</strong>
-                </div>
-              </div>
-              <div class="proxy-summary-row proxy-summary-row-endpoints">
-                <div class="proxy-stat-card">
-                  <span>Bind</span>
-                  <strong id="proxyBind">n/a</strong>
-                </div>
-                <div class="proxy-stat-card proxy-protocol-card">
-                  <span>Protocol sockets</span>
-                  <div id="proxyProtocolSockets" class="proxy-mini-grid proxy-protocol-grid">
-                    <div>
-                      <span>HTTP / CONNECT</span>
-                      <strong class="mono">n/a</strong>
-                    </div>
-                    <div>
-                      <span>SOCKS5</span>
-                      <strong class="mono">n/a</strong>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div class="proxy-summary-row proxy-summary-row-counters">
-                <div class="proxy-stat-card">
-                  <span>Auth</span>
-                  <strong id="proxyAuth">n/a</strong>
-                </div>
-                <div class="proxy-stat-card">
-                  <span>Active</span>
-                  <strong id="proxyActiveConnections">0</strong>
-                </div>
-                <div class="proxy-stat-card">
-                  <span>Accepted</span>
-                  <strong id="proxyAcceptedConnections">0</strong>
-                </div>
-                <div class="proxy-stat-card">
-                  <span>Failed</span>
-                  <strong id="proxyFailedConnections">0</strong>
-                </div>
-              </div>
-              <div class="proxy-summary-row proxy-summary-row-error">
-                <div class="proxy-stat-card proxy-error-card">
-                  <span>Last Error</span>
-                  <strong id="proxyLastError">n/a</strong>
-                </div>
-              </div>
-              <div class="proxy-summary-row proxy-summary-row-throughput">
-                <div class="proxy-stat-card proxy-throughput-card">
-                  <span>Throughput</span>
-                  <div class="proxy-rate-pair">
-                    <div class="proxy-rate-box">
-                      <span>RX/s</span>
-                      <strong id="proxyRxRate">0 B/s</strong>
-                      <div class="proxy-rate-track">
-                        <div id="proxyRxRateFill" class="proxy-rate-fill proxy-rate-fill-rx"></div>
-                      </div>
-                    </div>
-                    <div class="proxy-rate-box">
-                      <span>TX/s</span>
-                      <strong id="proxyTxRate">0 B/s</strong>
-                      <div class="proxy-rate-track">
-                        <div id="proxyTxRateFill" class="proxy-rate-fill proxy-rate-fill-tx"></div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+            <div class="kv-list">
+              <div class="kv-row"><span>Configured</span><strong id="proxyConfigured">n/a</strong></div>
+              <div class="kv-row"><span>Runtime</span><strong id="proxyRuntime">n/a</strong></div>
+              <div class="kv-row"><span>Bind</span><strong id="proxyBind" class="mono">n/a</strong></div>
+              <div class="kv-row"><span>HTTP / CONNECT socket</span><strong id="proxyHttpSocket" class="mono">n/a</strong></div>
+              <div class="kv-row"><span>SOCKS5 socket</span><strong id="proxySocks5Socket" class="mono">n/a</strong></div>
+              <div class="kv-row"><span>Auth</span><strong id="proxyAuth">n/a</strong></div>
+              <div class="kv-row"><span>Active</span><strong id="proxyActiveConnections">0</strong></div>
+              <div class="kv-row"><span>Accepted</span><strong id="proxyAcceptedConnections">0</strong></div>
+              <div class="kv-row"><span>Failed</span><strong id="proxyFailedConnections">0</strong></div>
+              <div class="kv-row"><span>RX/s</span><strong id="proxyRxRate" class="mono">0 B/s</strong></div>
+              <div class="kv-row"><span>TX/s</span><strong id="proxyTxRate" class="mono">0 B/s</strong></div>
+              <div class="kv-row"><span>Last Error</span><strong id="proxyLastError" class="mono">n/a</strong></div>
             </div>
+          </section>
+
+          <section class="section-block card">
+            <details class="technical-details">
+              <summary>Technical details</summary>
+              <section class="technical-details-group">
+                <div class="section-header">
+                  <div>
+                    <h2>Proxy Worker</h2>
+                    <p>Execution ownership and lifecycle for the configured proxy provider.</p>
+                  </div>
+                </div>
+                <div class="kv-list">
+                  <div class="kv-row"><span>Mode</span><strong id="proxyWorkerMode">off</strong></div>
+                  <div class="kv-row"><span>Process</span><strong id="proxyWorkerProcess">in-process</strong></div>
+                  <div class="kv-row"><span>Detached</span><strong id="proxyWorkerDetached">n/a</strong></div>
+                  <div class="kv-row"><span>Implementation</span><strong id="proxyWorkerImplementation">in-process</strong></div>
+                  <div class="kv-row"><span>Lifecycle State</span><strong id="proxyWorkerState">n/a</strong></div>
+                  <div class="kv-row"><span>Server Started</span><strong id="proxyWorkerServerStarted">no</strong></div>
+                  <div class="kv-row"><span>Control Socket</span><strong id="proxyWorkerControlSocket" class="mono">n/a</strong></div>
+                  <div class="kv-row"><span>Control Connected</span><strong id="proxyWorkerControlConnected">n/a</strong></div>
+                  <div class="kv-row"><span>Process ID</span><strong id="proxyWorkerPid" class="mono">n/a</strong></div>
+                  <div class="kv-row"><span>Generation</span><strong id="proxyWorkerGeneration">0</strong></div>
+                  <div class="kv-row"><span>Restarts</span><strong id="proxyWorkerRestarts">0</strong></div>
+                  <div class="kv-row"><span>Failed Starts</span><strong id="proxyWorkerFailedStarts">0</strong></div>
+                  <div class="kv-row"><span>Capabilities</span><strong id="proxyWorkerCapabilities" class="mono">n/a</strong></div>
+                </div>
+              </section>
+            </details>
           </section>
 
           <section class="section-block">
@@ -356,8 +323,8 @@
           </section>
         </section>
 
-        <section id="tab-telemetry" class="tab-panel">
-          <section class="section-block card">
+        <section id="tab-telemetry" class="tab-panel hidden">
+          <section id="telemetryClientSection" class="section-block card hidden">
             <div class="section-header">
               <div>
                 <h2>Telemetry client</h2>
@@ -377,7 +344,7 @@
               <div class="kv-row"><span>Last error</span><strong id="telemetryClientError" class="mono">n/a</strong></div>
             </div>
           </section>
-          <section class="section-block card">
+          <section id="telemetryCollectorSection" class="section-block card hidden">
             <div class="section-header">
               <div>
                 <h2>Telemetry collector</h2>
@@ -395,7 +362,7 @@
           </section>
         </section>
 
-        <section id="tab-tun-routing" class="tab-panel">
+        <section id="tab-tun-routing" class="tab-panel hidden">
           <section class="section-block card">
             <div class="section-header">
               <div>
@@ -419,36 +386,6 @@
               <div class="kv-row"><span>Packet-flow PCAP diagnostic capture</span><strong id="tunRoutingPacketFlowCapture">n/a</strong></div>
               <div class="kv-row"><span>Packet-flow PCAP capture drops / limit</span><strong id="tunRoutingPacketFlowCaptureHealth">n/a</strong></div>
             </div>
-          </section>
-
-          <section class="section-block card">
-            <div class="section-header">
-              <div>
-                <h2>ICMP Path Stage Counters</h2>
-                <p>End-to-end TUN ICMP pipeline stages counted since runtime start</p>
-              </div>
-            </div>
-            <pre id="tunRoutingIcmpStageCounters" class="meta-box">loading...</pre>
-          </section>
-
-          <section class="section-block card">
-            <div class="section-header">
-              <div>
-                <h2>Probe Boundary Counters</h2>
-                <p>Probe scheduling, injection mode, helper I/O, timeout, and reply-match counters</p>
-              </div>
-            </div>
-            <pre id="tunRoutingProbeBoundaryCounters" class="meta-box">loading...</pre>
-          </section>
-
-          <section class="section-block card">
-            <div class="section-header">
-              <div>
-                <h2>Local Reply Stage Counters</h2>
-                <p>Direct TUN reply-path decisions counted since runtime start</p>
-              </div>
-            </div>
-            <pre id="tunRoutingLocalReplyStageCounters" class="meta-box">loading...</pre>
           </section>
 
           <section class="section-block card">
@@ -489,37 +426,6 @@
                   </tbody>
                 </table>
               </div>
-            </div>
-          </section>
-
-          <section class="section-block card">
-            <div class="section-header">
-              <div>
-                <h2>TUN Helper</h2>
-                <p>Helper-mode execution state for the local TUN backend</p>
-              </div>
-              <div class="quick-actions">
-                <button id="tunHelperRepairBtn" class="btn btn-secondary hidden" type="button">Repair Stale Helper State</button>
-              </div>
-            </div>
-            <div class="kv-list">
-              <div class="kv-row"><span>Included Routes Active</span><strong id="tunRoutingEnabledState">no</strong></div>
-              <div class="kv-row"><span>Startup State</span><strong id="tunRoutingStartupState">enabled</strong></div>
-              <div class="kv-row"><span>Mode</span><strong id="tunHelperMode">inline</strong></div>
-              <div class="kv-row"><span>Lifecycle Phase</span><strong id="tunHelperLifecyclePhase">disabled</strong></div>
-              <div class="kv-row"><span>Backend</span><strong id="tunHelperBackend">n/a</strong></div>
-              <div class="kv-row"><span>Connected</span><strong id="tunHelperConnected">no</strong></div>
-              <div class="kv-row"><span>Server Started</span><strong id="tunHelperServerStarted">no</strong></div>
-              <div class="kv-row"><span>Apply Network</span><strong id="tunHelperApplyNetwork">no</strong></div>
-              <div class="kv-row"><span>Helper User</span><strong id="tunHelperUser" class="helper-user-pill helper-user-unknown">n/a</strong></div>
-              <div class="kv-row"><span>Socket</span><strong id="tunHelperSocket" class="mono">n/a</strong></div>
-              <div class="kv-row"><span>Runtime Interface</span><strong id="tunHelperIfname" class="mono">n/a</strong></div>
-              <div class="kv-row"><span>Runtime MTU</span><strong id="tunHelperMtu">0</strong></div>
-              <div class="kv-row"><span>Packets From Runtime</span><strong id="tunHelperPacketsFromRuntime">0</strong></div>
-              <div class="kv-row"><span>Packets To Runtime</span><strong id="tunHelperPacketsToRuntime">0</strong></div>
-              <div class="kv-row"><span>Last Error</span><strong id="tunHelperLastError" class="mono">n/a</strong></div>
-              <div class="kv-row"><span>Recovery</span><strong id="tunHelperRecovery">none</strong></div>
-              <div class="kv-row"><span>Last Repair</span><strong id="tunHelperLastRepair">none</strong></div>
             </div>
           </section>
 
@@ -628,9 +534,61 @@
               </div>
             </div>
           </section>
+
+          <section class="section-block card">
+            <details class="technical-details">
+              <summary>Technical details</summary>
+              <p>Low-level helper state plus TUN probe and ICMP pipeline counters for troubleshooting.</p>
+              <section class="technical-details-group">
+                <div class="section-header">
+                  <div>
+                    <h2>TUN Helper</h2>
+                    <p>Helper-mode execution state for the local TUN backend</p>
+                  </div>
+                  <div class="quick-actions">
+                    <button id="tunHelperRepairBtn" class="btn btn-secondary hidden" type="button">Repair Stale Helper State</button>
+                  </div>
+                </div>
+                <div class="kv-list">
+                  <div class="kv-row"><span>Included Routes Active</span><strong id="tunRoutingEnabledState">no</strong></div>
+                  <div class="kv-row"><span>Startup State</span><strong id="tunRoutingStartupState">enabled</strong></div>
+                  <div class="kv-row"><span>Mode</span><strong id="tunHelperMode">inline</strong></div>
+                  <div class="kv-row"><span>Lifecycle Phase</span><strong id="tunHelperLifecyclePhase">disabled</strong></div>
+                  <div class="kv-row"><span>Backend</span><strong id="tunHelperBackend">n/a</strong></div>
+                  <div class="kv-row"><span>Connected</span><strong id="tunHelperConnected">no</strong></div>
+                  <div class="kv-row"><span>Server Started</span><strong id="tunHelperServerStarted">no</strong></div>
+                  <div class="kv-row"><span>Apply Network</span><strong id="tunHelperApplyNetwork">no</strong></div>
+                  <div class="kv-row"><span>Helper User</span><strong id="tunHelperUser" class="helper-user-pill helper-user-unknown">n/a</strong></div>
+                  <div class="kv-row"><span>Socket</span><strong id="tunHelperSocket" class="mono">n/a</strong></div>
+                  <div class="kv-row"><span>Runtime Interface</span><strong id="tunHelperIfname" class="mono">n/a</strong></div>
+                  <div class="kv-row"><span>Runtime MTU</span><strong id="tunHelperMtu">0</strong></div>
+                  <div class="kv-row"><span>Packets From Runtime</span><strong id="tunHelperPacketsFromRuntime">0</strong></div>
+                  <div class="kv-row"><span>Packets To Runtime</span><strong id="tunHelperPacketsToRuntime">0</strong></div>
+                  <div class="kv-row"><span>Last Error</span><strong id="tunHelperLastError" class="mono">n/a</strong></div>
+                  <div class="kv-row"><span>Recovery</span><strong id="tunHelperRecovery">none</strong></div>
+                  <div class="kv-row"><span>Last Repair</span><strong id="tunHelperLastRepair">none</strong></div>
+                </div>
+              </section>
+              <section class="technical-details-group">
+                <h2>ICMP Path Stage Counters</h2>
+                <p>End-to-end TUN ICMP pipeline stages counted since runtime start</p>
+                <pre id="tunRoutingIcmpStageCounters" class="meta-box">loading...</pre>
+              </section>
+              <section class="technical-details-group">
+                <h2>Probe Boundary Counters</h2>
+                <p>Probe scheduling, injection mode, helper I/O, timeout, and reply-match counters</p>
+                <pre id="tunRoutingProbeBoundaryCounters" class="meta-box">loading...</pre>
+              </section>
+              <section class="technical-details-group">
+                <h2>Local Reply Stage Counters</h2>
+                <p>Direct TUN reply-path decisions counted since runtime start</p>
+                <pre id="tunRoutingLocalReplyStageCounters" class="meta-box">loading...</pre>
+              </section>
+            </details>
+          </section>
         </section>
 
-        <section id="tab-secure-link" class="tab-panel">
+        <section id="tab-secure-link" class="tab-panel hidden">
           <section class="section-block">
             <div class="section-header">
               <div>

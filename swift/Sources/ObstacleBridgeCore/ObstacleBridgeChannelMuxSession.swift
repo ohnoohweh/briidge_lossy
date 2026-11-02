@@ -70,7 +70,10 @@ public enum ObstacleBridgeChannelMuxSessionEffect: Equatable, Sendable {
     case closeLocal(channelID: UInt16)
 }
 
-public final class ObstacleBridgeChannelMuxSession: @unchecked Sendable {
+/// Session mutation is confined to one ChannelMux transport runtime executor.
+/// The runtime emits `Sendable` effects; this mutable owner must not cross an
+/// executor boundary itself.
+public final class ObstacleBridgeChannelMuxSession {
     private struct Channel: Sendable {
         let service: ObstacleBridgeServiceSpec
         let protocolType: ObstacleBridgeChannelMuxSessionProtocol

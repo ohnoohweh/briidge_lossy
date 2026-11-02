@@ -21,6 +21,8 @@ def test_native_log_supervisor_query_uses_readiness_callback_not_polling():
 
     assert "requestSnapshotRefresh(limit: limit)" in query_surface
     assert "snapshotRefreshPending" in query_surface
+    assert "snapshotRefreshRequestID" in query_surface
+    assert "fetchAsync(limit: limit, isSnapshotRefresh: true) { _ in }" in query_surface
     assert "DispatchSource.makeReadSource" in query_surface
     assert "pendingQueries" in query_surface
     assert "let count = recv(fd, &bytes, bytes.count, Int32(MSG_DONTWAIT))" in source

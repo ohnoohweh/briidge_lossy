@@ -1568,12 +1568,82 @@ function proxyConfigSnapshot() {
     : (Array.isArray(root.proxy_provider_protocols) ? root.proxy_provider_protocols : []);
   return {
     enabled: Boolean(cfg.enabled ?? root.proxy_provider_enabled),
+    worker: String(cfg.worker ?? root.proxy_provider_worker ?? 'off').trim() || 'off',
     bind: cfg.bind ?? root.proxy_provider_bind ?? '127.0.0.1',
     http_port: cfg.http_port ?? root.proxy_provider_http_port ?? 13881,
     socks5_port: cfg.socks5_port ?? root.proxy_provider_socks5_port ?? 13882,
     protocols,
     auth,
   };
+}
+
+function syncProxyTabVisibility() {
+  const enabled = proxyConfigSnapshot().enabled;
+  const proxyPanel = document.getElementById('tab-proxy');
+  const proxyNav = document.querySelector('.nav-tab[data-tab="proxy"]');
+  if (proxyPanel) proxyPanel.classList.toggle('hidden', !enabled);
+  if (proxyNav) proxyNav.classList.toggle('hidden', !enabled);
+  if (!enabled && isTabActive('proxy')) setActiveTab('status');
+}
+
+function telemetryConfigRoles() {
+  const root = configState.config || {};
+  const client = root.telemetry_client && typeof root.telemetry_client === 'object' ? root.telemetry_client : root;
+  const collector = root.telemetry_server && typeof root.telemetry_server === 'object' ? root.telemetry_server : root;
+  return {
+    clientEnabled: Boolean(client.telemetry_enabled ?? root.telemetry_enabled),
+    collectorEnabled: Boolean(collector.telemetry_collector_enabled ?? root.telemetry_collector_enabled),
+  };
+}
+
+function telemetryConfigEnabled() {
+  const roles = telemetryConfigRoles();
+  return roles.clientEnabled || roles.collectorEnabled;
+}
+
+function syncTelemetryTabVisibility() {
+  const roles = telemetryConfigRoles();
+  const enabled = roles.clientEnabled || roles.collectorEnabled;
+  const telemetryPanel = document.getElementById('tab-telemetry');
+  const telemetryNav = document.querySelector('.nav-tab[data-tab="telemetry"]');
+  const clientSection = document.getElementById('telemetryClientSection');
+  const collectorSection = document.getElementById('telemetryCollectorSection');
+  if (telemetryPanel) telemetryPanel.classList.toggle('hidden', !enabled);
+  if (telemetryNav) telemetryNav.classList.toggle('hidden', !enabled);
+  if (clientSection) clientSection.classList.toggle('hidden', !roles.clientEnabled);
+  if (collectorSection) collectorSection.classList.toggle('hidden', !roles.collectorEnabled);
+  if (!enabled && isTabActive('telemetry')) setActiveTab('status');
+}
+
+function tunRoutingConfigEnabled() {
+  const root = configState.config || {};
+  const cfg = root.TUN_routing && typeof root.TUN_routing === 'object'
+    ? root.TUN_routing
+    : root;
+  return Boolean(cfg.enabled_on_startup ?? root.enabled_on_startup);
+}
+
+function syncTunRoutingTabVisibility() {
+  const enabled = tunRoutingConfigEnabled();
+  const panel = document.getElementById('tab-tun-routing');
+  const nav = document.querySelector('.nav-tab[data-tab="tun-routing"]');
+  if (panel) panel.classList.toggle('hidden', !enabled);
+  if (nav) nav.classList.toggle('hidden', !enabled);
+  if (!enabled && isTabActive('tun-routing')) setActiveTab('status');
+}
+
+function secureLinkCertificateModeEnabled() {
+  const mode = String(configState.config?.secure_link_mode || '').trim().toLowerCase();
+  return mode === 'cert' || mode === 'certificate';
+}
+
+function syncSecureLinkTabVisibility() {
+  const enabled = secureLinkCertificateModeEnabled();
+  const panel = document.getElementById('tab-secure-link');
+  const nav = document.querySelector('.nav-tab[data-tab="secure-link"]');
+  if (panel) panel.classList.toggle('hidden', !enabled);
+  if (nav) nav.classList.toggle('hidden', !enabled);
+  if (!enabled && isTabActive('secure-link')) setActiveTab('status');
 }
 
 function proxyListenerRows(statusDoc) {
@@ -1601,56 +1671,9 @@ function proxyListenerRate(listenerName, snapshot) {
   return { rxRate, txRate };
 }
 
-function renderProxyProtocolSockets(cfg) {
+function proxyProtocolSocket(cfg, protocol, port) {
   const protocols = Array.isArray(cfg?.protocols) ? cfg.protocols : [];
-  const hasHttp = protocols.includes('http-connect');
-  const hasSocks5 = protocols.includes('socks5-connect');
-  return `
-    <div>
-      <span>HTTP / CONNECT</span>
-      <strong class="mono">${escapeHtml(hasHttp ? fmtInteger(cfg.http_port) : 'disabled')}</strong>
-    </div>
-    <div>
-      <span>SOCKS5</span>
-      <strong class="mono">${escapeHtml(hasSocks5 ? fmtInteger(cfg.socks5_port) : 'disabled')}</strong>
-    </div>
-  `;
-}
-
-function proxyRatePercents(rxRate, txRate) {
-  const rx = Math.max(0, Number(rxRate || 0));
-  const tx = Math.max(0, Number(txRate || 0));
-  const scale = Math.max(rx, tx, 1);
-  return {
-    rx,
-    tx,
-    rxPct: Math.max(0, Math.min(100, (rx / scale) * 100)),
-    txPct: Math.max(0, Math.min(100, (tx / scale) * 100)),
-  };
-}
-
-function renderProxyTrafficPair(rxBytes, txBytes, rxRate, txRate) {
-  const rates = proxyRatePercents(rxRate, txRate);
-  return `
-    <div class="proxy-rate-pair proxy-rate-pair-stacked">
-      <div class="proxy-rate-box">
-        <span>RX</span>
-        <strong class="mono">${escapeHtml(fmtBytes(rxBytes))}</strong>
-        <em class="mono">${escapeHtml(fmtBytesPerSecond(rates.rx))}</em>
-        <div class="proxy-rate-track">
-          <div class="proxy-rate-fill proxy-rate-fill-rx" style="width: ${rates.rxPct.toFixed(1)}%"></div>
-        </div>
-      </div>
-      <div class="proxy-rate-box">
-        <span>TX</span>
-        <strong class="mono">${escapeHtml(fmtBytes(txBytes))}</strong>
-        <em class="mono">${escapeHtml(fmtBytesPerSecond(rates.tx))}</em>
-        <div class="proxy-rate-track">
-          <div class="proxy-rate-fill proxy-rate-fill-tx" style="width: ${rates.txPct.toFixed(1)}%"></div>
-        </div>
-      </div>
-    </div>
-  `;
+  return protocols.includes(protocol) ? fmtInteger(port) : 'disabled';
 }
 
 function renderProxyListeners(rows) {
@@ -1688,47 +1711,19 @@ function renderProxyListeners(rows) {
           </div>
           <span class="proxy-listener-endpoint mono">${escapeHtml(fmtEndpoint({ host: snapshot.bind_host, port: snapshot.port }))}</span>
         </div>
-        <div class="proxy-listener-grid-inner">
-          <div class="proxy-stat-card">
-            <span>Protocols</span>
-            <strong>${escapeHtml([
+        <div class="kv-list">
+          <div class="kv-row"><span>Protocols</span><strong>${escapeHtml([
               snapshot.http_enabled ? 'HTTP' : '',
               snapshot.socks5_enabled ? 'SOCKS5' : '',
-            ].filter(Boolean).join(' + ') || 'disabled')}</strong>
-          </div>
-          <div class="proxy-stat-card">
-            <span>Auth</span>
-            <strong>${escapeHtml(fmtBool(snapshot.auth_required))}</strong>
-          </div>
-          <div class="proxy-stat-card proxy-sockets-card">
-            <span>Sockets</span>
-            <div class="proxy-mini-grid">
-              <div>
-                <span>Active</span>
-                <strong class="mono">${escapeHtml(fmtInteger(active))}</strong>
-              </div>
-              <div>
-                <span>Accepted</span>
-                <strong class="mono">${escapeHtml(fmtInteger(accepted))}</strong>
-              </div>
-              <div>
-                <span>Completed</span>
-                <strong class="mono">${escapeHtml(fmtInteger(completed))}</strong>
-              </div>
-              <div>
-                <span>Failed</span>
-                <strong class="mono">${escapeHtml(fmtInteger(failed))}</strong>
-              </div>
-            </div>
-          </div>
-          <div class="proxy-stat-card proxy-listener-traffic-card">
-            <span>Traffic</span>
-            ${renderProxyTrafficPair(rx, tx, rates.rxRate, rates.txRate)}
-          </div>
-          <div class="proxy-stat-card proxy-error-card">
-            <span>Last Error</span>
-            <strong class="mono">${escapeHtml(lastError || 'n/a')}</strong>
-          </div>
+            ].filter(Boolean).join(' + ') || 'disabled')}</strong></div>
+          <div class="kv-row"><span>Auth</span><strong>${escapeHtml(fmtBool(snapshot.auth_required))}</strong></div>
+          <div class="kv-row"><span>Active</span><strong class="mono">${escapeHtml(fmtInteger(active))}</strong></div>
+          <div class="kv-row"><span>Accepted</span><strong class="mono">${escapeHtml(fmtInteger(accepted))}</strong></div>
+          <div class="kv-row"><span>Completed</span><strong class="mono">${escapeHtml(fmtInteger(completed))}</strong></div>
+          <div class="kv-row"><span>Failed</span><strong class="mono">${escapeHtml(fmtInteger(failed))}</strong></div>
+          <div class="kv-row"><span>Traffic RX</span><strong class="mono">${escapeHtml(`${fmtBytes(rx)} · ${fmtBytesPerSecond(rates.rxRate)}`)}</strong></div>
+          <div class="kv-row"><span>Traffic TX</span><strong class="mono">${escapeHtml(`${fmtBytes(tx)} · ${fmtBytesPerSecond(rates.txRate)}`)}</strong></div>
+          <div class="kv-row"><span>Last Error</span><strong class="mono">${escapeHtml(lastError || 'n/a')}</strong></div>
         </div>
       </article>
     `;
@@ -1744,21 +1739,36 @@ function applyProxyDoc() {
   const totals = renderProxyListeners(rows);
   const authMode = String(cfg.auth?.mode || 'none').trim() || 'none';
   const authUser = String(cfg.auth?.username || '').trim();
+  const worker = provider.worker && typeof provider.worker === 'object' ? provider.worker : null;
+  const capabilities = worker?.capabilities && typeof worker.capabilities === 'object'
+    ? Object.entries(worker.capabilities).filter(([, enabled]) => Boolean(enabled)).map(([name]) => name).join(', ')
+    : '';
+  const usesChild = Boolean(worker);
   setText('proxyConfigured', cfg.enabled ? 'enabled' : 'disabled');
   setText('proxyRuntime', provider.enabled || rows.length ? 'active' : 'inactive');
   setText('proxyBind', fmtText(cfg.bind));
-  const protocolSockets = document.getElementById('proxyProtocolSockets');
-  if (protocolSockets) protocolSockets.innerHTML = renderProxyProtocolSockets(cfg);
+  setText('proxyHttpSocket', proxyProtocolSocket(cfg, 'http-connect', cfg.http_port));
+  setText('proxySocks5Socket', proxyProtocolSocket(cfg, 'socks5-connect', cfg.socks5_port));
   setText('proxyAuth', authMode === 'none' ? 'none' : `${authMode}${authUser ? `:${authUser}` : ''}`);
   setText('proxyActiveConnections', fmtInteger(totals.active));
   setText('proxyAcceptedConnections', fmtInteger(totals.accepted));
   setText('proxyFailedConnections', fmtInteger(totals.failed));
   setText('proxyRxRate', fmtBytesPerSecond(totals.rxRate));
   setText('proxyTxRate', fmtBytesPerSecond(totals.txRate));
-  const summaryRates = proxyRatePercents(totals.rxRate, totals.txRate);
-  setPercentWidth('proxyRxRateFill', summaryRates.rxPct);
-  setPercentWidth('proxyTxRateFill', summaryRates.txPct);
   setText('proxyLastError', totals.lastError || 'n/a');
+  setText('proxyWorkerMode', cfg.worker);
+  setText('proxyWorkerProcess', worker?.process_model === 'supervised_child' ? 'separate process (supervised)' : 'in-process');
+  setText('proxyWorkerDetached', usesChild ? (worker?.detached ? 'yes' : 'no (supervised)') : 'n/a');
+  setText('proxyWorkerImplementation', worker?.implementation || (cfg.worker === 'off' ? 'in-process' : 'starting'));
+  setText('proxyWorkerState', worker?.state || (cfg.worker === 'off' ? 'in-process' : 'unavailable'));
+  setText('proxyWorkerServerStarted', usesChild ? fmtBool(worker?.server_started) : fmtBool(provider.enabled || rows.length));
+  setText('proxyWorkerControlSocket', worker?.control_socket || 'n/a');
+  setText('proxyWorkerControlConnected', usesChild ? fmtBool(worker?.control_connected) : 'n/a');
+  setText('proxyWorkerPid', worker?.pid == null ? 'n/a' : fmtInteger(worker.pid));
+  setText('proxyWorkerGeneration', fmtInteger(worker?.generation ?? 0));
+  setText('proxyWorkerRestarts', fmtInteger(worker?.restarts ?? 0));
+  setText('proxyWorkerFailedStarts', fmtInteger(worker?.failed_starts ?? 0));
+  setText('proxyWorkerCapabilities', capabilities || 'n/a');
 }
 
 function applyTelemetryDoc(statusDoc) {
@@ -3513,6 +3523,10 @@ async function loadConfig() {
     };
     applyAdminInstanceName(configState.config.admin_web_name);
     renderConfigSections(configState.schema, configState.config);
+    syncProxyTabVisibility();
+    syncTelemetryTabVisibility();
+    syncTunRoutingTabVisibility();
+    syncSecureLinkTabVisibility();
     applyProxyDoc();
     if (uiState.onboarding.initialized) {
       if ((uiState.onboarding.ownServersDraft || []).length === 0) {

@@ -10,21 +10,39 @@ public struct ObstacleBridgeLinuxReconnectSnapshot: Equatable, Sendable {
 
 /// Core owns retry epochs, candidate rotation and timer invalidation. Linux
 /// executes only configured-runtime I/O and Dispatch timer effects.
-public final class ObstacleBridgeLinuxReconnectSupervisor: @unchecked Sendable {
-    public var onSnapshot: ((ObstacleBridgeLinuxReconnectSnapshot) -> Void)?
+public actor ObstacleBridgeLinuxReconnectSupervisor {
+    private var onSnapshot: (@Sendable (ObstacleBridgeLinuxReconnectSnapshot) -> Void)?
     private let runtime: ObstacleBridgeLinuxConfiguredRuntime
     private let coordinator: ObstacleBridgeOverlayCoordinator
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.reconnect")
+
+    /// Returns the runtime's immutable Admin projection without exposing the
+    /// non-Sendable configured-runtime owner beyond this actor boundary.
+    public func runtimeStatus() -> ObstacleBridgeLinuxRuntimeStatus { runtime.status() }
     private var timer: DispatchSourceTimer?
     private var stopped = true
     private var payload = Data(); private var baseSessionID: UInt64 = 0; private var baseNonce = Data()
-    private(set) public var snapshot = ObstacleBridgeLinuxReconnectSnapshot(state: "stopped", attempts: 0, nextRetryMilliseconds: nil, failureReason: nil)
+    public private(set) var snapshot = ObstacleBridgeLinuxReconnectSnapshot(state: "stopped", attempts: 0, nextRetryMilliseconds: nil, failureReason: nil)
 
     public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, policy: ObstacleBridgeLinuxReconnectPolicy = .init()) {
         self.runtime = runtime; self.coordinator = .init(candidateCount: runtime.configuration.peerCandidates.count, policy: policy)
     }
-    public func start(probe: Data, sessionID: UInt64, clientNonce: Data) { queue.async { [weak self] in guard let self else { return }; self.stopped = false; self.payload = probe; self.baseSessionID = sessionID; self.baseNonce = clientNonce; self.apply(self.coordinator.handle(.start)) } }
-    public func stop() { queue.async { [weak self] in guard let self else { return }; self.stopped = true; self.apply(self.coordinator.handle(.stop)) } }
+    public func setSnapshotHandler(_ handler: @escaping @Sendable (ObstacleBridgeLinuxReconnectSnapshot) -> Void) {
+        onSnapshot = handler
+    }
+
+    public func start(probe: Data, sessionID: UInt64, clientNonce: Data) {
+        stopped = false
+        payload = probe
+        baseSessionID = sessionID
+        baseNonce = clientNonce
+        apply(coordinator.handle(.start))
+    }
+
+    public func stop() {
+        stopped = true
+        apply(coordinator.handle(.stop))
+    }
 
     private func apply(_ transition: ObstacleBridgeOverlayCoordinatorTransition) {
         for effect in transition.effects { switch effect {
@@ -44,8 +62,21 @@ public final class ObstacleBridgeLinuxReconnectSupervisor: @unchecked Sendable {
         do { let session = try runtime.connect(sessionID: normalizedSessionID(baseSessionID &+ UInt64(attempt - 1)), clientNonce: nonce); _ = try session.send(payload); apply(coordinator.handle(.transportConnected(epoch: epoch))); apply(coordinator.handle(.authenticated(epoch: epoch))) }
         catch { apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription))) }
     }
-    private func scheduleRetry(token: UInt64, afterMilliseconds delay: Int) { cancelTimer(); let timer = DispatchSource.makeTimerSource(queue: queue); self.timer = timer; timer.schedule(deadline: .now() + .milliseconds(delay)); timer.setEventHandler { [weak self] in guard let self else { return }; self.cancelTimer(); self.apply(self.coordinator.handle(.retryTimerFired(token: token))) }; timer.resume() }
+    private func scheduleRetry(token: UInt64, afterMilliseconds delay: Int) {
+        cancelTimer()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        self.timer = timer
+        timer.schedule(deadline: .now() + .milliseconds(delay))
+        timer.setEventHandler { [weak self] in
+            Task { await self?.retryTimerFired(token: token) }
+        }
+        timer.resume()
+    }
+
+    private func retryTimerFired(token: UInt64) {
+        cancelTimer()
+        apply(coordinator.handle(.retryTimerFired(token: token)))
+    }
     private func normalizedSessionID(_ value: UInt64) -> UInt64 { value == 0 ? 1 : value }
     private func cancelTimer() { timer?.setEventHandler {}; timer?.cancel(); timer = nil }
-    deinit { timer?.cancel() }
 }

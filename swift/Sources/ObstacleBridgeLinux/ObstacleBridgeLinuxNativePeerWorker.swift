@@ -16,7 +16,7 @@ enum ObstacleBridgeLinuxNativePeerWorker {
     /// Post-bootstrap control ownership stays on one serial readiness queue.
     /// Partial common-OBIP frames remain in the shared decoder until the next
     /// descriptor callback; no long-lived control path waits for a frame.
-    private final class ControlOwner: @unchecked Sendable {
+    private final class ControlOwner {
         // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_linux_native_peer_worker_uses_readiness_decoder_after_bootstrap
         private let descriptor: Int32
         private let handle: FileHandle

@@ -6405,8 +6405,6 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         setattr(self, count_attr, count)
         setattr(self, last_attr, gap_ms)
         setattr(self, max_attr, max(float(getattr(self, max_attr, 0.0) or 0.0), gap_ms))
-        if gap_ms >= 20.0 or count <= 3 or (count % 256) == 0:
-            self.log.info("[MUX/YIELD] stage=%s count=%s gap_ms=%.3f", stage, count, gap_ms)
 
     def _dispatch_one_peer_app_payload(self) -> None:
         if self._peer_app_payload_dispatching:

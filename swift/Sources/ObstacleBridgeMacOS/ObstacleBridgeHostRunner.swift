@@ -209,6 +209,7 @@ final class ObstacleBridgeHostRunner {
     private var cachedPeersSnapshot: [[String: Any]] = []
     private var cachedMetaSnapshot: [String: Any] = [:]
     private var cachedTunRoutingSnapshot: [String: Any] = [:]
+    private var cachedRuntimeMetricsSnapshot: [String: Any] = [:]
     /// Admin requests and the periodic cache publisher can both build a peer
     /// snapshot. Keep rate-history mutation serialized across those queues.
     private let peerTrafficRateLock = NSLock()
@@ -1020,6 +1021,17 @@ final class ObstacleBridgeHostRunner {
         return withCurrentUptime(cached)
     }
 
+    private func runtimeMetricsSnapshot() -> [String: Any] {
+        let cached = adminSnapshotQueue.sync { cachedRuntimeMetricsSnapshot }
+        Task { [weak self] in
+            let snapshot = await ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()
+            self?.adminSnapshotQueue.async { [weak self] in
+                self?.cachedRuntimeMetricsSnapshot = snapshot
+            }
+        }
+        return cached.isEmpty ? ObstacleBridgeRuntimeMetrics.Reporter.emptySnapshotPayload() : cached
+    }
+
     private func cachedConnectionsOrBuild() -> [String: Any] {
         let cached = adminSnapshotQueue.sync { cachedConnectionsSnapshot }
         return cached.isEmpty ? connectionsSnapshotUncached() : cached
@@ -1593,7 +1605,7 @@ final class ObstacleBridgeHostRunner {
             "runtime_health_record_count": health.count,
             "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
             "runtime_health_recent_records": healthRecords,
-            "runtime_metrics": ObstacleBridgeRuntimeMetrics.shared.snapshotPayload(),
+            "runtime_metrics": runtimeMetricsSnapshot(),
             "bootstrap_state": bootstrapState,
             "admin_web_name": Self.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
             "build": buildSummary(),

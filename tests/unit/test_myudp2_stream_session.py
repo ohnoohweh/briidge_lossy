@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from obstacle_bridge.bridge import BaseFrameV2, MyUDP2BatchCodec, MyUDP2Session, Protocol, StreamChunk
+from obstacle_bridge.bridge_transport_udp import CONTROL_MAX_MISSED
 
 
 class _Transport:
@@ -71,6 +72,20 @@ def test_myudp2_session_delivers_only_contiguous_stream_bytes_after_reorder() ->
     advanced, completed = receiver.process_data(StreamChunk(1, wire[:3]))
     assert advanced is False
     assert completed == []
+
+
+def test_myudp2_session_out_of_window_counter_does_not_materialize_missing_state() -> None:
+    receiver = MyUDP2Session(proto=Protocol(BaseFrameV2))
+
+    advanced, completed = receiver.process_data(
+        StreamChunk(CONTROL_MAX_MISSED + 2, b"unrecoverable")
+    )
+
+    assert advanced is False
+    assert completed == []
+    assert receiver.expected == 1
+    assert receiver.missing == set()
+    assert receiver.pending == {}
 
 
 def test_myudp2_session_counter_rollover_keeps_stream_delivery_contiguous() -> None:

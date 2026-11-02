@@ -70,3 +70,33 @@ def test_swift_concurrency_guard_requires_usable_evidence(monkeypatch, tmp_path)
             "state += 1",
         ],
     }) == []
+
+
+def test_swift_concurrency_guard_rejects_new_unchecked_owner(monkeypatch, tmp_path) -> None:
+    guard = _load("check_swift_concurrency_guard")
+    source = tmp_path / "swift" / "Sources" / "ObstacleBridgeiOS" / "PacketTunnelProvider.swift"
+    source.parent.mkdir(parents=True)
+    source.write_text("final class Owner {}", encoding="utf-8")
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    errors = guard.validate({
+        "swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift": [
+            "final class Owner: @unchecked Sendable {}",
+        ],
+    })
+    assert len(errors) == 1
+    assert "forbidden" in errors[0]
+
+
+def test_swift_concurrency_guard_rejects_new_lock_in_legacy_owner(monkeypatch, tmp_path) -> None:
+    guard = _load("check_swift_concurrency_guard")
+    source = tmp_path / "swift" / "Sources" / "ObstacleBridgeiOS" / "PacketTunnelProvider.swift"
+    source.parent.mkdir(parents=True)
+    source.write_text("final class Owner: @unchecked Sendable {}", encoding="utf-8")
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    errors = guard.validate({
+        "swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift": [
+            "private let replacementLock = NSLock()",
+        ],
+    })
+    assert len(errors) == 1
+    assert "synchronous coordination" in errors[0]

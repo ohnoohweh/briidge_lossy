@@ -292,7 +292,6 @@ def test_module_entrypoint_supervises_peer_worker(tmp_path, admin_worker):
             "secure_link": secure, "TUN_routing": {"enabled_on_startup": False},
             "admin_web": {"admin_web_bind": "127.0.0.1", "admin_web_port": admin_port, "admin_web_auth_disable": True,
                           "admin_web_worker": admin_worker},
-            "stats_board": {"status": False},
             "channel_mux": {"own_servers": [{"name": "entrypoint-echo",
                 "listen": {"protocol": "tcp", "bind": "127.0.0.1", "port": service_port},
                 "target": {"protocol": "tcp", "host": "127.0.0.1", "port": target_port}}]}}), encoding="utf-8")

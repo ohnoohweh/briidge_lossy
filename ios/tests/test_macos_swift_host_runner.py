@@ -145,6 +145,8 @@ def test_macos_proxy_worker_control_descriptor_survives_exec() -> None:
     assert "fcntl(parentFD, F_SETFD, FD_CLOEXEC) == 0" in supervisor
     assert "fcntl(childFD, F_SETFD, FD_CLOEXEC)" not in supervisor
     assert "private proxy worker to exit before its ready frame" in supervisor
+    assert "public final class ObstacleBridgeProxyWorkerSupervisor {" in supervisor
+    assert "public final class ObstacleBridgeSupervisedProxyWorker {" in supervisor
 
 
 def test_macos_log_worker_control_descriptors_survive_exec() -> None:
@@ -153,6 +155,8 @@ def test_macos_log_worker_control_descriptors_survive_exec() -> None:
     assert "fcntl(descriptors[0], F_SETFD, FD_CLOEXEC) == 0" in supervisor
     assert "fcntl(descriptors[1], F_SETFD, FD_CLOEXEC)" not in supervisor
     assert "standard input or standard error during exec" in supervisor
+    assert "public final class ObstacleBridgeLogWorkerSupervisor {" in supervisor
+    assert "snapshotRefreshRequestID" in supervisor
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="native peer worker is macOS-only")
@@ -246,7 +250,9 @@ def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
 
 def test_macos_host_runner_projects_shared_runtime_metrics() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
-    assert '"runtime_metrics": ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()' in source
+    assert '"runtime_metrics": runtimeMetricsSnapshot()' in source
+    assert "private var cachedRuntimeMetricsSnapshot: [String: Any] = [:]" in source
+    assert "let snapshot = await ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()" in source
     assert "ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessCPU()" in source
     assert 'appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)' in source
     assert '"previous_runtime_lifetime_ended_cleanly"' in source

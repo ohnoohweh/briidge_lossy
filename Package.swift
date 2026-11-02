@@ -1,6 +1,13 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
+// Keep the package contract explicit even though Swift 6 also makes complete
+// checking the default language-mode behavior. This applies to every product
+// target and every test target compiled by SwiftPM.
+let strictConcurrency: [SwiftSetting] = [
+    .unsafeFlags(["-strict-concurrency=complete"]),
+]
+
 var products: [Product] = [
     .library(name: "ObstacleBridgeCore", targets: ["ObstacleBridgeCore"]),
     .executable(name: "ObstacleBridgeLogCollector", targets: ["ObstacleBridgeLogCollector"]),
@@ -10,17 +17,20 @@ var products: [Product] = [
 var targets: [Target] = [
     .target(
         name: "ObstacleBridgeDesktopShared",
-        path: "swift/Sources/ObstacleBridgeDesktopShared"
+        path: "swift/Sources/ObstacleBridgeDesktopShared",
+        swiftSettings: strictConcurrency
     ),
     .executableTarget(
         name: "ObstacleBridgeProxyWorker",
         dependencies: ["ObstacleBridgeDesktopShared"],
-        path: "swift/Sources/ObstacleBridgeProxyWorker"
+        path: "swift/Sources/ObstacleBridgeProxyWorker",
+        swiftSettings: strictConcurrency
     ),
     .executableTarget(
         name: "ObstacleBridgeLogCollector",
         dependencies: ["ObstacleBridgeDesktopShared"],
-        path: "swift/Sources/ObstacleBridgeLogCollector"
+        path: "swift/Sources/ObstacleBridgeLogCollector",
+        swiftSettings: strictConcurrency
     ),
     .systemLibrary(
         name: "CZlib",
@@ -36,28 +46,33 @@ var targets: [Target] = [
             "CZlib",
             .product(name: "Crypto", package: "swift-crypto"),
         ],
-        path: "swift/Sources/ObstacleBridgeCore"
+        path: "swift/Sources/ObstacleBridgeCore",
+        swiftSettings: strictConcurrency
     ),
     .target(
         name: "ObstacleBridgeApplePackageProbe",
         dependencies: ["ObstacleBridgeCore"],
-        path: "swift/Probes/ObstacleBridgeApplePackageProbe"
+        path: "swift/Probes/ObstacleBridgeApplePackageProbe",
+        swiftSettings: strictConcurrency
     ),
     .testTarget(
         name: "ObstacleBridgeCoreTests",
         dependencies: ["ObstacleBridgeCore"],
         path: "swift/Tests/ObstacleBridgeCoreTests",
-        resources: [.process("Fixtures")]
+        resources: [.process("Fixtures")],
+        swiftSettings: strictConcurrency
     ),
     .testTarget(
         name: "ObstacleBridgeApplePackageProbeTests",
         dependencies: ["ObstacleBridgeApplePackageProbe"],
-        path: "swift/Tests/ObstacleBridgeApplePackageProbeTests"
+        path: "swift/Tests/ObstacleBridgeApplePackageProbeTests",
+        swiftSettings: strictConcurrency
     ),
     .testTarget(
         name: "ObstacleBridgeDesktopSharedTests",
         dependencies: ["ObstacleBridgeDesktopShared"],
-        path: "swift/Tests/ObstacleBridgeDesktopSharedTests"
+        path: "swift/Tests/ObstacleBridgeDesktopSharedTests",
+        swiftSettings: strictConcurrency
     ),
 ]
 
@@ -89,18 +104,21 @@ targets += [
             .product(name: "NIOSSL", package: "swift-nio-ssl"),
             .product(name: "NIOQUIC", package: "swift-nio-quic"),
         ],
-        path: "swift/Sources/ObstacleBridgeLinux/Adapters"
+        path: "swift/Sources/ObstacleBridgeLinux/Adapters",
+        swiftSettings: strictConcurrency
     ),
     .executableTarget(
         name: "ObstacleBridgeLinux",
         dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore", "ObstacleBridgeDesktopShared"],
         path: "swift/Sources/ObstacleBridgeLinux",
-        exclude: ["Adapters"]
+        exclude: ["Adapters"],
+        swiftSettings: strictConcurrency
     ),
     .testTarget(
         name: "ObstacleBridgeLinuxAdapterTests",
         dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore", "ObstacleBridgeDesktopShared"],
-        path: "swift/Tests/ObstacleBridgeLinuxAdapterTests"
+        path: "swift/Tests/ObstacleBridgeLinuxAdapterTests",
+        swiftSettings: strictConcurrency
     ),
 ]
 #endif

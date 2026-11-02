@@ -5,7 +5,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-from obstacle_bridge.bridge import ChannelMux, ProcessSharedTunRegistry, Runner, SessionMetrics, StatsBoard, TcpStreamSession, QuicSession, UdpSession, WebSocketSession
+from obstacle_bridge.bridge import ChannelMux, ProcessSharedTunRegistry, Runner, SessionMetrics, TcpStreamSession, QuicSession, UdpSession, WebSocketSession
 
 
 def _peer_endpoint(host: str, port: int) -> dict:
@@ -595,18 +595,6 @@ class _MuxWithArchivedPeerTotals:
                 "tx_bytes": 400,
             }
         }
-
-
-class StatsBoardSnapshotTests(unittest.TestCase):
-    def test_status_snapshot_includes_tun_open_connection_count(self):
-        board = StatsBoard(argparse.Namespace(no_dashboard=True, overlay_transport="myudp"))
-        board.set_mux_ref(_MuxWithOpenCounts(udp=1, tcp=2, tun=3))
-
-        status = board.snapshot_status()
-
-        self.assertEqual(status["open_connections"]["udp"], 1)
-        self.assertEqual(status["open_connections"]["tcp"], 2)
-        self.assertEqual(status["open_connections"]["tun"], 3)
 
 
 class RunnerPeerSnapshotTests(unittest.TestCase):

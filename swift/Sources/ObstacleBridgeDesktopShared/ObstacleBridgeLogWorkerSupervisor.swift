@@ -13,8 +13,8 @@ private let logStreamSocket = Int32(SOCK_STREAM.rawValue)
 
 /// Supervises either private log collector. Records are best effort; callers
 /// never wait for the collector, disk, a query, or a restart to complete.
-// OBSTACLEBRIDGE-CONCURRENCY: lock stateLock/queryLock + serial queryQueue cache coalescing; test=test_native_log_supervisor_query_uses_readiness_callback_not_polling
-public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
+// OBSTACLEBRIDGE-CONCURRENCY: serial query cache with stateLock/queryLock; test=test_native_log_supervisor_query_uses_readiness_callback_not_polling
+public final class ObstacleBridgeLogWorkerSupervisor {
     public enum Failure: Error, LocalizedError {
         case invalidConfiguration, unavailable
         public var errorDescription: String? {
@@ -51,6 +51,7 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
     private var pendingQueries: [String: (generation: Int, deadline: DispatchTime, completion: @Sendable ([String: Any]) -> Void)] = [:]
     private var cachedQuery: [String: Any] = ["available": false, "lines": [String](), "error": "logger unavailable"]
     private var snapshotRefreshPending = false
+    private var snapshotRefreshRequestID: String?
 
     public init(implementation: String, executable: String, proxyLogLevel: Int = 0) throws {
         guard ["python", "native"].contains(implementation), !executable.isEmpty else { throw Failure.invalidConfiguration }
@@ -312,11 +313,7 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         guard !snapshotRefreshPending else { queryLock.unlock(); return }
         snapshotRefreshPending = true
         queryLock.unlock()
-        fetchAsync(limit: limit) { [weak self] _ in
-            self?.queryLock.lock()
-            self?.snapshotRefreshPending = false
-            self?.queryLock.unlock()
-        }
+        fetchAsync(limit: limit, isSnapshotRefresh: true) { _ in }
     }
 
     /// Requests a bounded log snapshot without blocking the caller. Replies
@@ -324,6 +321,10 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
     /// source; lifecycle replacement and the independent deadline both finish
     /// outstanding callbacks with the same unavailable envelope.
     public func fetchAsync(limit: Int, completion: @escaping @Sendable ([String: Any]) -> Void) {
+        fetchAsync(limit: limit, isSnapshotRefresh: false, completion: completion)
+    }
+
+    private func fetchAsync(limit: Int, isSnapshotRefresh: Bool, completion: @escaping @Sendable ([String: Any]) -> Void) {
         let unavailable: [String: Any] = ["available": false, "lines": [String](), "error": "logger unavailable"]
         stateLock.lock()
         let currentGeneration = generation
@@ -334,6 +335,7 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         let requestID = UUID().uuidString.lowercased()
         queryLock.lock()
         pendingQueries[requestID] = (currentGeneration, .now() + .milliseconds(150), completion)
+        if isSnapshotRefresh { snapshotRefreshRequestID = requestID }
         queryLock.unlock()
         guard sendDatagram(descriptor, kind: .request, generation: UInt64(currentGeneration), payload: ["v": 1, "kind": "logs.query", "limit": max(1, min(limit, 1000)), "request_id": requestID]) else {
             finishQuery(requestID: requestID, result: unavailable)
@@ -363,6 +365,7 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         pendingQueries.removeAll()
         cachedQuery = unavailable
         snapshotRefreshPending = false
+        snapshotRefreshRequestID = nil
         queryLock.unlock()
         callbacks.forEach { $0(unavailable) }
     }
@@ -394,6 +397,10 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         queryLock.lock()
         guard let pending = pendingQueries.removeValue(forKey: requestID) else { queryLock.unlock(); return }
         cachedQuery = result
+        if snapshotRefreshRequestID == requestID {
+            snapshotRefreshPending = false
+            snapshotRefreshRequestID = nil
+        }
         queryLock.unlock()
         stateLock.lock()
         let current = !stopped && generation == pending.generation && process?.isRunning == true
@@ -426,7 +433,9 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
 
 /// Bounded record-only ingress; malformed records and queries never reach the
 /// collector. Cancellation closes the read descriptor on its own queue.
-public final class ObstacleBridgeLogProducerRelay: @unchecked Sendable {
+/// Non-Sendable relay state. Its dedicated descriptor-readiness source owns
+/// draining; only immutable record datagrams reach the supervisor.
+public final class ObstacleBridgeLogProducerRelay {
     private weak var supervisor: ObstacleBridgeLogWorkerSupervisor?
     private let readFD: Int32
     public let childHandle: FileHandle
@@ -486,7 +495,9 @@ public final class ObstacleBridgeLogProducerRelay: @unchecked Sendable {
 
 /// A native child-side endpoint for a producer-only inherited logging
 /// capability. It has no query or collector-lifecycle operations.
-public final class ObstacleBridgeLogProducer: @unchecked Sendable {
+/// Non-Sendable child-local log producer. It converts log fields into one
+/// immutable datagram and never shares mutable collector state.
+public final class ObstacleBridgeLogProducer {
     private static let maxDatagram = 8 * 1024
     private let descriptor: Int32
     private let minimumLevel: Int

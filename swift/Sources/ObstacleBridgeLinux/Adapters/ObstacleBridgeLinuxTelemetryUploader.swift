@@ -4,7 +4,9 @@ import ObstacleBridgeCore
 
 /// Linux HTTPS/mTLS drain owner. All spool sequencing, acknowledgement range
 /// validation, byte budget, and backoff remain in Core's upload policy.
-public final class ObstacleBridgeLinuxTelemetryUploader: @unchecked Sendable {
+/// Non-Sendable upload owner. Its private queue performs network I/O and
+/// callers exchange immutable telemetry requests and status snapshots only.
+public final class ObstacleBridgeLinuxTelemetryUploader {
     public typealias Executor = (ObstacleBridgeTelemetryUploadPolicy.Request) throws -> (status: Int, body: Data)
     private let policy: ObstacleBridgeTelemetryUploadPolicy
     private let executor: Executor
@@ -27,7 +29,7 @@ public final class ObstacleBridgeLinuxTelemetryUploader: @unchecked Sendable {
         guard let request = policy.nextRequest() else { return }
         lock.lock(); let active = !cancelled; if active { attempts &+= 1 }; lock.unlock()
         guard active else { policy.fail(); return }
-        queue.async { [weak self] in
+        let upload = DispatchWorkItem { [weak self] in
             guard let self else { return }
             do {
                 let reply = try self.executor(request)
@@ -43,6 +45,7 @@ public final class ObstacleBridgeLinuxTelemetryUploader: @unchecked Sendable {
                 self.lock.lock(); self.rejected &+= 1; self.lastError = String(describing: error).prefix(160).description; self.lock.unlock()
             }
         }
+        queue.async(execute: upload)
     }
 
     public func cancel() { lock.lock(); cancelled = true; lock.unlock(); policy.fail() }

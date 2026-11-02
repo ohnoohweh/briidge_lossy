@@ -4,40 +4,46 @@ import Testing
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxReceiveWorkerTests {
-    @Test func workerDeliversEpochTaggedFramesAndCancelsBlockingReceive() {
+    @Test func workerDeliversEpochTaggedFramesAndCancelsBlockingReceive() async {
         let gate = DispatchSemaphore(value: 0)
         let delivered = DispatchSemaphore(value: 0)
-        let values = LockedValues()
+        let values = DeliveredValues()
         var first = true
         let worker = ObstacleBridgeLinuxReceiveWorker(epoch: 7, capacity: 1, receive: {
             if first { first = false; return Data("one".utf8) }
             gate.wait()
             throw WorkerError.stopped
         }, cancelReceive: { gate.signal() }, sink: { epoch, data in
-            values.append((epoch, data)); delivered.signal()
+            Task {
+                await values.append((epoch, data))
+                delivered.signal()
+            }
         })
         worker.start()
         #expect(delivered.wait(timeout: .now() + 2) == .success)
         worker.stop()
-        #expect(values.all.count == 1)
-        #expect(values.all.first?.0 == 7)
-        #expect(values.all.first?.1 == Data("one".utf8))
+        let deliveredValues = await values.all
+        #expect(deliveredValues.count == 1)
+        #expect(deliveredValues.first?.0 == 7)
+        #expect(deliveredValues.first?.1 == Data("one".utf8))
         #expect(worker.snapshot().lastReceivedUnixTS != nil)
         #expect(worker.snapshot().state == "stopped")
     }
 
-    @Test func asyncWorkerRearmsAfterEachDeliveredFrame() {
+    @Test func asyncWorkerRearmsAfterEachDeliveredFrame() async {
         let source = AsyncReceiveSource()
         let delivered = DispatchSemaphore(value: 0)
-        let values = LockedValues()
+        let values = DeliveredValues()
         let worker = ObstacleBridgeLinuxReceiveWorker(
             epoch: 9,
             receive: { throw WorkerError.stopped },
             asyncReceive: source.register,
             cancelReceive: {},
             sink: { epoch, data in
-                values.append((epoch, data))
-                delivered.signal()
+                Task {
+                    await values.append((epoch, data))
+                    delivered.signal()
+                }
             }
         )
 
@@ -50,24 +56,26 @@ struct ObstacleBridgeLinuxReceiveWorkerTests {
         #expect(delivered.wait(timeout: .now() + 2) == .success)
         worker.stop()
 
-        #expect(values.all.count == 2)
-        #expect(values.all[0].0 == 9)
-        #expect(values.all[0].1 == Data("one".utf8))
-        #expect(values.all[1].0 == 9)
-        #expect(values.all[1].1 == Data("two".utf8))
+        let deliveredValues = await values.all
+        #expect(deliveredValues.count == 2)
+        #expect(deliveredValues[0].0 == 9)
+        #expect(deliveredValues[0].1 == Data("one".utf8))
+        #expect(deliveredValues[1].0 == 9)
+        #expect(deliveredValues[1].1 == Data("two".utf8))
         #expect(source.registrations >= 3)
     }
 
     private enum WorkerError: Error { case stopped }
 }
 
-private final class LockedValues: @unchecked Sendable {
-    private let lock = NSLock(); private var values: [(UInt64, Data)] = []
-    var all: [(UInt64, Data)] { lock.lock(); defer { lock.unlock() }; return values }
-    func append(_ value: (UInt64, Data)) { lock.lock(); values.append(value); lock.unlock() }
+private actor DeliveredValues {
+    private var values: [(UInt64, Data)] = []
+
+    var all: [(UInt64, Data)] { values }
+    func append(_ value: (UInt64, Data)) { values.append(value) }
 }
 
-private final class AsyncReceiveSource: @unchecked Sendable {
+private final class AsyncReceiveSource {
     private let lock = NSLock()
     private let registered = DispatchSemaphore(value: 0)
     private var callbacks: [(Result<Data?, Error>) -> Void] = []

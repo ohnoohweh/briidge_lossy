@@ -1109,6 +1109,11 @@ class MyUDP2Session(_MyUDP2SessionCore):
         if cmpv < 0:
             return False, completed
         if cmpv > 0:
+            # A peer-selected counter must not materialize an unbounded
+            # missing range. The CONTROL wire format cannot request more than
+            # this window, so a farther packet is not recoverable here.
+            if ((chunk.counter - self.expected) % 65535) > CONTROL_MAX_MISSED:
+                return False, completed
             self._enqueue_stream_chunk(chunk)
             return False, completed
         self.expected = c16_inc(self.expected)
@@ -1678,8 +1683,6 @@ class PeerProtocol(asyncio.DatagramProtocol):
         setattr(self, count_attr, count)
         setattr(self, last_attr, gap_ms)
         setattr(self, max_attr, max(float(getattr(self, max_attr, 0.0) or 0.0), gap_ms))
-        if gap_ms >= 20.0 or count <= 3 or (count % 256) == 0:
-            self.session.log.info("[UDP/YIELD] stage=%s count=%s gap_ms=%.3f", stage, count, gap_ms)
 
     def _process_one_completed_payload(self) -> None:
         if not self._completed_pending:

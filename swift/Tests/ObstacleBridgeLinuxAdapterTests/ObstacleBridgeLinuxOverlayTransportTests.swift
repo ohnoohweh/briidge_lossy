@@ -20,16 +20,16 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(peers.snapshot == .init(activePeerCount: 0, writesInFlight: 0, backpressureRejections: 1))
     }
 
-    @Test func tcpPSKListenerAuthenticatesAndEchoesProtectedClientPayload() throws {
+    @Test func tcpPSKListenerAuthenticatesAndEchoesProtectedClientPayload() async throws {
         let psk = Data("tcp-listener-psk".utf8)
-        let listener = try ObstacleBridgeLinuxTCPPSKListener(port: 0)
-        defer { listener.close() }
+        let listener = TCPPSKListenerHarness()
+        defer { Task { await listener.close() } }
         let served = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
-            _ = try? listener.serveOne(psk: psk, serverNonce: Data(0..<32))
+        Task {
+            await listener.serveOne(psk: psk, serverNonce: Data(0..<32))
             served.signal()
         }
-        let lower = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: listener.port, transport: .tcp)
+        let lower = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: await listener.port, transport: .tcp)
         let session = try lower.openSession()
         let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
         let nonce = Data(0x20..<0x40)
@@ -38,7 +38,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try client.unprotect(session.exchange(client.protect(Data("python-client".utf8)))) == Data("python-client".utf8))
         session.close()
         #expect(served.wait(timeout: .now() + 2) == .success)
-        #expect(listener.listenerSnapshot.activePeerCount == 0)
+        #expect((await listener.snapshot).activePeerCount == 0)
     }
 
     @Test func tcpFramingRoundTripsAgainstPythonPeer() throws {
@@ -61,18 +61,20 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try session.receive() == Data("python:swift-second".utf8))
     }
 
-    @Test func tcpDuplexSessionUsesReadinessCallbacksAfterBootstrap() throws {
+    @Test func tcpDuplexSessionUsesReadinessCallbacksAfterBootstrap() async throws {
         let peer = try PythonOverlayPeer(mode: "tcp-duplex")
         defer { peer.stop() }
         let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .tcp)
         let session = try client.openSession(); defer { session.close() }
         let received = DispatchSemaphore(value: 0)
-        let value = LockedData()
+        let value = DeliveredData()
         session.startAsyncReceive { result in
-            if case .success(let payload) = result { value.store(payload); received.signal() }
+            if case .success(let payload) = result {
+                Task { await value.store(payload); received.signal() }
+            }
         }
         #expect(received.wait(timeout: .now() + 2) == .success)
-        #expect(value.load() == Data("python-first".utf8))
+        #expect(await value.load() == Data("python-first".utf8))
     }
 
     @Test func webSocketDuplexSessionReceivesPeerFrameBeforeLocalSend() throws {
@@ -83,18 +85,20 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try session.receive() == Data("python-first".utf8))
     }
 
-    @Test func webSocketDuplexSessionUsesReadinessCallbacksAfterBootstrap() throws {
+    @Test func webSocketDuplexSessionUsesReadinessCallbacksAfterBootstrap() async throws {
         let peer = try PythonOverlayPeer(mode: "ws-duplex")
         defer { peer.stop() }
         let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .ws, wsPath: "/overlay")
         let session = try client.openSession(); defer { session.close() }
         let received = DispatchSemaphore(value: 0)
-        let value = LockedData()
+        let value = DeliveredData()
         session.startAsyncReceive { result in
-            if case .success(let payload) = result { value.store(payload); received.signal() }
+            if case .success(let payload) = result {
+                Task { await value.store(payload); received.signal() }
+            }
         }
         #expect(received.wait(timeout: .now() + 2) == .success)
-        #expect(value.load() == Data("python-first".utf8))
+        #expect(await value.load() == Data("python-first".utf8))
     }
 
     @Test func myudpDuplexSessionReceivesPeerFrameAfterAddressRegistration() throws {
@@ -106,19 +110,21 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try session.receive() == Data("python-first".utf8))
     }
 
-    @Test func myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap() throws {
+    @Test func myudpDuplexSessionUsesReadinessCallbacksAfterBootstrap() async throws {
         let peer = try PythonOverlayPeer(mode: "myudp-duplex")
         defer { peer.stop() }
         let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .myudp)
         let session = try client.openSession(); defer { session.close() }
         let received = DispatchSemaphore(value: 0)
-        let value = LockedData()
+        let value = DeliveredData()
         session.startAsyncReceive { result in
-            if case .success(let payload) = result { value.store(payload); received.signal() }
+            if case .success(let payload) = result {
+                Task { await value.store(payload); received.signal() }
+            }
         }
         try session.send(Data("register".utf8))
         #expect(received.wait(timeout: .now() + 2) == .success)
-        #expect(value.load() == Data("python-first".utf8))
+        #expect(await value.load() == Data("python-first".utf8))
     }
 
     @Test func webSocketUpgradeAndBinaryFrameRoundTripAgainstPythonPeer() throws {
@@ -147,20 +153,22 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(client.snapshot.state == "connected")
     }
 
-    @Test func tlsWebSocketSessionUsesNIOCallbacksAfterBootstrap() throws {
+    @Test func tlsWebSocketSessionUsesNIOCallbacksAfterBootstrap() async throws {
         let peer = try PythonOverlayPeer(mode: "wss")
         defer { peer.stop() }
         guard let trustRootsPath = peer.trustRootsPath else { throw OverlayTestError.peerDidNotStart }
         let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "localhost", port: peer.port, transport: .ws, wsPath: "/overlay", wsTLS: true, wsTrustRootsPath: trustRootsPath, wsProxy: .init(mode: .off))
         let session = try client.openSession(); defer { session.close() }
         let received = DispatchSemaphore(value: 0)
-        let value = LockedData()
+        let value = DeliveredData()
         session.startAsyncReceive { result in
-            if case .success(let payload) = result { value.store(payload); received.signal() }
+            if case .success(let payload) = result {
+                Task { await value.store(payload); received.signal() }
+            }
         }
         try session.send(Data("swift-linux-wss-async".utf8))
         #expect(received.wait(timeout: .now() + 3) == .success)
-        #expect(value.load() == Data("swift-linux-wss-async".utf8))
+        #expect(await value.load() == Data("swift-linux-wss-async".utf8))
     }
 
     @Test func tlsWebSocketRejectsUntrustedPythonPeer() throws {
@@ -209,19 +217,21 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(client.snapshot.state == "connected")
     }
 
-    @Test func quicReliableStreamUsesNIOCallbacksAfterBootstrap() throws {
+    @Test func quicReliableStreamUsesNIOCallbacksAfterBootstrap() async throws {
         let peer = try PythonOverlayPeer(mode: "quic")
         defer { peer.stop() }
         let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .quic, quicALPN: "hq-29", quicInsecure: true)
         let session = try client.openSession(); defer { session.close() }
         let received = DispatchSemaphore(value: 0)
-        let value = LockedData()
+        let value = DeliveredData()
         session.startAsyncReceive { result in
-            if case .success(let payload) = result { value.store(payload); received.signal() }
+            if case .success(let payload) = result {
+                Task { await value.store(payload); received.signal() }
+            }
         }
         try session.send(Data("swift-linux-quic-async".utf8))
         #expect(received.wait(timeout: .now() + 5) == .success)
-        #expect(value.load() == Data("python:swift-linux-quic-async".utf8))
+        #expect(await value.load() == Data("python:swift-linux-quic-async".utf8))
     }
 
     @Test func myudpDataFrameRoundTripsAgainstPythonPeer() throws {
@@ -477,21 +487,21 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(plain.rejectedFramesTotal == 0)
     }
 
-    @Test func myudpSupervisorRotatesCandidateAfterFailedEpoch() throws {
+    @Test func myudpSupervisorRotatesCandidateAfterFailedEpoch() async throws {
         let peer = try PythonOverlayPeer(mode: "myudp")
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .myudp, host: "127.0.0.2,127.0.0.1", port: peer.port))
         let supervisor = ObstacleBridgeLinuxReconnectSupervisor(runtime: runtime, policy: .init(initialDelayMilliseconds: 5, maximumDelayMilliseconds: 10, maximumAttempts: 2))
         let connected = DispatchSemaphore(value: 0)
-        supervisor.onSnapshot = { if $0.state == "connected" { connected.signal() } }
-        supervisor.start(probe: Data("rotate-myudp".utf8), sessionID: 130, clientNonce: Data(repeating: 12, count: 32))
+        await supervisor.setSnapshotHandler { if $0.state == "connected" { connected.signal() } }
+        await supervisor.start(probe: Data("rotate-myudp".utf8), sessionID: 130, clientNonce: Data(repeating: 12, count: 32))
         #expect(connected.wait(timeout: .now() + 3) == .success)
-        #expect(supervisor.snapshot.attempts == 2)
-        #expect(runtime.status().activeHost == "127.0.0.1")
-        supervisor.stop()
+        #expect(await supervisor.snapshot.attempts == 2)
+        #expect((await supervisor.runtimeStatus()).activeHost == "127.0.0.1")
+        await supervisor.stop()
     }
 
-    @Test func myudpSupervisorUsesCoreTimerRecoveryBeforeReconnect() throws {
+    @Test func myudpSupervisorUsesCoreTimerRecoveryBeforeReconnect() async throws {
         let peer = try PythonOverlayPeer(mode: "myudp-drop-first")
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
@@ -500,11 +510,11 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         ))
         let supervisor = ObstacleBridgeLinuxReconnectSupervisor(runtime: runtime, policy: .init(initialDelayMilliseconds: 5, maximumDelayMilliseconds: 10, maximumAttempts: 2))
         let connected = DispatchSemaphore(value: 0)
-        supervisor.onSnapshot = { if $0.state == "connected" { connected.signal() } }
-        supervisor.start(probe: Data("silent-myudp".utf8), sessionID: 140, clientNonce: Data(repeating: 13, count: 32))
+        await supervisor.setSnapshotHandler { if $0.state == "connected" { connected.signal() } }
+        await supervisor.start(probe: Data("silent-myudp".utf8), sessionID: 140, clientNonce: Data(repeating: 13, count: 32))
         #expect(connected.wait(timeout: .now() + 3) == .success)
-        #expect(supervisor.snapshot.attempts == 1)
-        supervisor.stop()
+        #expect(await supervisor.snapshot.attempts == 1)
+        await supervisor.stop()
     }
 
     @Test func tcpSecureLinkPskSessionAuthenticatesAndCarriesDataAgainstPythonPeer() throws {
@@ -704,7 +714,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         runtime.disconnect()
     }
 
-    @Test func reconnectSupervisorRecoversAndStopsPendingTimers() throws {
+    @Test func reconnectSupervisorRecoversAndStopsPendingTimers() async throws {
         let peer = try PythonOverlayPeer(mode: "tcp-drop-then-echo")
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: peer.port))
@@ -713,37 +723,37 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
             policy: .init(initialDelayMilliseconds: 10, maximumDelayMilliseconds: 20, maximumAttempts: 2)
         )
         let connected = DispatchSemaphore(value: 0)
-        supervisor.onSnapshot = { snapshot in
+        await supervisor.setSnapshotHandler { snapshot in
             if snapshot.state == "connected" { connected.signal() }
         }
-        supervisor.start(probe: Data("supervisor".utf8), sessionID: 90, clientNonce: Data(repeating: 6, count: 32))
+        await supervisor.start(probe: Data("supervisor".utf8), sessionID: 90, clientNonce: Data(repeating: 6, count: 32))
         #expect(connected.wait(timeout: .now() + 2) == .success)
-        #expect(supervisor.snapshot.attempts == 2)
-        #expect(supervisor.snapshot.state == "connected")
-        supervisor.stop()
-        let stopped = expectationSnapshot(supervisor, state: "stopped")
+        #expect(await supervisor.snapshot.attempts == 2)
+        #expect(await supervisor.snapshot.state == "connected")
+        await supervisor.stop()
+        let stopped = await expectationSnapshot(supervisor, state: "stopped")
         #expect(stopped)
-        #expect(runtime.status().state == "disconnected")
+        #expect((await supervisor.runtimeStatus()).state == "disconnected")
     }
 
-    @Test func reconnectSupervisorReportsBoundedRetryExhaustion() {
+    @Test func reconnectSupervisorReportsBoundedRetryExhaustion() async {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let supervisor = ObstacleBridgeLinuxReconnectSupervisor(
             runtime: runtime,
             policy: .init(initialDelayMilliseconds: 5, maximumDelayMilliseconds: 10, maximumAttempts: 2)
         )
         let failed = DispatchSemaphore(value: 0)
-        supervisor.onSnapshot = { snapshot in
+        await supervisor.setSnapshotHandler { snapshot in
             if snapshot.state == "failed" { failed.signal() }
         }
-        supervisor.start(probe: Data("exhaust".utf8), sessionID: 100, clientNonce: Data(repeating: 7, count: 32))
+        await supervisor.start(probe: Data("exhaust".utf8), sessionID: 100, clientNonce: Data(repeating: 7, count: 32))
         #expect(failed.wait(timeout: .now() + 2) == .success)
-        #expect(supervisor.snapshot.attempts == 2)
-        #expect(supervisor.snapshot.failureReason != nil)
-        supervisor.stop()
+        #expect(await supervisor.snapshot.attempts == 2)
+        #expect(await supervisor.snapshot.failureReason != nil)
+        await supervisor.stop()
     }
 
-    @Test func reconnectSupervisorStopCancelsPendingRetry() {
+    @Test func reconnectSupervisorStopCancelsPendingRetry() async {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let supervisor = ObstacleBridgeLinuxReconnectSupervisor(
             runtime: runtime,
@@ -752,25 +762,25 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         let retryPending = DispatchSemaphore(value: 0)
         let stopped = DispatchSemaphore(value: 0)
         let secondAttempt = DispatchSemaphore(value: 0)
-        supervisor.onSnapshot = { snapshot in
+        await supervisor.setSnapshotHandler { snapshot in
             if snapshot.state == "reconnecting", snapshot.attempts == 1, snapshot.nextRetryMilliseconds == 250 { retryPending.signal() }
             if snapshot.state == "stopped" { stopped.signal() }
             if snapshot.attempts >= 2 { secondAttempt.signal() }
         }
-        supervisor.start(probe: Data("cancel".utf8), sessionID: 110, clientNonce: Data(repeating: 8, count: 32))
+        await supervisor.start(probe: Data("cancel".utf8), sessionID: 110, clientNonce: Data(repeating: 8, count: 32))
         #expect(retryPending.wait(timeout: .now() + 2) == .success)
-        supervisor.stop()
+        await supervisor.stop()
         #expect(stopped.wait(timeout: .now() + 2) == .success)
         #expect(secondAttempt.wait(timeout: .now() + 0.4) == .timedOut)
-        #expect(supervisor.snapshot.attempts == 1)
-        #expect(supervisor.snapshot.state == "stopped")
+        #expect(await supervisor.snapshot.attempts == 1)
+        #expect(await supervisor.snapshot.state == "stopped")
     }
 
-    private func expectationSnapshot(_ supervisor: ObstacleBridgeLinuxReconnectSupervisor, state: String) -> Bool {
+    private func expectationSnapshot(_ supervisor: ObstacleBridgeLinuxReconnectSupervisor, state: String) async -> Bool {
         let limit = Date().addingTimeInterval(1)
         while Date() < limit {
-            if supervisor.snapshot.state == state { return true }
-            Thread.sleep(forTimeInterval: 0.005)
+            if await supervisor.snapshot.state == state { return true }
+            try? await Task.sleep(nanoseconds: 5_000_000)
         }
         return false
     }
@@ -864,6 +874,19 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         // close rather than the internal SecureLink validation error.
         #expect(throws: ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF) { try second.receiveInbound() }
     }
+}
+
+private actor TCPPSKListenerHarness {
+    private let listener = try! ObstacleBridgeLinuxTCPPSKListener(port: 0)
+
+    var port: Int { listener.port }
+    var snapshot: ObstacleBridgeLinuxStreamListenerSnapshot { listener.listenerSnapshot }
+
+    func serveOne(psk: Data, serverNonce: Data) {
+        try? listener.serveOne(psk: psk, serverNonce: serverNonce)
+    }
+
+    func close() { listener.close() }
 }
 
 final class PythonOverlayPeer {
@@ -1539,9 +1562,8 @@ final class PythonOverlayPeer {
 
 private enum OverlayTestError: Error { case peerDidNotStart }
 
-private final class LockedData: @unchecked Sendable {
-    private let lock = NSLock()
+private actor DeliveredData {
     private var value: Data?
-    func store(_ value: Data) { lock.lock(); self.value = value; lock.unlock() }
-    func load() -> Data? { lock.lock(); defer { lock.unlock() }; return value }
+    func store(_ value: Data) { self.value = value }
+    func load() -> Data? { value }
 }

@@ -4,7 +4,7 @@ import Foundation
 /// narrower than the Python `linux-native` backend: it owns `/dev/net/tun`
 /// and packet I/O now, but fails closed for network policy until the complete
 /// route/DNS/firewall/hook lifecycle can be implemented equivalently.
-public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
+public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend {
     public typealias PacketSink = (Data) -> Void
     /// Injectable command boundary keeps privileged host mutation out of unit
     /// tests while production uses argv-only Process execution.

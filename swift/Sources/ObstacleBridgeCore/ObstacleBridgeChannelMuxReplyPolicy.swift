@@ -4,7 +4,7 @@ public enum ObstacleBridgeChannelMuxReplyPolicyError: Error, Equatable, Sendable
 
 /// Portable one-request admission and reply matcher. Platform adapters retain
 /// waits and transport I/O; this type owns the matching state and policy.
-public final class ObstacleBridgeChannelMuxReplyPolicy: @unchecked Sendable {
+public final class ObstacleBridgeChannelMuxReplyPolicy {
     private let lock = NSLock()
     private var inFlight = false
     private var receiveOwnerActive = false

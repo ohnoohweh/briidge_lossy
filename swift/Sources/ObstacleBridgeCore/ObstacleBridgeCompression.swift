@@ -84,7 +84,7 @@ public struct ObstacleBridgeMuxCompressionSnapshot: Codable, Equatable, Sendable
 /// Core owns the classification and accounting vocabulary.  Adapters record
 /// their already-decoded frame outcome here instead of duplicating compression
 /// policy or zlib parsing in an Admin/status layer.
-public final class ObstacleBridgeMuxCompressionTelemetry: @unchecked Sendable {
+public final class ObstacleBridgeMuxCompressionTelemetry {
     private let policy: ObstacleBridgeMuxCompressionPolicy
     private let lock = NSLock()
     private var compressAttemptsTotal: UInt64 = 0

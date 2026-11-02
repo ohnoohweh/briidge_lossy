@@ -190,7 +190,7 @@ class RunnerMuxAggregate:
 
 class Runner:
     """
-    Thin orchestrator: wires ISession + ChannelMux + StatsBoard and manages lifecycle.
+    Thin orchestrator: wires ISession + ChannelMux and manages lifecycle.
     """
 
     RUNTIME_METRICS_SAMPLE_INTERVAL_NS = 1_000_000_000
@@ -204,7 +204,6 @@ class Runner:
         self._stop: Optional[asyncio.Event] = None
         self._stop_requested = False
         self._session_obj: Optional[ISession] = None
-        self.mux: Optional["ChannelMux"] = None
         self._sessions: List[ISession] = []
         self._muxes: List["ChannelMux"] = []
         self._session_labels: List[str] = []
@@ -246,7 +245,6 @@ class Runner:
         self._tun_helper_lifecycle_phase: str = (
             "disabled" if self._tun_helper_settings.mode != "helper" else "idle"
         )
-        self.stats = StatsBoard(args )
         self.admin_web = None
         self._restart_requested: Optional[asyncio.Event] = None
         self._restart_requested_flag = False
@@ -1182,6 +1180,12 @@ class Runner:
         configured["auth"] = ({key: auth[key] for key in ("mode", "username") if key in auth}
                               if isinstance(auth, Mapping) else {})
         worker = self._proxy_provider_worker
+        worker_running = bool(
+            worker is not None
+            and worker.process is not None
+            and worker.process.returncode is None
+            and not worker.last_error
+        )
         return {
             "enabled": bool(cfg["enabled"]),
             "configured": configured,
@@ -1191,7 +1195,17 @@ class Runner:
             },
             "last_error": worker.last_error if worker is not None else self._proxy_provider_last_error,
             **({"worker": {"implementation": worker.implementation,
-                            "state": "running" if worker.process is not None and worker.process.returncode is None and not worker.last_error else "unavailable",
+                            "state": "running" if worker_running else "unavailable",
+                            "process_model": "supervised_child",
+                            "detached": False,
+                            "pid": worker.process.pid if worker.process is not None else None,
+                            "server_started": bool(worker_running and worker.listeners),
+                            "control_socket": "inherited_unix_socketpair",
+                            "control_connected": bool(
+                                worker_running
+                                and worker.writer is not None
+                                and not worker.writer.is_closing()
+                            ),
                             "generation": worker.generation, "restarts": worker.restarts,
                             "failed_starts": worker.failed_starts,
                             "capabilities": worker.capabilities}} if worker is not None else {}),
@@ -1826,18 +1840,10 @@ class Runner:
         for transport_name, session in transport_sessions:
             self._attach_runtime_metric_callback(session)
             session.set_on_state_change(lambda connected, transport_name=transport_name, session=session: self._on_state_change(transport_name, session, connected))
-            # Keep status snapshot callbacks wired on iOS too. We still disable
-            # the terminal dashboard there, but WebAdmin's /api/status needs
-            # the learned peer endpoint and traffic counters to reflect the
-            # active overlay session.
-            session.set_on_peer_rx(self.stats.on_peer_rx_bytes)
-            session.set_on_peer_tx(self.stats.on_peer_tx_bytes)
             mux = ChannelMux.from_args(
                 session,
                 loop,
                 self.args,
-                on_local_rx_bytes=self.stats.on_app_rx_bytes,
-                on_local_tx_bytes=self.stats.on_app_tx_bytes
             )
             setattr(mux, "_runner_sync_diag_cb", self.record_sync_activity)
             mux.set_on_connection_rotation_result(
@@ -1845,10 +1851,7 @@ class Runner:
             )
             mux._process_shared_tun_registry = shared_tun_registry
             session.set_on_peer_set(
-                lambda host, port, mux=mux: (
-                    self.stats.on_peer_set(host, port),
-                    mux.on_overlay_peer_set(host, port),
-                )
+                lambda host, port, mux=mux: mux.on_overlay_peer_set(host, port)
             )
             self._sessions.append(session)
             self._muxes.append(mux)
@@ -1867,35 +1870,6 @@ class Runner:
             await self._await_with_async_diag(f"{transport_name}.mux.start", mux.start())
 
         self._session_obj = self._sessions[0] if self._sessions else None
-        self.stats.bind_session(self._session_obj)
-        if self._muxes:
-            self.mux = RunnerMuxAggregate(self._muxes)
-        else:
-            self.mux = None
-
-        
-        # 4) Provide references to StatsBoard and start it
-        # For UDP overlays we still expose the inner Session (to render retransmit histograms).
-        # For TCP overlays this will be None and the board will omit that section.
-        inner = None
-        real = getattr(self._session_obj, "_real", self._session_obj)  # unwrap SessionDebugShim if present
-
-        try:
-            if isinstance(real, UdpSession):
-                self.stats.set_peer_proto(real.peer_proto)
-        except Exception:
-            pass
-
-        if not ios_admin_ui:
-            if isinstance(real, UdpSession):
-                inner = real.inner_session
-            self.stats.set_session_ref(inner)  # now the dashboard can show inflight/ACKed/etc.
-            self.stats.set_mux_ref(self.mux)
-            if self.args.status:
-                await self._await_with_async_diag("StatsBoard.start", self.stats.start())
-        else:
-            self.log.info("[SERVER] iOS admin UI detected; stats board disabled")
-
         self._last_connected_monotonic = time.monotonic() if self._session_obj and self._session_obj.is_connected() else None
         self._last_disconnected_monotonic = None if self._session_obj and self._session_obj.is_connected() else time.monotonic()
 
@@ -2007,9 +1981,6 @@ class Runner:
         self.log.debug("[RUNNER] stop: entering telemetry_collector.stop")
         await _run_stop_step("telemetry_collector.stop", self._stop_telemetry_collector(), timeout_s=3.0)
 
-        self.log.debug("[RUNNER] stop: entering stats.stop")
-        await _run_stop_step("stats.stop", self.stats.stop(), timeout_s=2.0)
-
         self.log.debug("[RUNNER] stop: entering mux.stop")
         for idx, mux in enumerate(reversed(self._muxes)):
             await _run_stop_step(f"mux.stop[{idx}]", mux.stop(reason=stop_reason), timeout_s=5.0)
@@ -2116,8 +2087,6 @@ class Runner:
         else:
             if self._last_disconnected_monotonic is None:
                 self._last_disconnected_monotonic = now_mono        
-        # Update board
-        self.stats.on_state_change(aggregate_connected)
         # Inform mux
         mux = None
         try:
@@ -2421,19 +2390,10 @@ class Runner:
         }
 
     def get_status_snapshot(self) -> dict:
-        try:
-            with bounded_runtime_scope(self.record_runtime_duration, "status_stats"):
-                payload = dict(self.stats.snapshot_status())
-        except Exception as exc:
-            self.log.warning("[RUNNER] stats snapshot failed; returning minimal status: %r", exc)
-            connected = False
-            sess = self._session_obj
-            if sess is not None:
-                with contextlib.suppress(Exception):
-                    connected = bool(self._session_app_ready(sess))
+        with bounded_runtime_scope(self.record_runtime_duration, "status_stats"):
+            connected = any(self._session_app_ready(session) for session in self._sessions)
             payload = {
                 "peer_state": STATE_CONNECTED if connected else STATE_DISCONNECTED,
-                "stats_snapshot_error": type(exc).__name__,
             }
         session_summary_started_ns = time.monotonic_ns()
         payload["connection_layers"] = [
@@ -4580,7 +4540,7 @@ class ConfigAwareCLI:
 
 RUNTIME_CLI_DESCRIPTION = (
     'Bidirectional UDP/TCP multiplexed transfer with keepalive, '
-    'auto-discovery, meters, dashboard, and overlay state machine'
+    'auto-discovery, WebAdmin metrics, and overlay state machine'
 )
 
 
@@ -4602,7 +4562,6 @@ def default_runtime_registrars() -> List[Tuple[str, Callable[[argparse.ArgumentP
         ("debug_logging",      DebugLoggingConfigurator.register_cli),
         ("telemetry_client",   TelemetryRuntimeSettings.register_client_cli),
         ("telemetry_server",   TelemetryRuntimeSettings.register_server_cli),
-        ("stats_board",        StatsBoard.register_cli),
     ]
 
 

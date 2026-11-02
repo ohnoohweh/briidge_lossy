@@ -7,9 +7,18 @@ import Glibc
 #endif
 
 enum ObstacleBridgeLinuxMain {
-    private final class ForegroundRestartState: @unchecked Sendable {
-        let lock = NSLock()
-        var requested = false
+    private actor ForegroundRestartState {
+        private var requested = false
+
+        func request() {
+            requested = true
+            ObstacleBridgeLinuxMain.requestForegroundShutdown()
+        }
+
+        func consume() -> Bool {
+            defer { requested = false }
+            return requested
+        }
     }
 
     private static let foregroundRestartState = ForegroundRestartState()
@@ -280,8 +289,7 @@ enum ObstacleBridgeLinuxMain {
             if let logWorker { resources.append(logWorker) }
             if configuration.listenerMode {
                 guard let psk = configuration.secureLinkPSK else { throw ObstacleBridgeLinuxRuntimeConfigurationError.missingPSK }
-                let acceptSession: @Sendable (Data) throws -> ObstacleBridgeLinuxConfiguredSession
-                let listenerOpen: @Sendable () -> Bool
+                let acceptor = DispatchQueue(label: "org.obstaclebridge.linux.\(configuration.transport.rawValue)-listener")
                 if configuration.transport == .ws, configuration.webSocketTLS {
                     let listener = try ObstacleBridgeLinuxTLSWebSocketPSKListener(
                         port: configuration.port,
@@ -290,28 +298,38 @@ enum ObstacleBridgeLinuxMain {
                         webSocketPath: configuration.webSocketPath,
                         timeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds
                     )
-                    acceptSession = { try listener.acceptConfiguredSession(psk: psk, serverNonce: $0) }
-                    listenerOpen = { listener.isOpen }
+                    let admissionLoop = DispatchWorkItem {
+                        while listener.isOpen {
+                            var generator = SystemRandomNumberGenerator()
+                            let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+                            do {
+                                runtime.adoptInboundSession(try listener.acceptConfiguredSession(psk: psk, serverNonce: nonce))
+                            } catch where listener.isOpen {
+                                writeError("ObstacleBridgeLinux: listener admission failed: \(error.localizedDescription)")
+                            } catch {
+                                break
+                            }
+                        }
+                    }
+                    acceptor.async(execute: admissionLoop)
                     resources.append(listener)
                 } else {
                     let listener = try ObstacleBridgeLinuxTCPPSKListener(port: configuration.port, transport: configuration.transport, webSocketPath: configuration.webSocketPath)
-                    acceptSession = { try listener.acceptConfiguredSession(psk: psk, serverNonce: $0) }
-                    listenerOpen = { listener.isOpen }
-                    resources.append(listener)
-                }
-                let acceptor = DispatchQueue(label: "org.obstaclebridge.linux.\(configuration.transport.rawValue)-listener")
-                acceptor.async {
-                    while listenerOpen() {
-                        var generator = SystemRandomNumberGenerator()
-                        let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
-                        do {
-                            runtime.adoptInboundSession(try acceptSession(nonce))
-                        } catch where listenerOpen() {
-                            writeError("ObstacleBridgeLinux: listener admission failed: \(error.localizedDescription)")
-                        } catch {
-                            break
+                    let admissionLoop = DispatchWorkItem {
+                        while listener.isOpen {
+                            var generator = SystemRandomNumberGenerator()
+                            let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+                            do {
+                                runtime.adoptInboundSession(try listener.acceptConfiguredSession(psk: psk, serverNonce: nonce))
+                            } catch where listener.isOpen {
+                                writeError("ObstacleBridgeLinux: listener admission failed: \(error.localizedDescription)")
+                            } catch {
+                                break
+                            }
                         }
                     }
+                    acceptor.async(execute: admissionLoop)
+                    resources.append(listener)
                 }
                 resources.append(acceptor)
             } else {
@@ -348,8 +366,8 @@ enum ObstacleBridgeLinuxMain {
     }
 
     private static func installForegroundShutdown(
-        stop: @escaping @Sendable () -> Void,
-        recordSignal: (@Sendable (ObstacleBridgeLinuxShutdownSignal) -> Void)? = nil,
+        stop: @escaping () -> Void,
+        recordSignal: ((ObstacleBridgeLinuxShutdownSignal) -> Void)? = nil,
         admin: ObstacleBridgeLinuxAdminServer?,
         holdSeconds: Int?
     ) -> [Any] {
@@ -360,13 +378,16 @@ enum ObstacleBridgeLinuxMain {
             guard !shutdownStarted else { shutdownLock.unlock(); return }
             shutdownStarted = true
             shutdownLock.unlock()
-            DispatchQueue.global(qos: .userInitiated).async {
+            let shutdownWork = DispatchWorkItem {
                 if let signal { recordSignal?(signal) }
                 stop()
                 admin?.stop()
-                if consumeForegroundRestartRequest() { restartForegroundProcess() }
-                exit(0)
+                Task {
+                    if await foregroundRestartState.consume() { restartForegroundProcess() }
+                    exit(0)
+                }
             }
+            DispatchQueue.global(qos: .userInitiated).async(execute: shutdownWork)
         }
         var resources: [Any] = []
         #if os(Linux)
@@ -400,18 +421,7 @@ enum ObstacleBridgeLinuxMain {
     }
 
     private static func requestForegroundRestart() {
-        foregroundRestartState.lock.lock()
-        foregroundRestartState.requested = true
-        foregroundRestartState.lock.unlock()
-        requestForegroundShutdown()
-    }
-
-    private static func consumeForegroundRestartRequest() -> Bool {
-        foregroundRestartState.lock.lock()
-        defer { foregroundRestartState.lock.unlock() }
-        let requested = foregroundRestartState.requested
-        foregroundRestartState.requested = false
-        return requested
+        Task { await foregroundRestartState.request() }
     }
 
     private static func restartForegroundProcess() -> Never {

@@ -2,6 +2,26 @@ import Foundation
 import Testing
 @testable import ObstacleBridgeCore
 
+private actor SecureLinkServerOwner {
+    private let server: ObstacleBridgeSecureLinkPSKServer
+
+    init(psk: Data) throws {
+        server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
+    }
+
+    func handleClientHello(_ frame: Data, serverNonce: Data) throws -> Data {
+        try server.handleClientHello(frame, serverNonce: serverNonce)
+    }
+
+    func handleClientProof(_ frame: Data) throws -> Data {
+        try server.handleClientProof(frame)
+    }
+
+    func protect(_ payload: Data) throws -> Data {
+        try server.protect(payload)
+    }
+}
+
 struct ObstacleBridgeCryptoTests {
     @Test func muxCompressionRoundTripsAndPreservesNoGainFrames() throws {
         let wire = try ObstacleBridgeChannelMuxFrameCodec.encode(channelID: 7, protocolType: 1, counter: 2, messageType: 0, body: Data(repeating: 65, count: 256))
@@ -109,6 +129,10 @@ struct ObstacleBridgeCryptoTests {
     }
     @Test func myudpCoreStreamReceiveStateUsesTheWireDerivedMissingLimit() throws {
         let state = ObstacleBridgeMyUDPStreamReceiveState()
+        let beyondWindow = UInt16(ObstacleBridgeMyUDPCodec.maximumControlMissingCount + 2)
+        #expect(try #require(state.process(.init(counter: beyondWindow, payload: Data([0])))).accepted == false)
+        #expect(state.expected == 1)
+        #expect(state.pending.isEmpty && state.missing.isEmpty)
         #expect(try #require(state.process(.init(counter: 714, payload: Data([0])))).accepted == false)
         let acknowledgement = state.acknowledgement
         #expect(acknowledgement.lastInOrder == 0)
@@ -757,17 +781,17 @@ struct ObstacleBridgeCryptoTests {
     @Test func secureLinkPskServerSerializesConcurrentProtectedSends() async throws {
         let psk = Data("concurrent-server-psk".utf8)
         let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
-        let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
-        let proof = try client.handleServerHello(server.handleClientHello(
+        let server = try SecureLinkServerOwner(psk: psk)
+        let proof = try client.handleServerHello(try await server.handleClientHello(
             try client.begin(sessionID: 9, clientNonce: Data(repeating: 1, count: 32)),
             serverNonce: Data(repeating: 2, count: 32)
         ))
-        try client.handleServerAcknowledgement(server.handleClientProof(proof))
+        try client.handleServerAcknowledgement(try await server.handleClientProof(proof))
 
         let frames = try await withThrowingTaskGroup(of: Data.self, returning: [Data].self) { group in
             for value in 0..<32 {
                 group.addTask {
-                    try server.protect(Data([UInt8(value)]))
+                    try await server.protect(Data([UInt8(value)]))
                 }
             }
             var collected = [Data]()

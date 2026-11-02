@@ -20,14 +20,16 @@ def _load():
     return module
 
 
-def test_rejects_changed_unchecked_mutable_collection_without_evidence(monkeypatch) -> None:
+def test_rejects_new_unchecked_sendable_conformance(monkeypatch) -> None:
     guard = _load()
     monkeypatch.setattr(
         guard,
         "changed_lines",
-        lambda _args: {"swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTunHelperServer.swift": ["private var clients: [Int32: Int] = [:]"]},
+        lambda _args: {"swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTunHelperServer.swift": ["final class Owner: @unchecked Sendable {}"]},
     )
-    assert len(guard.validate(guard.changed_lines(["--staged"]))) == 1
+    errors = guard.validate(guard.changed_lines(["--staged"]))
+    assert len(errors) == 1
+    assert "forbidden" in errors[0]
 
 
 def test_accepts_lock_marker_with_named_test(monkeypatch) -> None:
@@ -38,3 +40,15 @@ def test_accepts_lock_marker_with_named_test(monkeypatch) -> None:
         lambda _args: {"swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTunHelperServer.swift": ["// OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxTunHelperAdapterTests", "private var clients: [Int32: Int] = [:]"]},
     )
     assert guard.validate(guard.changed_lines(["--staged"])) == []
+
+
+def test_rejects_new_synchronous_primitive_in_legacy_owner(monkeypatch) -> None:
+    guard = _load()
+    monkeypatch.setattr(
+        guard,
+        "changed_lines",
+        lambda _args: {"swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTunHelperServer.swift": ["private let replacementLock = NSLock()"]},
+    )
+    errors = guard.validate(guard.changed_lines(["--staged"]))
+    assert len(errors) == 1
+    assert "synchronous coordination" in errors[0]

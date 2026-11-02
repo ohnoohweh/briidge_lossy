@@ -19,27 +19,28 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(throws: (any Error).self) { _ = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: "/tmp/helper.sock", sessionToken: "token", timeoutMilliseconds: 0) }
     }
 
-    @Test func unixHelperUsesAuthenticatedCommonIPCControlAndPacketFrames() throws {
-        let peer = try UnixHelperPeer(connectionCount: 6); defer { peer.stop() }
-        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: peer.path, sessionToken: peer.token)
+    @Test func unixHelperUsesAuthenticatedCommonIPCControlAndPacketFrames() async throws {
+        let peer = try UnixHelperPeer(connectionCount: 6); await peer.start(); defer { Task { await peer.stop() } }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: await peer.path, sessionToken: await peer.token)
         for command in [ObstacleBridgeTunHelperCommand.openTun, .applyNetwork, .removeNetwork, .snapshot, .stop] {
             let response = try adapter.send(command: command, payload: command == .openTun ? ["ifname": "obtest0", "mtu": 1400] : [:])
             #expect(response["op"] as? String == "\(command.rawValue)_OK")
         }
         _ = try adapter.sendPacketToHelper(Data([0x45, 0x00, 0x12, 0x34]))
-        #expect(peer.waitForExpectedConnections())
-        #expect(peer.operations == ["OPEN_TUN", "APPLY_NETWORK", "REMOVE_NETWORK", "SNAPSHOT", "STOP", "WRITE_PACKET"])
-        #expect(peer.packets == [Data([0x45, 0x00, 0x12, 0x34])])
+        #expect(await peer.waitForExpectedConnections())
+        #expect(await peer.operations == ["OPEN_TUN", "APPLY_NETWORK", "REMOVE_NETWORK", "SNAPSHOT", "STOP", "WRITE_PACKET"])
+        #expect(await peer.packets == [Data([0x45, 0x00, 0x12, 0x34])])
     }
 
-    @Test func helperAppliesAndRollsBackCorePacketTunnelPlan() throws {
-        let peer = try UnixHelperPeer(connectionCount: 2); defer { peer.stop() }
-        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: peer.path, sessionToken: peer.token)
+    @Test func helperAppliesAndRollsBackCorePacketTunnelPlan() async throws {
+        let peer = try UnixHelperPeer(connectionCount: 2); await peer.start(); defer { Task { await peer.stop() } }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: await peer.path, sessionToken: await peer.token)
         let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: ["TUN_routing": ["enabled_on_startup": true, "mtu": 1400]]))
         _ = try adapter.apply(packetTunnelPlan: plan, interfaceName: "obtest0")
         _ = try adapter.rollback(packetTunnelPlan: plan, interfaceName: "obtest0")
-        #expect(peer.operations == ["APPLY_NETWORK", "REMOVE_NETWORK"])
-        let apply = try #require(peer.payloads.first)
+        #expect(await peer.operations == ["APPLY_NETWORK", "REMOVE_NETWORK"])
+        let payload = try #require(await peer.payloads.first)
+        let apply = try #require(try JSONSerialization.jsonObject(with: payload) as? [String: Any])
         #expect(apply["ifname"] as? String == "obtest0")
         let routing = try #require(apply["tun_routing"] as? [String: Any])
         #expect(routing["mtu"] as? Int == 1400)
@@ -59,19 +60,19 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(removed["backend"] as? String == "linux-python-memory")
     }
 
-    @Test func helperApplyFailureRequestsRollbackOnFreshAuthenticatedExchange() throws {
-        let peer = try UnixHelperPeer(connectionCount: 2, disconnectFirstCommandReply: true); defer { peer.stop() }
-        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: peer.path, sessionToken: peer.token)
+    @Test func helperApplyFailureRequestsRollbackOnFreshAuthenticatedExchange() async throws {
+        let peer = try UnixHelperPeer(connectionCount: 2, disconnectFirstCommandReply: true); await peer.start(); defer { Task { await peer.stop() } }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: await peer.path, sessionToken: await peer.token)
         let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: ["TUN_routing": ["enabled_on_startup": true]]))
         #expect(throws: (any Error).self) { try adapter.applyWithRollback(packetTunnelPlan: plan, interfaceName: "obtest0") }
-        #expect(peer.operations == ["APPLY_NETWORK", "REMOVE_NETWORK"])
+        #expect(await peer.operations == ["APPLY_NETWORK", "REMOVE_NETWORK"])
     }
 
-    @Test func helperRejectsWrongSessionTokenBeforeOperation() throws {
-        let peer = try UnixHelperPeer(connectionCount: 1); defer { peer.stop() }
-        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: peer.path, sessionToken: "wrong-token")
+    @Test func helperRejectsWrongSessionTokenBeforeOperation() async throws {
+        let peer = try UnixHelperPeer(connectionCount: 1); await peer.start(); defer { Task { await peer.stop() } }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: await peer.path, sessionToken: "wrong-token")
         #expect(throws: (any Error).self) { try adapter.send(command: .snapshot, payload: [:]) }
-        #expect(peer.operations.isEmpty)
+        #expect((await peer.operations).isEmpty)
     }
 
     @Test func swiftHelperServerAcceptsCommonIPCAuthenticatedControl() throws {
@@ -517,7 +518,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     }
 }
 
-private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
+private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend {
     private let lock = NSLock(); private var receivedPackets: [Data] = []
     private let receivedPacket = DispatchSemaphore(value: 0)
     private let emitEventBeforeReply: Bool
@@ -570,20 +571,19 @@ private final class PythonTunHelperPeer {
     private enum PeerError: Error { case didNotStart }
 }
 
-private final class UnixHelperPeer: @unchecked Sendable {
+private actor UnixHelperPeer {
     let path: String
     let token = "test-helper-token"
     private let listener: Int32
     private let expectedConnections: Int
     private let disconnectFirstCommandReply: Bool
     private let completed = DispatchGroup()
-    private let lock = NSLock()
     private var capturedOperations: [String] = []
     private var capturedPackets: [Data] = []
-    private var capturedPayloads: [[String: Any]] = []
-    var operations: [String] { lock.lock(); defer { lock.unlock() }; return capturedOperations }
-    var packets: [Data] { lock.lock(); defer { lock.unlock() }; return capturedPackets }
-    var payloads: [[String: Any]] { lock.lock(); defer { lock.unlock() }; return capturedPayloads }
+    private var capturedPayloads: [Data] = []
+    var operations: [String] { capturedOperations }
+    var packets: [Data] { capturedPackets }
+    var payloads: [Data] { capturedPayloads }
 
     init(connectionCount: Int, disconnectFirstCommandReply: Bool = false) throws {
         self.expectedConnections = connectionCount; self.disconnectFirstCommandReply = disconnectFirstCommandReply
@@ -595,8 +595,9 @@ private final class UnixHelperPeer: @unchecked Sendable {
         let result = withUnsafePointer(to: &address) { pointer in pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
         guard result == 0, listen(listener, 8) == 0 else { _ = close(listener); throw PeerError.socket }
         for _ in 0..<connectionCount { completed.enter() }
-        DispatchQueue.global().async { [weak self] in self?.serve() }
     }
+
+    func start() { Task { await serve() } }
 
     func stop() { _ = shutdown(listener, Int32(SHUT_RDWR)); _ = close(listener); try? FileManager.default.removeItem(atPath: path) }
     func waitForExpectedConnections() -> Bool { completed.wait(timeout: .now() + 1) == .success }
@@ -616,9 +617,10 @@ private final class UnixHelperPeer: @unchecked Sendable {
                 try? writeControl("HELLO_OK", ["authenticated": true], generation: hello.generation, fd)
                 let frame = try readFrame(fd)
                 guard frame.generation == hello.generation else { return }
-                if frame.kind == .data { lock.lock(); capturedOperations.append("WRITE_PACKET"); capturedPackets.append(frame.payload); lock.unlock(); continue }
+                if frame.kind == .data { capturedOperations.append("WRITE_PACKET"); capturedPackets.append(frame.payload); continue }
                 guard frame.kind == .request, let request = try? decodeControl(frame) else { return }
-                lock.lock(); capturedOperations.append(request.op); capturedPayloads.append(request.payload); lock.unlock()
+                capturedOperations.append(request.op)
+                capturedPayloads.append(try JSONSerialization.data(withJSONObject: request.payload, options: [.sortedKeys]))
                 if disconnectFirstCommandReply && index == 0 { continue }
                 try? writeControl("\(request.op)_OK", ["handled": true], generation: hello.generation, fd)
             } catch {

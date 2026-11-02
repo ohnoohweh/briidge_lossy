@@ -8,8 +8,12 @@ import NIOTLS
 /// kept below the existing WebSocket framing boundary so TLS never changes
 /// overlay, SecureLink, or ChannelMux byte ownership.
 final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSocketByteConnection, @unchecked Sendable {
-    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxOverlayTransportTests
+    // The connection state accessed outside the NIO event loop is guarded by
+    // `lock`; the inbound handler guards its own state with `condition`.
+    // OBSTACLEBRIDGE-CONCURRENCY: lock/condition; test=ObstacleBridgeLinuxOverlayTransportTests
     private final class TLSHandlerBox: @unchecked Sendable {
+        // NIOSSLClientHandler is installed and subsequently owned by exactly
+        // one NIO channel pipeline.
         let handler: NIOSSLClientHandler
         init(_ handler: NIOSSLClientHandler) { self.handler = handler }
     }
@@ -92,7 +96,7 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
         }
     }
 
-    private final class HandshakeObserver: ChannelInboundHandler, @unchecked Sendable {
+    private final class HandshakeObserver: ChannelInboundHandler {
         typealias InboundIn = ByteBuffer
         private let condition = NSCondition()
         private var complete = false

@@ -58,11 +58,12 @@ struct ObstacleBridgeWorkerIPCTests {
         let parent = FileHandle(fileDescriptor: descriptors[1], closeOnDealloc: false)
         let rpc = ObstacleBridgeNativeAdminWorker.ParentRPC(control: child, generation: 7)
         let finished = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
+        let firstCall = DispatchWorkItem {
             defer { finished.signal() }
             do { _ = try rpc.call(method: "get_status_snapshot", requestID: "first") }
             catch { }
         }
+        DispatchQueue.global().async(execute: firstCall)
         let request = try readControl(parent)
         #expect(request["id"] as? String == "first")
         parent.write(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: [

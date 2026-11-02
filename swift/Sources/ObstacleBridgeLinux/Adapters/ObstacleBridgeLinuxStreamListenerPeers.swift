@@ -10,7 +10,7 @@ public struct ObstacleBridgeLinuxStreamListenerSnapshot: Equatable, Sendable {
     public let backpressureRejections: Int
 }
 
-final class ObstacleBridgeLinuxStreamListenerPeers: @unchecked Sendable {
+final class ObstacleBridgeLinuxStreamListenerPeers {
     private let lock = NSLock()
     private var activePeerIDs: Set<Int> = []
     private var writingPeerIDs: Set<Int> = []

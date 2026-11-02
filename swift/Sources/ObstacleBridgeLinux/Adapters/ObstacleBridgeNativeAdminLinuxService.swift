@@ -12,7 +12,7 @@ import Glibc
 /// authenticated API, sessions, configuration, and log-query parity remain
 /// outside this intentionally narrow surface.
 public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
-    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxTunDeviceTests
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxTunDeviceTests (live sessions are actor-owned)
     private static let liveTopics = ["status", "connections", "peers", "tun_routing", "meta"]
     private static let initialLiveTopics = ["status", "connections", "peers", "meta"]
     private struct WebSocketFrame {
@@ -25,12 +25,12 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     /// One live browser connection. All mutable state belongs to `queue`.
     /// The independent timer drives subscriptions while the read and optional
     /// write sources own socket readiness and partial frames/writes.
-    private final class LiveSession: @unchecked Sendable {
+    private actor LiveSession {
         // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxTunDeviceTests
         private let client: Int32
         private let queue: DispatchQueue
-        private let payload: (String) -> [String: Any]?
-        private let finished: (Int32) -> Void
+        private let payload: @Sendable (String) -> [String: Any]?
+        private let finished: @Sendable (Int32) -> Void
         private var topics: Set<String>
         private var nextDue: [String: TimeInterval] = [:]
         private var receiveBuffer = Data()
@@ -41,7 +41,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         private var timer: DispatchSourceTimer?
         private var stopped = false
 
-        init(client: Int32, requestedTopic: String?, handshake: Data, payload: @escaping (String) -> [String: Any]?, finished: @escaping (Int32) -> Void) {
+        init(client: Int32, requestedTopic: String?, handshake: Data, payload: @escaping @Sendable (String) -> [String: Any]?, finished: @escaping @Sendable (Int32) -> Void) {
             self.client = client
             self.queue = DispatchQueue(label: "org.obstaclebridge.linux.native-admin.live.\(client)")
             self.payload = payload
@@ -55,11 +55,11 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         }
 
         func start() {
-            queue.async { [weak self] in self?.startOwned() }
+            startOwned()
         }
 
         func stop() {
-            queue.async { [weak self] in self?.finish() }
+            finish()
         }
 
         private func startOwned() {
@@ -67,11 +67,11 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             guard flags >= 0, fcntl(client, F_SETFL, flags | O_NONBLOCK) == 0 else { finish(); return }
             let read = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
             readSource = read
-            read.setEventHandler { [weak self] in self?.drainInput() }
+            read.setEventHandler { [weak self] in Task { await self?.drainInput() } }
             read.resume()
             let timer = DispatchSource.makeTimerSource(queue: queue)
             self.timer = timer
-            timer.setEventHandler { [weak self] in self?.publishDueTopics() }
+            timer.setEventHandler { [weak self] in Task { await self?.publishDueTopics() } }
             timer.schedule(deadline: .now(), repeating: .milliseconds(100), leeway: .milliseconds(20))
             timer.resume()
             let intervals = Dictionary(uniqueKeysWithValues: ObstacleBridgeNativeAdminLinuxService.liveTopics.map { ($0, ObstacleBridgeAdminLiveTopicPolicyPort.interval($0)) })
@@ -168,7 +168,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             guard writeSource == nil else { return }
             let source = DispatchSource.makeWriteSource(fileDescriptor: client, queue: queue)
             writeSource = source
-            source.setEventHandler { [weak self] in self?.flushOutput() }
+            source.setEventHandler { [weak self] in Task { await self?.flushOutput() } }
             source.resume()
         }
 
@@ -256,7 +256,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         }
         let sessions = liveSessions
         liveSessions.removeAll()
-        for session in sessions.values { session.stop() }
+        for session in sessions.values { Task { await session.stop() } }
         listener = -1
         port = 0
     }
@@ -975,9 +975,9 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             }
         )
         queue.async { [weak self] in
-            guard let self else { session.stop(); return }
+            guard let self else { Task { await session.stop() }; return }
             self.liveSessions[liveClient] = session
-            session.start()
+            Task { await session.start() }
         }
     }
 

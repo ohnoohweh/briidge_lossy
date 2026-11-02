@@ -294,7 +294,11 @@ public enum ObstacleBridgePacketReassemblyResult: Equatable, Sendable {
     case rejected
 }
 
-public final class ObstacleBridgePacketReassembler: @unchecked Sendable {
+/// Mutable packet assembly state is intentionally non-Sendable. The owning
+/// ChannelMux UDP/TUN runtime serializes every consume, withdrawal, and reset
+/// on its transport executor; adapters pass only its `Sendable` result across
+/// concurrency boundaries.
+public final class ObstacleBridgePacketReassembler {
     private struct Key: Hashable { let channelID: UInt16; let datagramID: UInt32 }
     private struct State { let totalLength: Int; var parts: [Int: Data]; var received: Int }
     private let maximumDatagrams: Int
@@ -354,7 +358,10 @@ public final class ObstacleBridgePacketReassembler: @unchecked Sendable {
 /// Portable lifecycle state for one logical TUN endpoint. Packet-device
 /// adapters provide I/O only; they ask this state object which ChannelMux
 /// channel is active and feed lifecycle events back into it.
-public final class ObstacleBridgeTunChannelState: @unchecked Sendable {
+/// Binding state is executor-confined to `ObstacleBridgeChannelMuxTunRuntime`.
+/// It intentionally has no `Sendable` conformance; adapters receive immutable
+/// channel identifiers and snapshots rather than sharing this owner.
+public final class ObstacleBridgeTunChannelState {
     private var boundChannelIDs: Set<Int> = []
     private var preferredChannelID: Int?
 
@@ -580,7 +587,9 @@ public struct ObstacleBridgeTunDropSnapshot: Equatable, Sendable {
 
 /// Bounded, portable TUN drop accounting. Adapters choose when an OS write or
 /// read occurs; every policy drop is recorded in this Core ledger.
-public final class ObstacleBridgeTunDropLedger: @unchecked Sendable {
+/// Drop accounting is executor-confined to `ObstacleBridgeChannelMuxTunRuntime`.
+/// Its snapshots are value types and are the only cross-concurrency output.
+public final class ObstacleBridgeTunDropLedger {
     private let maximumRecent: Int
     private var total = 0
     private var byReason: [String: Int] = [:]

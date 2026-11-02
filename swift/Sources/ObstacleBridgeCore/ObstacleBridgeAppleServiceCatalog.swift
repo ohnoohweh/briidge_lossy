@@ -14,7 +14,10 @@ public struct ObstacleBridgeNativeServiceCatalogInstall {
 /// Portable facade for a peer-published RS3 catalog. The Core store owns
 /// epoch/replay validation and atomic replacement; resource owners only turn
 /// an accepted result into platform listener start/stop operations.
-public final class ObstacleBridgeAppleServiceCatalog: @unchecked Sendable {
+/// Each Apple/Linux transport owner retains one catalog on its serial runtime
+/// executor. The catalog returns value-only installs and intentionally does
+/// not claim independent Sendable ownership.
+public final class ObstacleBridgeAppleServiceCatalog {
     struct Install {
         let accepted: Bool
         let removed: [ObstacleBridgeChannelMuxCodec.ServiceSpec]

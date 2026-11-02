@@ -204,7 +204,8 @@ public final class ObstacleBridgeLinuxMyUDPListener {
 /// has one socket reader: authenticated child sessions receive records through
 /// per-peer isolated handoff boxes, while the shared listener continues to own
 /// endpoint selection and Core peer-registry effects.
-public final class ObstacleBridgeLinuxMyUDPPSKListener: @unchecked Sendable {
+public final class ObstacleBridgeLinuxMyUDPPSKListener {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests
     private final class PeerBox: @unchecked Sendable {
         let identity: String
         let server: ObstacleBridgeSecureLinkPSKServer

@@ -2,7 +2,9 @@ import Foundation
 
 /// State machine used by an Apple HTTPS transport. It owns no sockets, so all
 /// DNS, TLS, and request work remains outside producer and packet callbacks.
-public final class ObstacleBridgeTelemetryUploadPolicy: @unchecked Sendable {
+/// Non-Sendable upload state. Its `Request` result is immutable and Sendable,
+/// so network owners do not need to share policy mutation across executors.
+public final class ObstacleBridgeTelemetryUploadPolicy {
     public struct Request: Sendable { public let endpoint: URL; public let payload: Data; public let installationID: String; public let sessionID: String; public let firstSequence: UInt64; public let lastSequence: UInt64 }
     private let spool: ObstacleBridgeTelemetrySpool
     private let endpoint: URL

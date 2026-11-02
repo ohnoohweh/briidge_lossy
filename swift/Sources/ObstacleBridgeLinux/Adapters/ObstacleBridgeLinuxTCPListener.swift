@@ -8,7 +8,7 @@ import ObstacleBridgeCore
 /// Sequential TCP or cleartext WebSocket SecureLink server used by the Linux
 /// listener admission path. ChannelMux/runtime ownership remains above this
 /// raw transport boundary.
-public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
+public final class ObstacleBridgeLinuxTCPPSKListener {
     private var descriptor: Int32
     private let transport: ObstacleBridgeLinuxTransport
     private let webSocketPath: String

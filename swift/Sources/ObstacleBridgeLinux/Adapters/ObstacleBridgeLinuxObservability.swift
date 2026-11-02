@@ -6,7 +6,9 @@ import ObstacleBridgeDesktopShared
 /// network I/O on runtime callbacks: telemetry is first persisted through the
 /// shared private spool, and the optional uploader drains that spool outside
 /// the foreground runtime's callback path.
-public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
+/// Non-Sendable observability state. Its dedicated file-I/O queue owns log
+/// writes; callers receive only telemetry and diagnostic value snapshots.
+public final class ObstacleBridgeLinuxObservability {
     private static let diagnosticLogMaximumBytes = 1_048_576
     private static let diagnosticLogBackupCount = 5
     private static let diagnosticLogMaximumPendingWrites = 64
@@ -123,13 +125,14 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
         }
         pendingWrites += 1
         pendingWriteLock.unlock()
-        fileWriteQueue.async { [weak self] in
+        let write = DispatchWorkItem { [weak self] in
             guard let self else { return }
             defer {
                 self.pendingWriteLock.lock(); self.pendingWrites -= 1; self.pendingWriteLock.unlock()
             }
             self.appendLogLine(data, to: fileURL)
         }
+        fileWriteQueue.async(execute: write)
     }
 
     /// Runs only on the utility queue.  File failures are diagnostic-only.

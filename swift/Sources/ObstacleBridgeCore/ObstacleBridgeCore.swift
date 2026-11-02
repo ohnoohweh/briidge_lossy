@@ -411,7 +411,9 @@ public enum ObstacleBridgeSecureLinkPSKCounter {
 /// The client half of the SecureLink v1 PSK handshake and protected-data
 /// envelope. Transport ownership remains external, which makes the same state
 /// machine usable over Linux TCP and WebSocket lower transports.
-public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
+/// Non-Sendable SecureLink state owned by one transport session. Transport
+/// code exchanges only encrypted frames and immutable state snapshots.
+public final class ObstacleBridgeSecureLinkPSKClient {
     private let psk: Data
     private let handshakeTimeout: TimeInterval
     private let timeProvider: () -> TimeInterval
@@ -786,7 +788,9 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
 /// Server half of the SecureLink v1 PSK handshake.  It deliberately mirrors
 /// the client directional keys so a Linux listener can authenticate a Python
 /// client without delegating any cryptographic operation to Python.
-public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
+/// Non-Sendable SecureLink state owned by one transport session. Transport
+/// code exchanges only encrypted frames and immutable state snapshots.
+public final class ObstacleBridgeSecureLinkPSKServer {
     private let psk: Data
     private let handshakeTimeout: TimeInterval
     private let rekeyOverlap: TimeInterval

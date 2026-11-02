@@ -2,6 +2,24 @@ import Foundation
 import Testing
 @testable import ObstacleBridgeCore
 
+private actor TelemetryEmitterOwner {
+    private let emitter: ObstacleBridgeTelemetryEmitter
+
+    init() throws {
+        emitter = try ObstacleBridgeTelemetryEmitter(
+            installationID: "install-01", sessionID: "session-01", capacity: 8
+        )
+    }
+
+    func emitLowPriorityLoad() -> Bool {
+        emitter.emit(event: "runtime.load", priority: .low)
+    }
+
+    func drain() -> [ObstacleBridgeTelemetryEvent] {
+        emitter.drain(limit: 128)
+    }
+}
+
 struct ObstacleBridgeTelemetryTests {
     @Test func adminServiceConnectionRolesFollowThePortableCatalogContract() {
         #expect(ObstacleBridgeAdminSnapshotSupport.serviceConnectionRole(catalog: "own_servers") == "server")
@@ -108,6 +126,31 @@ struct ObstacleBridgeTelemetryTests {
         ])
         #expect(throttle["applicable"] as? Bool == true)
         #expect(throttle["active"] as? Bool == false)
+    }
+
+    @Test func liveTopicPayloadEvaluatesOnlyItsSelectedSnapshot() {
+        var statusCalls = 0
+        var peerCalls = 0
+        var connectionCalls = 0
+        func status() -> [String: Any] { statusCalls += 1; return ["app": "test"] }
+        func peers() -> [[String: Any]] { peerCalls += 1; return [["id": 1]] }
+        func connections() -> [String: Any] { connectionCalls += 1; return ["tcp": []] }
+
+        let connectionsPayload = ObstacleBridgeAdminLiveTopicPort.payload(
+            topic: "connections", status: status(), peers: peers(), connections: connections()
+        ) as? [String: Any]
+        #expect(connectionsPayload?["tcp"] as? [Any] != nil)
+        #expect(statusCalls == 0)
+        #expect(peerCalls == 0)
+        #expect(connectionCalls == 1)
+
+        let peersPayload = ObstacleBridgeAdminLiveTopicPort.payload(
+            topic: "peers", status: status(), peers: peers(), connections: connections()
+        ) as? [String: Any]
+        #expect((peersPayload?["peers"] as? [[String: Any]])?.count == 1)
+        #expect(statusCalls == 0)
+        #expect(peerCalls == 1)
+        #expect(connectionCalls == 1)
     }
 
     @Test func adminStatusEnvelopeOwnsSharedDashboardFields() {
@@ -233,12 +276,12 @@ struct ObstacleBridgeTelemetryTests {
     }
 
     @Test func concurrentEmissionStaysBoundedAndNeverThrows() async throws {
-        let emitter = try ObstacleBridgeTelemetryEmitter(installationID: "install-01", sessionID: "session-01", capacity: 8)
+        let emitter = try TelemetryEmitterOwner()
         await withTaskGroup(of: Bool.self) { group in
-            for _ in 0..<128 { group.addTask { emitter.emit(event: "runtime.load", priority: .low) } }
+            for _ in 0..<128 { group.addTask { await emitter.emitLowPriorityLoad() } }
             for await _ in group {}
         }
-        #expect(emitter.drain(limit: 128).count <= 8)
+        #expect(await emitter.drain().count <= 8)
     }
 
     @Test func spoolQuarantinesCorruptSegmentsAndEvictsLowPriorityFirst() throws {

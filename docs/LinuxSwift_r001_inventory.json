@@ -340,7 +340,7 @@
     {
       "id": "myudp-reliability",
       "requirements": ["REQ-MYU-001", "REQ-MYU-002", "REQ-MYU-003", "REQ-MYU-004", "REQ-MYU-005", "REQ-MYU-006", "REQ-MYU-007"],
-      "python_implementations": ["src/obstacle_bridge/bridge_transport_udp.py", "src/obstacle_bridge/bridge_stats.py"],
+      "python_implementations": ["src/obstacle_bridge/bridge_transport_udp.py"],
       "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift", "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxMyUDPListener.swift", "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxMyUDPTransport.swift"],
       "python_tests": ["tests/unit/test_myudp2_stream_session.py::test_myudp2_session_delivers_only_contiguous_stream_bytes_after_reorder"],
       "swift_tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpDataFrameMatchesPythonV2Layout", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpRegistryListenerKeepsTwoUdpPeersIsolated", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDataFrameRoundTripsAgainstPythonPeer"],
