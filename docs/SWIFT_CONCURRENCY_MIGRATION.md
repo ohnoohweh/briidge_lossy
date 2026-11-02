@@ -49,6 +49,14 @@ probing WebAdmin. Its control-request completion is an
 owner without sharing non-Sendable state. The full macOS package build verifies
 that `ObstacleBridgeMacAppMain.swift` emits no strict-concurrency diagnostics.
 
+The telemetry uploader's upload completion is `@Sendable`, so the URLSession
+callback does not transfer a non-Sendable completion. Its mutable policy and
+status still live in an `NSObject` URLSession delegate, which the compiler
+infers as Sendable. `@preconcurrency` does not alter that conformance and is
+not used. The remaining fix is to split the certificate callback delegate from
+an actor-owned uploader state machine, rather than hiding its mutable state
+behind an unchecked conformance.
+
 The findings fall into four migration groups:
 
 1. Dispatch, Network, URLSession, XPC, and Network Extension callbacks capture

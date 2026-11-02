@@ -2114,6 +2114,12 @@ def test_macos_build_enables_complete_strict_concurrency_for_every_swiftc_produc
     assert build_script.count('"${SWIFT_EXTRA_FLAGS_EXPANDED[@]}"') == 5
 
 
+def test_macos_telemetry_uploader_requires_sendable_upload_completions() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift").read_text(encoding="utf-8")
+
+    assert "completion: @escaping @Sendable (Bool) -> Void" in source
+
+
 class _AsyncBridgeClientThread:
     def __init__(self, config: dict) -> None:
         self.client = ObstacleBridgeClient(_group_python_peer_config(config))

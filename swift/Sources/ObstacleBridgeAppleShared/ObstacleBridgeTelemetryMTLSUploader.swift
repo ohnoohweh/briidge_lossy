@@ -30,7 +30,7 @@ final class ObstacleBridgeTelemetryMTLSUploader: NSObject, URLSessionDelegate {
     }
 
     /// Starts at most one upload; policy failure keeps the spool untouched.
-    func uploadOnce(completion: @escaping (Bool) -> Void = { _ in }) {
+    func uploadOnce(completion: @escaping @Sendable (Bool) -> Void = { _ in }) {
         guard let pending = policy.nextRequest() else { completion(false); return }
         statusLock.lock()
         attempts &+= 1
