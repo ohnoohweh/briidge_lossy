@@ -391,16 +391,16 @@ private actor ProxyListener {
             // dispatch pool, whose bounded worker count can otherwise let
             // idle clients starve unrelated accepted connections.
             let owner = self
-            Task.detached { [owner, settings, logger] in
-                do { try await ProxyListener.serve(client, settings: settings, logger: logger, recordTraffic: { received, sent in
-                    await owner.recordTraffic(received: received, sent: sent)
+            Thread.detachNewThread { [owner, settings, logger] in
+                do { try ProxyListener.serve(client, settings: settings, logger: logger, recordTraffic: { received, sent in
+                    Task { await owner.recordTraffic(received: received, sent: sent) }
                 })
                     close(client)
-                    await owner.finishClient(success: true)
+                    Task { await owner.finishClient(success: true) }
                 } catch {
                     logger?.emit(30, "[PROXY] client failed")
                     close(client)
-                    await owner.finishClient(success: false)
+                    Task { await owner.finishClient(success: false) }
                 }
             }
         }
@@ -415,8 +415,8 @@ private actor ProxyListener {
         rx += received; tx += sent
     }
 
-    nonisolated private static func serve(_ client: Int32, settings: ProxySettings, logger: ChildLogger?, recordTraffic: @escaping @Sendable (Int, Int) async -> Void) async throws {
-        if settings.socks { try await serveSOCKS(client, settings: settings, logger: logger, recordTraffic: recordTraffic) } else { try await serveHTTP(client, settings: settings, logger: logger, recordTraffic: recordTraffic) }
+    nonisolated private static func serve(_ client: Int32, settings: ProxySettings, logger: ChildLogger?, recordTraffic: @escaping @Sendable (Int, Int) -> Void) throws {
+        if settings.socks { try serveSOCKS(client, settings: settings, logger: logger, recordTraffic: recordTraffic) } else { try serveHTTP(client, settings: settings, logger: logger, recordTraffic: recordTraffic) }
     }
 
     nonisolated private static func connectOutbound(_ host: String, _ port: Int, secure: Bool, settings: ProxySettings) throws -> Int32 {
@@ -425,7 +425,7 @@ private actor ProxyListener {
             : try connectDirect(host, port, policy: settings.policy)
     }
 
-    nonisolated private static func serveHTTP(_ client: Int32, settings: ProxySettings, logger: ChildLogger?, recordTraffic: @escaping @Sendable (Int, Int) async -> Void) async throws {
+    nonisolated private static func serveHTTP(_ client: Int32, settings: ProxySettings, logger: ChildLogger?, recordTraffic: @escaping @Sendable (Int, Int) -> Void) throws {
         var header = Data()
         while header.count < 65_536 {
             header.append(try readExact(client, 1))
@@ -471,12 +471,12 @@ private actor ProxyListener {
             let retained = rows.dropFirst().filter { !$0.isEmpty && !$0.lowercased().hasPrefix("proxy-authorization:") && !$0.lowercased().hasPrefix("proxy-connection:") }
             let rewritten = (["\(parts[0]) \(target) \(parts[2])"] + retained).joined(separator: "\r\n") + "\r\n\r\n"
             try writeAll(remote, Data(rewritten.utf8))
-            await recordTraffic(rewritten.utf8.count, 0)
+            recordTraffic(rewritten.utf8.count, 0)
         }
-        await relay(client, remote, recordTraffic: recordTraffic)
+        relay(client, remote, recordTraffic: recordTraffic)
     }
 
-    nonisolated private static func serveSOCKS(_ client: Int32, settings: ProxySettings, logger: ChildLogger?, recordTraffic: @escaping @Sendable (Int, Int) async -> Void) async throws {
+    nonisolated private static func serveSOCKS(_ client: Int32, settings: ProxySettings, logger: ChildLogger?, recordTraffic: @escaping @Sendable (Int, Int) -> Void) throws {
         let greeting = [UInt8](try readExact(client, 2))
         guard greeting[0] == 5 else { throw WorkerError.invalid }
         let methods = [UInt8](try readExact(client, Int(greeting[1])))
@@ -515,10 +515,10 @@ private actor ProxyListener {
         }
         defer { close(remote) }
         try writeAll(client, Data([5, 0, 0, 1, 0, 0, 0, 0, 0, 0]))
-        await relay(client, remote, recordTraffic: recordTraffic)
+        relay(client, remote, recordTraffic: recordTraffic)
     }
 
-    nonisolated private static func relay(_ left: Int32, _ right: Int32, recordTraffic: @escaping @Sendable (Int, Int) async -> Void) async {
+    nonisolated private static func relay(_ left: Int32, _ right: Int32, recordTraffic: @escaping @Sendable (Int, Int) -> Void) {
         // A session owns one dispatch thread. Waiting on nested dispatch jobs
         // can starve the shared pool under simultaneous proxy connections.
         // Bounded nonblocking buffers preserve independent duplex progress and
@@ -556,7 +556,7 @@ private actor ProxyListener {
                     let sent = pending[incoming].withUnsafeBytes { send(fds[direction], $0.baseAddress, $0.count, Int32(MSG_DONTWAIT)) }
                     if sent > 0 {
                         pending[incoming].removeFirst(sent)
-                        if incoming == 0 { await recordTraffic(sent, 0) } else { await recordTraffic(0, sent) }
+                        if incoming == 0 { recordTraffic(sent, 0) } else { recordTraffic(0, sent) }
                     } else if sent == 0 || (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) { return }
                 }
                 if !eof[direction] && pending[direction].count < capacity && events & Int16(POLLIN | POLLHUP) != 0 {
