@@ -89,6 +89,9 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     policy = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
     assert "SecIdentity" in source
+    assert "private final class ObstacleBridgeTelemetryMTLSDelegate" in source
+    assert "final class ObstacleBridgeTelemetryMTLSUploader {" in source
+    assert "delegate: sessionDelegate" in source
     assert "NSURLAuthenticationMethodClientCertificate" in source
     assert "performDefaultHandling" in source
     assert "ObstacleBridgeTelemetryAdminStatus" in source

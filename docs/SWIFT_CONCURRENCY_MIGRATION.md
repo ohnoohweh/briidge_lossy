@@ -50,12 +50,11 @@ owner without sharing non-Sendable state. The full macOS package build verifies
 that `ObstacleBridgeMacAppMain.swift` emits no strict-concurrency diagnostics.
 
 The telemetry uploader's upload completion is `@Sendable`, so the URLSession
-callback does not transfer a non-Sendable completion. Its mutable policy and
-status still live in an `NSObject` URLSession delegate, which the compiler
-infers as Sendable. `@preconcurrency` does not alter that conformance and is
-not used. The remaining fix is to split the certificate callback delegate from
-an actor-owned uploader state machine, rather than hiding its mutable state
-behind an unchecked conformance.
+callback does not transfer a non-Sendable completion. Certificate challenge
+handling now lives in a dedicated URLSession delegate that owns only the
+credential; the mutable policy and status uploader is no longer itself a
+delegate. The next compiler pass establishes the remaining callback ownership
+work without hiding state behind an unchecked conformance.
 
 The findings fall into four migration groups:
 

@@ -2,11 +2,28 @@ import Foundation
 #if canImport(Security)
 import Security
 
+/// The URLSession callback surface owns only the enrolled client credential.
+private final class ObstacleBridgeTelemetryMTLSDelegate: NSObject, URLSessionDelegate {
+    private let credential: URLCredential
+
+    init(credential: URLCredential) {
+        self.credential = credential
+    }
+
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
+            completionHandler(.useCredential, credential)
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
+}
+
 /// Apple HTTPS transport for `telemetry/v1`. Callers supply the enrolled client
 /// identity; this type neither reads credentials from configuration nor logs them.
-final class ObstacleBridgeTelemetryMTLSUploader: NSObject, URLSessionDelegate {
+final class ObstacleBridgeTelemetryMTLSUploader {
     private let policy: ObstacleBridgeTelemetryUploadPolicy
-    private let credential: URLCredential
+    private let sessionDelegate: ObstacleBridgeTelemetryMTLSDelegate
     private let statusLock = NSLock()
     private var attempts: UInt64 = 0
     private var acceptedBatches: UInt64 = 0
@@ -20,13 +37,14 @@ final class ObstacleBridgeTelemetryMTLSUploader: NSObject, URLSessionDelegate {
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 5
         configuration.timeoutIntervalForResource = 30
-        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        return URLSession(configuration: configuration, delegate: sessionDelegate, delegateQueue: nil)
     }()
 
     init(policy: ObstacleBridgeTelemetryUploadPolicy, identity: SecIdentity, certificates: [Any] = []) {
         self.policy = policy
-        credential = URLCredential(identity: identity, certificates: certificates, persistence: .forSession)
-        super.init()
+        sessionDelegate = ObstacleBridgeTelemetryMTLSDelegate(
+            credential: URLCredential(identity: identity, certificates: certificates, persistence: .forSession)
+        )
     }
 
     /// Starts at most one upload; policy failure keeps the spool untouched.
@@ -91,13 +109,6 @@ final class ObstacleBridgeTelemetryMTLSUploader: NSObject, URLSessionDelegate {
         session.invalidateAndCancel()
     }
 
-    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
-            completionHandler(.useCredential, credential)
-        } else {
-            completionHandler(.performDefaultHandling, nil)
-        }
-    }
 }
 
 enum ObstacleBridgeTelemetryIdentityStore {
