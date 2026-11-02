@@ -11,7 +11,10 @@ enum ObstacleBridgeAppleOverlayConnectionEndpoint {
 
 }
 
-final class ObstacleBridgeUDPServerConnectionDriver {
+/// This driver is confined to its injected owner queue. Network callbacks only
+/// publish immutable callback values onto that queue before touching state.
+final class ObstacleBridgeUDPServerConnectionDriver: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_overlay_connection_drivers_keep_callbacks_on_owner_queue
     struct SnapshotEvent {
         let chanID: Int
         let frames: [Data]
@@ -73,69 +76,72 @@ final class ObstacleBridgeUDPServerConnectionDriver {
             return
         }
         connection.receiveMessage { [weak self] data, _, _, error in
-            self?.queue.async {
-                guard let self, self.startedProvider() else { return }
+            guard let driver = self else { return }
+            driver.queue.async {
+                guard driver.startedProvider() else { return }
                 if let data, !data.isEmpty {
-                    let endpoint = ObstacleBridgeAppleOverlayConnectionEndpoint.endpointDescription(self.connection.endpoint)
-                    self.eventSink("\(self.eventPrefix)_udp_server_datagram_read", [
+                    let endpoint = ObstacleBridgeAppleOverlayConnectionEndpoint.endpointDescription(driver.connection.endpoint)
+                    driver.eventSink("\(driver.eventPrefix)_udp_server_datagram_read", [
                         "bytes": data.count,
                         "source_host": endpoint.host,
                         "source_port": endpoint.port,
-                        "service_id": self.spec.svcID,
-                        "overlay_connected": self.overlayConnectedProvider(),
+                        "service_id": driver.spec.svcID,
+                        "overlay_connected": driver.overlayConnectedProvider(),
                     ])
                     do {
-                        if let snapshot = try self.runtime.handleLocalServerDatagram(
-                            spec: self.spec,
-                            serviceKey: self.serviceKey,
+                        if let snapshot = try driver.runtime.handleLocalServerDatagram(
+                            spec: driver.spec,
+                            serviceKey: driver.serviceKey,
                             payload: data,
                             addrHost: endpoint.host,
                             addrPort: endpoint.port,
-                            overlayConnected: self.overlayConnectedProvider(),
+                            overlayConnected: driver.overlayConnectedProvider(),
                             acceptingEnabled: true
                         ) {
-                            self.chanID = snapshot.chanID
-                            self.eventSink("\(self.eventPrefix)_udp_server_datagram_mux", [
+                            driver.chanID = snapshot.chanID
+                            driver.eventSink("\(driver.eventPrefix)_udp_server_datagram_mux", [
                                 "chan_id": snapshot.chanID,
                                 "bytes": data.count,
                                 "frames": snapshot.frames.count,
                             ])
-                            self.handleSnapshot(.init(chanID: snapshot.chanID, frames: snapshot.frames, bytes: data.count))
+                            driver.handleSnapshot(.init(chanID: snapshot.chanID, frames: snapshot.frames, bytes: data.count))
                         } else {
-                            self.eventSink("\(self.eventPrefix)_udp_server_datagram_rejected", [
+                            driver.eventSink("\(driver.eventPrefix)_udp_server_datagram_rejected", [
                                 "bytes": data.count,
-                                "service_id": self.spec.svcID,
-                                "overlay_connected": self.overlayConnectedProvider(),
+                                "service_id": driver.spec.svcID,
+                                "overlay_connected": driver.overlayConnectedProvider(),
                             ])
                         }
                     } catch {
-                        self.eventSink("\(self.eventPrefix)_udp_server_datagram_failed", [
+                        driver.eventSink("\(driver.eventPrefix)_udp_server_datagram_failed", [
                             "bytes": data.count,
                             "error": error.localizedDescription,
                         ])
                     }
                 }
                 if error != nil {
-                    self.eventSink("\(self.eventPrefix)_udp_server_receive_error", [
-                        "chan_id": self.chanID ?? -1,
+                    driver.eventSink("\(driver.eventPrefix)_udp_server_receive_error", [
+                        "chan_id": driver.chanID ?? -1,
                         "error": error?.localizedDescription ?? "",
                     ])
-                    if let chanID = self.chanID {
-                        let snapshot = self.runtime.handleInboundClose(chanID: chanID)
-                        self.handleClosed(snapshot.closed ? chanID : nil)
+                    if let chanID = driver.chanID {
+                        let snapshot = driver.runtime.handleInboundClose(chanID: chanID)
+                        driver.handleClosed(snapshot.closed ? chanID : nil)
                     } else {
-                        self.handleClosed(nil)
+                        driver.handleClosed(nil)
                     }
-                    self.connection.cancel()
+                    driver.connection.cancel()
                     return
                 }
-                self.receiveNext()
+                driver.receiveNext()
             }
         }
     }
 }
 
-final class ObstacleBridgeUDPClientConnectionDriver {
+/// This driver shares the server driver's injected serial owner queue.
+final class ObstacleBridgeUDPClientConnectionDriver: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_overlay_connection_drivers_keep_callbacks_on_owner_queue
     private let chanID: Int
     private let spec: ObstacleBridgeChannelMuxCodec.ServiceSpec
     private let queue: DispatchQueue
@@ -204,8 +210,9 @@ final class ObstacleBridgeUDPClientConnectionDriver {
         self.connection = connection
         registerConnection(connection)
         connection.stateUpdateHandler = { [weak self] state in
-            self?.queue.async {
-                self?.handleState(state)
+            guard let driver = self else { return }
+            driver.queue.async {
+                driver.handleState(state)
             }
         }
         connection.start(queue: queue)
@@ -265,27 +272,28 @@ final class ObstacleBridgeUDPClientConnectionDriver {
             return
         }
         connection.receiveMessage { [weak self] data, _, _, error in
-            self?.queue.async {
-                guard let self, self.startedProvider(), !self.closed else { return }
+            guard let driver = self else { return }
+            driver.queue.async {
+                guard driver.startedProvider(), !driver.closed else { return }
                 if let data, !data.isEmpty,
-                   let snapshot = try? self.runtime.handleLocalClientDatagram(chanID: self.chanID, payload: data) {
-                    self.eventSink("\(self.failureEvent.replacingOccurrences(of: "_failed", with: ""))_data_read", [
-                        "chan_id": self.chanID,
+                   let snapshot = try? driver.runtime.handleLocalClientDatagram(chanID: driver.chanID, payload: data) {
+                    driver.eventSink("\(driver.failureEvent.replacingOccurrences(of: "_failed", with: ""))_data_read", [
+                        "chan_id": driver.chanID,
                         "bytes": data.count,
                         "frames": snapshot.frames.count,
                     ])
-                    self.sendMuxFrames(snapshot.frames)
-                    self.recordOutbound(data.count)
+                    driver.sendMuxFrames(snapshot.frames)
+                    driver.recordOutbound(data.count)
                 }
                 if error != nil {
-                    self.eventSink("\(self.failureEvent.replacingOccurrences(of: "_failed", with: ""))_receive_error", [
-                        "chan_id": self.chanID,
+                    driver.eventSink("\(driver.failureEvent.replacingOccurrences(of: "_failed", with: ""))_receive_error", [
+                        "chan_id": driver.chanID,
                         "error": error?.localizedDescription ?? "",
                     ])
-                    self.stop(notifyClosed: true)
+                    driver.stop(notifyClosed: true)
                     return
                 }
-                self.receiveNext()
+                driver.receiveNext()
             }
         }
     }

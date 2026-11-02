@@ -19,17 +19,24 @@ EVIDENCE_FORMAT = re.compile(
 # This expanded rule cannot retroactively require evidence from earlier PR
 # work. Every Swift product-source change after this adoption point is gated.
 POLICY_BASELINE = "c4e994c4"
-AUDITED_SYNCHRONOUS_OWNER = (
-    "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTelemetryMTLSUploader.swift",
-    "ObstacleBridgeTelemetryLockedUploadState: @unchecked Sendable",
-    "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_macos_telemetry_uploader_uses_audited_synchronous_state",
+AUDITED_SYNCHRONOUS_OWNERS = (
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTelemetryMTLSUploader.swift",
+        "ObstacleBridgeTelemetryLockedUploadState: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_macos_telemetry_uploader_uses_audited_synchronous_state",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeOverlayConnectionSupport.swift",
+        "ObstacleBridgeUDPServerConnectionDriver: @unchecked Sendable",
+        "ObstacleBridgeUDPClientConnectionDriver: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_overlay_connection_drivers_keep_callbacks_on_owner_queue",
+    ),
 )
 
 def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:
     """Allow the one documented synchronous Apple bridge, never a broad exemption."""
-    expected_path, expected_owner, expected_evidence = AUDITED_SYNCHRONOUS_OWNER
     additions = "\n".join(added)
-    return path == expected_path and expected_owner in additions and expected_evidence in additions
+    return any(path == owner[0] and all(marker in additions for marker in owner[1:]) for owner in AUDITED_SYNCHRONOUS_OWNERS)
 
 def effective_base(base_ref: str) -> str:
     if subprocess.run(["git", "merge-base", "--is-ancestor", base_ref, POLICY_BASELINE], cwd=ROOT).returncode == 0:

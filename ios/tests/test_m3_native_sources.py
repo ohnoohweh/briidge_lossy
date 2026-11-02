@@ -1919,3 +1919,13 @@ def test_native_ios_tun_connector_schema_is_shared_with_macos_host_runner() -> N
         assert f'schemaItem(key: "{key}"' in policy
     assert "ObstacleBridgeRuntimeConfig.configSchemaSnapshot()" in macos_runner
     assert "_ = try controlServer.startAndWait(timeout: 5)" in macos_runner
+
+
+def test_overlay_connection_drivers_keep_callbacks_on_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayConnectionSupport.swift").read_text(encoding="utf-8")
+
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_overlay_connection_drivers_keep_callbacks_on_owner_queue") == 2
+    assert "final class ObstacleBridgeUDPServerConnectionDriver: @unchecked Sendable" in source
+    assert "final class ObstacleBridgeUDPClientConnectionDriver: @unchecked Sendable" in source
+    assert "guard let driver = self else { return }" in source
+    assert "driver.queue.async" in source
