@@ -7,7 +7,11 @@ import ObstacleBridgeCore
 
 /// TLS-terminating WebSocket listener.  NIO owns the accepted TLS channels;
 /// SecureLink is admitted only after the HTTP upgrade has completed.
-public final class ObstacleBridgeLinuxTLSWebSocketPSKListener {
+public final class ObstacleBridgeLinuxTLSWebSocketPSKListener: @unchecked Sendable {
+    // NIO invokes child-channel initializers concurrently. Listener state
+    // shared with those callbacks is serialized by `condition` or by the
+    // thread-safe peer registry.
+    // OBSTACLEBRIDGE-CONCURRENCY: condition; test=ObstacleBridgeLinuxOverlayTransportTests
     private final class Inbound: ChannelInboundHandler {
         typealias InboundIn = ByteBuffer
         let condition = NSCondition(); var bytes = Data(); var inactive = false

@@ -140,15 +140,15 @@ private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
     }
 }
 
-private final class ObstacleBridgeLinuxTCPLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner {
+private final class ObstacleBridgeLinuxTCPLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner, @unchecked Sendable {
     init(runtime: ObstacleBridgeLinuxConfiguredRuntime) { super.init(runtime: runtime, expectedTransport: .tcp) }
 }
 
-private final class ObstacleBridgeLinuxQUICLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner {
+private final class ObstacleBridgeLinuxQUICLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner, @unchecked Sendable {
     init(runtime: ObstacleBridgeLinuxConfiguredRuntime) { super.init(runtime: runtime, expectedTransport: .quic) }
 }
 
-private final class ObstacleBridgeLinuxWebSocketLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner {
+private final class ObstacleBridgeLinuxWebSocketLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner, @unchecked Sendable {
     init(runtime: ObstacleBridgeLinuxConfiguredRuntime) { super.init(runtime: runtime, expectedTransport: .ws) }
 }
 

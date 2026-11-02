@@ -12,8 +12,10 @@ import Glibc
 /// synchronous, so this class bridges that boundary without making Core or
 /// configured-runtime ownership depend on NIO types.
 final class ObstacleBridgeLinuxQUICSession: @unchecked Sendable {
-    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxOverlayTransportTests (pipeline handlers remain channel-owned)
-    private final class InboundBytes: ChannelInboundHandler {
+    // NIO retains this handler only on its owning stream channel.  Its shared
+    // state is protected by `condition`; callbacks never expose that state.
+    // OBSTACLEBRIDGE-CONCURRENCY: condition; test=ObstacleBridgeLinuxOverlayTransportTests
+    private final class InboundBytes: ChannelInboundHandler, @unchecked Sendable {
         typealias InboundIn = ByteBuffer
 
         private let condition = NSCondition()

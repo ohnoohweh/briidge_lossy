@@ -84,34 +84,6 @@ if [ "${DIFF_SHA}" = "e3b0c44298fc" ]; then
   DIFF_SHA=""
 fi
 BUILD_TIMESTAMP_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-GENERATED_BUILD_INFO_DIR="${REPO_ROOT}/swift/Sources/ObstacleBridgeLinux/Generated"
-GENERATED_BUILD_INFO_PATH="${GENERATED_BUILD_INFO_DIR}/ObstacleBridgeLinuxBuildInfo.swift"
-mkdir -p "${GENERATED_BUILD_INFO_DIR}"
-cat > "${GENERATED_BUILD_INFO_PATH}" <<EOF
-import Foundation
-
-enum ObstacleBridgeLinuxBuildInfo {
-    static let commit = "${COMMIT}"
-    static let dirty = ${DIRTY}
-    static let diffSHA = "${DIFF_SHA}"
-    static let buildTimestampUTC = "${BUILD_TIMESTAMP_UTC}"
-
-    static func json() -> String {
-        let value: [String: Any] = [
-            "artifact": "ObstacleBridgeLinux",
-            "build_configuration": "${CONFIGURATION}",
-            "build_timestamp_utc": buildTimestampUTC,
-            "commit": commit,
-            "diff_sha": diffSHA,
-            "dirty": dirty,
-            "source": "embedded-build-info",
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return "{}" }
-        return String(decoding: data, as: UTF8.self)
-    }
-}
-EOF
-
 echo "[build_linux_app] compiling ${CONFIGURATION} Linux Swift artifact"
 SWIFT_BUILD_ARGS=(
   --package-path "${REPO_ROOT}"
