@@ -32,14 +32,14 @@ packaging build compiles the HostRunner, macOS application, shared Apple
 transports, and the shared iOS tunnel-control source. Its initial complete
 checking run produced 410 compiler warning records across 14 source files. The
 first migration slice isolated the macOS AppKit entry point; the verified
-current baseline is 409 warning records across 13 source files. The same
+current baseline is 405 warning records across 13 source files. The same
 source can be compiled into more than one product, so this number is a
 compiler-output baseline rather than a count of distinct code locations.
 
 | Compile area | Warning records | Affected source files |
 | --- | ---: | --- |
 | macOS host | 114 | `ObstacleBridgeHostRunner.swift` (114) |
-| Shared Apple transport, proxy, Admin, helper, and telemetry owners | 283 | `ObstacleBridgeTcpOverlayTransportOwner.swift` (50), `ObstacleBridgeWebSocketOverlayTransportOwner.swift` (42), `ObstacleBridgeProxyServer.swift` (40), `ObstacleBridgeChannelMuxTCPTransportOwner.swift` (32), `ObstacleBridgeQuicOverlayTransportOwner.swift` (24), `ObstacleBridgeUdpOverlayTransportOwner.swift` (22), `ObstacleBridgeWebAdminServer.swift` (18), `ObstacleBridgeOverlayConnectionSupport.swift` (18), `ObstacleBridgeNativeProxyConnections.swift` (16), `ObstacleBridgeTunHelperXPCTransport.swift` (15), and `ObstacleBridgeTelemetryMTLSUploader.swift` (6) |
+| Shared Apple transport, proxy, Admin, helper, and telemetry owners | 279 | `ObstacleBridgeTcpOverlayTransportOwner.swift` (50), `ObstacleBridgeWebSocketOverlayTransportOwner.swift` (42), `ObstacleBridgeProxyServer.swift` (40), `ObstacleBridgeChannelMuxTCPTransportOwner.swift` (32), `ObstacleBridgeQuicOverlayTransportOwner.swift` (24), `ObstacleBridgeUdpOverlayTransportOwner.swift` (22), `ObstacleBridgeWebAdminServer.swift` (18), `ObstacleBridgeOverlayConnectionSupport.swift` (18), `ObstacleBridgeNativeProxyConnections.swift` (16), `ObstacleBridgeTunHelperXPCTransport.swift` (15), and `ObstacleBridgeTelemetryMTLSUploader.swift` (2) |
 | Shared iOS tunnel-control source compiled by the macOS bundle | 12 | `ObstacleBridgeTunnelControl.swift` |
 
 The macOS application entry point now isolates its AppKit and WebKit state with
@@ -55,9 +55,11 @@ handling now lives in a dedicated URLSession delegate that owns only the
 credential; the mutable policy and status uploader is no longer itself a
 delegate. The verified macOS package build reduced this source from six warning
 records to two: both are the uploader's `self` capture in the URLSession
-completion, once for each product. The next slice must route the completion
-through an actor-owned upload state machine without hiding that capture behind
-an unchecked conformance.
+completion, once for each product. An actor cannot simply retain the existing
+policy while the synchronous admin projection retains it too: complete checking
+correctly reports that transfer as a possible race. The next slice must give
+the policy one owner and project an immutable uploader status for synchronous
+admin reads, without an unchecked conformance or a blocking actor bridge.
 
 The findings fall into four migration groups:
 
