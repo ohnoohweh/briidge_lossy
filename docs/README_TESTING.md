@@ -271,6 +271,9 @@ swift test --filter ObstacleBridgeApplePackageProbeTests
 
 The package manifest exposes only portable Core targets on macOS; Linux adapter
 and executable targets remain available when the manifest is evaluated on Linux.
+The macOS telemetry source guard verifies the one audited synchronous upload
+state: it owns the legacy policy and admin status projection behind one lock,
+so URLSession callbacks never capture the uploader owner.
 The shared corpus verifies Python and Core agree on exact binary and text
 WebSocket payload forms, including strict malformed text rejection. The Apple
 probe executes every shared wire-codec owner through its imported Core module.

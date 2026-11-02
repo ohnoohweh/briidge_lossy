@@ -1149,6 +1149,8 @@ REQ-LIFE-010:
     - tests/unit/test_swift_concurrency_guard.py::test_rejects_new_unchecked_sendable_conformance
     - tests/unit/test_swift_concurrency_guard.py::test_rejects_new_synchronous_primitive_in_legacy_owner
     - tests/unit/test_swift_concurrency_guard.py::test_accepts_lock_marker_with_named_test
+    - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_allows_only_documented_synchronous_telemetry_owner
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_telemetry_uploader_uses_audited_synchronous_state
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxProxyProviderTests.swift::listenerReadinessDrainAdmitsEveryQueuedSOCKSClient
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxProxyProviderTests.swift::socksParserCompletesFragmentedGreetingWithoutBlockingRead
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunPingTests.swift::protocolV1FramesAndControlsRemainPythonCompatible
@@ -2120,6 +2122,8 @@ REQ-IO-001:
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_requires_usable_evidence
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_rejects_new_lock_in_legacy_owner
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_rejects_new_unchecked_owner
+    - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_allows_only_documented_synchronous_telemetry_owner
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_telemetry_uploader_uses_audited_synchronous_state
     - tests/unit/test_telemetry.py::test_mtls_ingest_rejects_incomplete_body_with_timeout
     - tests/unit/test_admin_worker.py::test_admin_worker_timeout_fences_late_reply
     - tests/unit/test_ws_payload_mode.py::test_open_ws_proxy_socket_blocking_establishes_connect_tunnel

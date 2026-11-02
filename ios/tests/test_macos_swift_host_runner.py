@@ -2120,6 +2120,15 @@ def test_macos_telemetry_uploader_requires_sendable_upload_completions() -> None
     assert "completion: @escaping @Sendable (Bool) -> Void" in source
 
 
+def test_macos_telemetry_uploader_uses_audited_synchronous_state() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift").read_text(encoding="utf-8")
+
+    assert "private final class ObstacleBridgeTelemetryLockedUploadState: @unchecked Sendable" in source
+    assert "private let lock = NSLock()" in source
+    assert "[weak self]" not in source
+    assert "completion(uploadState.finishUpload" in source
+
+
 class _AsyncBridgeClientThread:
     def __init__(self, config: dict) -> None:
         self.client = ObstacleBridgeClient(_group_python_peer_config(config))

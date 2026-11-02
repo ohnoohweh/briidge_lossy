@@ -19,18 +19,78 @@ private final class ObstacleBridgeTelemetryMTLSDelegate: NSObject, URLSessionDel
     }
 }
 
-/// Apple HTTPS transport for `telemetry/v1`. Callers supply the enrolled client
-/// identity; this type neither reads credentials from configuration nor logs them.
-final class ObstacleBridgeTelemetryMTLSUploader {
+/// The synchronous admin API needs an immediate telemetry status projection.
+/// Keep every policy and uploader-counter operation behind this one lock rather
+/// than transferring the policy between executors. The URLSession callback
+/// captures only this audited state object.
+private final class ObstacleBridgeTelemetryLockedUploadState: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_macos_telemetry_uploader_uses_audited_synchronous_state
+    private let lock = NSLock()
     private let policy: ObstacleBridgeTelemetryUploadPolicy
-    private let sessionDelegate: ObstacleBridgeTelemetryMTLSDelegate
-    private let statusLock = NSLock()
     private var attempts: UInt64 = 0
     private var acceptedBatches: UInt64 = 0
     private var rejectedBatches: UInt64 = 0
     private var lastError = ""
     private var lastSuccessUnixTS: Double?
     private var lastAttemptUnixTS: Double?
+
+    init(policy: ObstacleBridgeTelemetryUploadPolicy) {
+        self.policy = policy
+    }
+
+    func beginUpload() -> ObstacleBridgeTelemetryUploadPolicy.Request? {
+        lock.lock(); defer { lock.unlock() }
+        guard let pending = policy.nextRequest() else { return nil }
+        attempts &+= 1
+        lastAttemptUnixTS = Date().timeIntervalSince1970
+        return pending
+    }
+
+    func finishUpload(data: Data?, response: URLResponse?, error: Error?) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard error == nil,
+              (response as? HTTPURLResponse)?.statusCode == 202,
+              let data,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["ok"] as? Bool == true,
+              let accepted = object["accepted_through"] as? NSNumber,
+              policy.accept(acceptedThrough: accepted.uint64Value) > 0
+        else {
+            policy.fail()
+            rejectedBatches &+= 1
+            lastError = String(describing: error ?? NSError(domain: "ObstacleBridgeTelemetry", code: (response as? HTTPURLResponse)?.statusCode ?? -1)).prefix(160).description
+            return false
+        }
+        acceptedBatches &+= 1
+        lastSuccessUnixTS = Date().timeIntervalSince1970
+        lastError = ""
+        return true
+    }
+
+    func cancel() {
+        lock.lock(); defer { lock.unlock() }
+        policy.fail()
+    }
+
+    func statusSnapshot() -> [String: Any] {
+        lock.lock(); defer { lock.unlock() }
+        let snapshot: [String: Any] = [
+            "attempts": attempts,
+            "accepted_batches": acceptedBatches,
+            "rejected_batches": rejectedBatches,
+            "last_error": lastError.isEmpty ? NSNull() : lastError,
+            "last_success_unix_ts": lastSuccessUnixTS ?? NSNull(),
+            "last_attempt_unix_ts": lastAttemptUnixTS ?? NSNull(),
+        ]
+        return snapshot.merging(policy.statusSnapshot()) { current, _ in current }
+    }
+}
+
+/// Apple HTTPS transport for `telemetry/v1`. Callers supply the enrolled client
+/// identity; this type neither reads credentials from configuration nor logs them.
+final class ObstacleBridgeTelemetryMTLSUploader {
+    private let uploadState: ObstacleBridgeTelemetryLockedUploadState
+    private let sessionDelegate: ObstacleBridgeTelemetryMTLSDelegate
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.connectionProxyDictionary = [:]
@@ -41,7 +101,7 @@ final class ObstacleBridgeTelemetryMTLSUploader {
     }()
 
     init(policy: ObstacleBridgeTelemetryUploadPolicy, identity: SecIdentity, certificates: [Any] = []) {
-        self.policy = policy
+        uploadState = ObstacleBridgeTelemetryLockedUploadState(policy: policy)
         sessionDelegate = ObstacleBridgeTelemetryMTLSDelegate(
             credential: URLCredential(identity: identity, certificates: certificates, persistence: .forSession)
         )
@@ -49,63 +109,26 @@ final class ObstacleBridgeTelemetryMTLSUploader {
 
     /// Starts at most one upload; policy failure keeps the spool untouched.
     func uploadOnce(completion: @escaping @Sendable (Bool) -> Void = { _ in }) {
-        guard let pending = policy.nextRequest() else { completion(false); return }
-        statusLock.lock()
-        attempts &+= 1
-        lastAttemptUnixTS = Date().timeIntervalSince1970
-        statusLock.unlock()
+        let uploadState = uploadState
+        guard let pending = uploadState.beginUpload() else { completion(false); return }
         var request = URLRequest(url: pending.endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        session.uploadTask(with: request, from: pending.payload) { [weak self] data, response, error in
-            guard let self, error == nil,
-                  (response as? HTTPURLResponse)?.statusCode == 202,
-                  let data,
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  object["ok"] as? Bool == true,
-                  let accepted = object["accepted_through"] as? NSNumber,
-                  self.policy.accept(acceptedThrough: accepted.uint64Value) > 0
-            else {
-                self?.policy.fail()
-                self?.recordFailure(error ?? NSError(domain: "ObstacleBridgeTelemetry", code: (response as? HTTPURLResponse)?.statusCode ?? -1))
-                completion(false)
-                return
-            }
-            self.recordSuccess()
-            completion(true)
+        session.uploadTask(with: request, from: pending.payload) { data, response, error in
+            completion(uploadState.finishUpload(data: data, response: response, error: error))
         }.resume()
     }
 
     func statusSnapshot() -> [String: Any] {
-        statusLock.lock()
-        let snapshot: [String: Any] = [
-            "attempts": attempts,
-            "accepted_batches": acceptedBatches,
-            "rejected_batches": rejectedBatches,
-            "last_error": lastError.isEmpty ? NSNull() : lastError,
-            "last_success_unix_ts": lastSuccessUnixTS ?? NSNull(),
-            "last_attempt_unix_ts": lastAttemptUnixTS ?? NSNull(),
-        ]
-        statusLock.unlock()
-        return snapshot.merging(policy.statusSnapshot()) { current, _ in current }
-    }
-
-    private func recordSuccess() {
-        statusLock.lock(); defer { statusLock.unlock() }
-        acceptedBatches &+= 1; lastSuccessUnixTS = Date().timeIntervalSince1970; lastError = ""
-    }
-
-    private func recordFailure(_ error: Error) {
-        statusLock.lock(); defer { statusLock.unlock() }
-        rejectedBatches &+= 1; lastError = String(describing: error).prefix(160).description
+        uploadState.statusSnapshot()
     }
 
     /// Cancels outstanding network work during runtime shutdown. The spool
     /// remains authoritative, so a later runtime can retry its unacknowledged
     /// batch without waiting for this session to finish.
     func cancel() {
-        policy.fail()
+        uploadState.cancel()
         session.invalidateAndCancel()
     }
 

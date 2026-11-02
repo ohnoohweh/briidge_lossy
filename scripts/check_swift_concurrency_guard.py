@@ -19,6 +19,17 @@ EVIDENCE_FORMAT = re.compile(
 # This expanded rule cannot retroactively require evidence from earlier PR
 # work. Every Swift product-source change after this adoption point is gated.
 POLICY_BASELINE = "c4e994c4"
+AUDITED_SYNCHRONOUS_OWNER = (
+    "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTelemetryMTLSUploader.swift",
+    "ObstacleBridgeTelemetryLockedUploadState: @unchecked Sendable",
+    "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_macos_telemetry_uploader_uses_audited_synchronous_state",
+)
+
+def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:
+    """Allow the one documented synchronous Apple bridge, never a broad exemption."""
+    expected_path, expected_owner, expected_evidence = AUDITED_SYNCHRONOUS_OWNER
+    additions = "\n".join(added)
+    return path == expected_path and expected_owner in additions and expected_evidence in additions
 
 def effective_base(base_ref: str) -> str:
     if subprocess.run(["git", "merge-base", "--is-ancestor", base_ref, POLICY_BASELINE], cwd=ROOT).returncode == 0:
@@ -40,16 +51,18 @@ def validate(changes: dict[str, list[str]]) -> list[str]:
     for path, added in changes.items():
         if not path.startswith(SWIFT_SOURCE) or not path.endswith(".swift"):
             continue
+        audited_synchronous_owner = is_audited_synchronous_owner(path, added)
         if any(UNCHECKED in line for line in added):
-            errors.append(
-                f"{path}: new {UNCHECKED} conformances are forbidden; use actor isolation, a serial executor, or a proven Sendable value type."
-            )
-            continue
+            if not audited_synchronous_owner:
+                errors.append(
+                    f"{path}: new {UNCHECKED} conformances are forbidden; use actor isolation, a serial executor, or a proven Sendable value type."
+                )
+                continue
         source_path = ROOT / path
         if not source_path.exists() or UNCHECKED not in source_path.read_text(encoding="utf-8"):
             continue
         introduced = [primitive for primitive in SYNCHRONOUS_PRIMITIVES if any(primitive in line for line in added)]
-        if introduced:
+        if introduced and not audited_synchronous_owner:
             errors.append(
                 f"{path}: legacy {UNCHECKED} owners may not introduce synchronous coordination "
                 f"({', '.join(introduced)}); migrate the owner to actor or serial asynchronous ownership."

@@ -5,15 +5,17 @@
 SwiftPM compiles the complete test graph with
 `-strict-concurrency=complete`. New `@unchecked Sendable` conformances and new
 synchronous coordination primitives in a legacy unchecked owner are rejected
-by `scripts/check_swift_concurrency_guard.py`.
+by `scripts/check_swift_concurrency_guard.py`, except for the one named,
+machine-tested Apple telemetry bridge below.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 14 declarations:
+approval to add lock-based ownership. The inventory contains 15 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
 | Shared Core | 0 |
 | Desktop shared | 0 |
+| Apple shared | 1 |
 | Linux adapters/runtime | 14 |
 | Executable workers | 0 |
 | Test fixtures | 0 |
@@ -32,14 +34,14 @@ packaging build compiles the HostRunner, macOS application, shared Apple
 transports, and the shared iOS tunnel-control source. Its initial complete
 checking run produced 410 compiler warning records across 14 source files. The
 first migration slice isolated the macOS AppKit entry point; the verified
-current baseline is 405 warning records across 13 source files. The same
+current baseline is 403 warning records across 12 source files. The same
 source can be compiled into more than one product, so this number is a
 compiler-output baseline rather than a count of distinct code locations.
 
 | Compile area | Warning records | Affected source files |
 | --- | ---: | --- |
 | macOS host | 114 | `ObstacleBridgeHostRunner.swift` (114) |
-| Shared Apple transport, proxy, Admin, helper, and telemetry owners | 279 | `ObstacleBridgeTcpOverlayTransportOwner.swift` (50), `ObstacleBridgeWebSocketOverlayTransportOwner.swift` (42), `ObstacleBridgeProxyServer.swift` (40), `ObstacleBridgeChannelMuxTCPTransportOwner.swift` (32), `ObstacleBridgeQuicOverlayTransportOwner.swift` (24), `ObstacleBridgeUdpOverlayTransportOwner.swift` (22), `ObstacleBridgeWebAdminServer.swift` (18), `ObstacleBridgeOverlayConnectionSupport.swift` (18), `ObstacleBridgeNativeProxyConnections.swift` (16), `ObstacleBridgeTunHelperXPCTransport.swift` (15), and `ObstacleBridgeTelemetryMTLSUploader.swift` (2) |
+| Shared Apple transport, proxy, Admin, and helper owners | 277 | `ObstacleBridgeTcpOverlayTransportOwner.swift` (50), `ObstacleBridgeWebSocketOverlayTransportOwner.swift` (42), `ObstacleBridgeProxyServer.swift` (40), `ObstacleBridgeChannelMuxTCPTransportOwner.swift` (32), `ObstacleBridgeQuicOverlayTransportOwner.swift` (24), `ObstacleBridgeUdpOverlayTransportOwner.swift` (22), `ObstacleBridgeWebAdminServer.swift` (18), `ObstacleBridgeOverlayConnectionSupport.swift` (18), `ObstacleBridgeNativeProxyConnections.swift` (16), and `ObstacleBridgeTunHelperXPCTransport.swift` (15) |
 | Shared iOS tunnel-control source compiled by the macOS bundle | 12 | `ObstacleBridgeTunnelControl.swift` |
 
 The macOS application entry point now isolates its AppKit and WebKit state with
@@ -57,9 +59,15 @@ delegate. The verified macOS package build reduced this source from six warning
 records to two: both are the uploader's `self` capture in the URLSession
 completion, once for each product. An actor cannot simply retain the existing
 policy while the synchronous admin projection retains it too: complete checking
-correctly reports that transfer as a possible race. The next slice must give
-the policy one owner and project an immutable uploader status for synchronous
-admin reads, without an unchecked conformance or a blocking actor bridge.
+correctly reports that transfer as a possible race.
+
+The uploader now gives the policy one owner:
+`ObstacleBridgeTelemetryLockedUploadState` owns the policy and all upload
+counters behind one `NSLock`, and `statusSnapshot()` takes that same lock. The
+URLSession completion captures only that state, never the uploader. Its
+`@unchecked Sendable` conformance is the sole exception to the general ban,
+constrained by an exact path, owner name, and test marker in the guard. The
+verified macOS product build emits no telemetry-uploader diagnostics.
 
 The findings fall into four migration groups:
 
@@ -86,7 +94,10 @@ replace cross-boundary dictionaries and closures with Sendable value snapshots
 or actor operations, then make each completion route re-enter its owner. Do
 not address this baseline by adding `@unchecked Sendable`, locks, semaphores,
 or warning suppression; those mechanisms would hide the ownership defects that
-complete checking identifies. `@preconcurrency` is only appropriate at a
+complete checking identifies. The documented telemetry state is the only
+audited synchronous exception because its external admin interface is
+synchronous and its one lock owns every retained mutable value.
+`@preconcurrency` is only appropriate at a
 documented imported-framework boundary after the repository-owned callback
 ownership is otherwise sound.
 
