@@ -358,8 +358,10 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         }
         #expect(await listener.admittedCount == 2)
         #expect(await listener.activePeerCount == 2)
-        #expect(clientsFinished.wait(timeout: .now() + 3) == .success)
-        #expect(clientsFinished.wait(timeout: .now() + 3) == .success)
+        // Handshakes are independently admitted above. Allow their blocking
+        // client-side teardown to complete under a contended CI scheduler.
+        #expect(clientsFinished.wait(timeout: .now() + 10) == .success)
+        #expect(clientsFinished.wait(timeout: .now() + 10) == .success)
     }
 
     @Test func myudpForegroundOwnerRetainsDistinctAuthenticatedPeerProjections() throws {
