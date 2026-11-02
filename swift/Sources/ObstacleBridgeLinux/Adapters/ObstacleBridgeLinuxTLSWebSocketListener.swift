@@ -11,7 +11,7 @@ public final class ObstacleBridgeLinuxTLSWebSocketPSKListener: @unchecked Sendab
     // NIO invokes child-channel initializers concurrently. Listener state
     // shared with those callbacks is serialized by `condition` or by the
     // thread-safe peer registry.
-    // OBSTACLEBRIDGE-CONCURRENCY: condition; test=ObstacleBridgeLinuxOverlayTransportTests
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxOverlayTransportTests
     private final class Inbound: ChannelInboundHandler {
         typealias InboundIn = ByteBuffer
         let condition = NSCondition(); var bytes = Data(); var inactive = false

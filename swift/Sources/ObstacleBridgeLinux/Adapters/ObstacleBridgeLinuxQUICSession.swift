@@ -14,7 +14,7 @@ import Glibc
 final class ObstacleBridgeLinuxQUICSession: @unchecked Sendable {
     // NIO retains this handler only on its owning stream channel.  Its shared
     // state is protected by `condition`; callbacks never expose that state.
-    // OBSTACLEBRIDGE-CONCURRENCY: condition; test=ObstacleBridgeLinuxOverlayTransportTests
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxOverlayTransportTests
     private final class InboundBytes: ChannelInboundHandler, @unchecked Sendable {
         typealias InboundIn = ByteBuffer
 
