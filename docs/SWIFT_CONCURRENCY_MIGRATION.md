@@ -53,8 +53,11 @@ The telemetry uploader's upload completion is `@Sendable`, so the URLSession
 callback does not transfer a non-Sendable completion. Certificate challenge
 handling now lives in a dedicated URLSession delegate that owns only the
 credential; the mutable policy and status uploader is no longer itself a
-delegate. The next compiler pass establishes the remaining callback ownership
-work without hiding state behind an unchecked conformance.
+delegate. The verified macOS package build reduced this source from six warning
+records to two: both are the uploader's `self` capture in the URLSession
+completion, once for each product. The next slice must route the completion
+through an actor-owned upload state machine without hiding that capture behind
+an unchecked conformance.
 
 The findings fall into four migration groups:
 
