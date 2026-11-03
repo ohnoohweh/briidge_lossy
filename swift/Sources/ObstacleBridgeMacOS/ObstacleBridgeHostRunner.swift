@@ -2559,13 +2559,14 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     }
 
     private func teardownSharedMacOSTunAdapter(runLifecycleHook: Bool) {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue
         if runLifecycleHook,
            let tunService = ownServerSpecs.first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }) {
             runMacOSTunLifecycleHook(for: tunService, event: "on_stopped")
         }
         if let xpcClient = macOSTunHelperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
             xpcClient.stop { [weak self, xpcClient] _ in
-                self?.serviceStateQueue.async {
+                self?.withServiceStateQueue {
                     guard let self else { return }
                     self.macOSTunHelperRuntimeSnapshot = xpcClient.runtimeSnapshot
                 }
@@ -3045,7 +3046,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     private func prepareSharedOverlayBootstrap() {
         if let xpcClient = macOSTunHelperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
             xpcClient.stop { [weak self, xpcClient] _ in
-                self?.serviceStateQueue.async {
+                self?.withServiceStateQueue {
                     guard let self else { return }
                     self.macOSTunHelperRuntimeSnapshot = xpcClient.runtimeSnapshot
                 }
@@ -3515,7 +3516,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         macOSTunHelperTransportKind = helperClient.transportKind
         if let xpcClient = helperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
             xpcClient.openTun(ObstacleBridgeTunHelperOpenRequest(requestedIfname: ifname, mtu: mtu)) { [weak self, xpcClient] result in
-                self?.serviceStateQueue.async {
+                self?.withServiceStateQueue {
                     guard let self else { return }
                     switch result {
                     case .success:
@@ -3994,7 +3995,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         let helperEnvSnapshot = Self.macOSTunHelperHookEnvSnapshot(from: env)
         if let xpcClient = macOSTunHelperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
             let completed: (Result<[String: Any], Error>) -> Void = { [weak self, xpcClient] result in
-                self?.serviceStateQueue.async {
+                self?.withServiceStateQueue {
                     guard let self else { return }
                     if case .failure(let error) = result {
                         xpcClient.recordFailure(stage: event == "on_stopped" ? "remove_network" : "apply_network", error: error.localizedDescription)
@@ -4041,7 +4042,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         guard let helperClient = macOSTunHelperClient else { return }
         if let xpcClient = helperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
             xpcClient.writePacket(packet) { [weak self, xpcClient] result in
-                self?.serviceStateQueue.async {
+                self?.withServiceStateQueue {
                     guard let self else { return }
                     if case .failure(let error) = result {
                         self.recordOperationalLog(event: "macos_utun_write_failed", level: "ERROR", levelNumber: 40)

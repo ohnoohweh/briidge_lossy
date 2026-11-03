@@ -96,6 +96,10 @@ The UDP proxy registry uses an immutable UUID lifecycle key rather than a
 captured mutable proxy variable, so proxy callbacks cannot race construction
 or teardown.
 
+XPC helper completions also synchronously refresh the host-owned helper
+snapshot. Their result and client references therefore never cross a second
+concurrently executing Dispatch closure after the imported XPC callback.
+
 HostRunner telemetry is now a separate lock-owned state cell. Its timer,
 upload drain, lifecycle events, health events, and admin snapshot retain only
 that state cell, never the multi-domain HostRunner. This removes the telemetry
