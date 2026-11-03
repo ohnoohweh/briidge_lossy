@@ -32,15 +32,15 @@ rg -n '@unchecked Sendable' swift --glob '*.swift'
 The SwiftPM graph is not the full Apple product compile surface. The macOS
 packaging build compiles the HostRunner, macOS application, shared Apple
 transports, and the shared iOS tunnel-control source. Its initial complete
-checking run produced 410 compiler warning records across 14 source files. The
-first migration slice isolated the macOS AppKit entry point; the verified
-current baseline is 94 warning records across 1 source file. The same
-source can be compiled into more than one product, so this number is a
-compiler-output baseline rather than a count of distinct code locations.
+checking run produced 410 compiler warning records across 14 source files.
+The verified current macOS baseline is zero warning records across every
+product source. The iOS device build explicitly supplies both
+`SWIFT_STRICT_CONCURRENCY=complete` and `-strict-concurrency=complete`, then
+reports its compiler warning and error totals from the `xcodebuild` log.
 
 | Compile area | Warning records | Affected source files |
 | --- | ---: | --- |
-| macOS host | 108 | `ObstacleBridgeHostRunner.swift` (108) |
+| macOS host | 0 | None |
 
 The macOS application entry point now isolates its AppKit and WebKit state with
 `@MainActor`, and its timer callback explicitly re-enters that actor before
