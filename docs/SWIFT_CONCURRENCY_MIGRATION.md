@@ -91,6 +91,11 @@ snapshots are immutable `Sendable` value types. Network listener callbacks can
 therefore carry configuration and acceptance effects across the imported
 framework boundary without sharing a mutable runtime owner.
 
+The UDP and TCP listener handlers synchronously enter that same service queue.
+The UDP proxy registry uses an immutable UUID lifecycle key rather than a
+captured mutable proxy variable, so proxy callbacks cannot race construction
+or teardown.
+
 HostRunner telemetry is now a separate lock-owned state cell. Its timer,
 upload drain, lifecycle events, health events, and admin snapshot retain only
 that state cell, never the multi-domain HostRunner. This removes the telemetry

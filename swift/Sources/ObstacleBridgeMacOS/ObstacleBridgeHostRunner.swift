@@ -269,7 +269,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     private var udpServiceListeners: [Int: NWListener] = [:]
     private var catalogUDPServiceListeners: [Int: NWListener] = [:]
     private var udpConnectionStates: [Int: [String: Any]] = [:]
-    private var udpConnectionObjects: [ObjectIdentifier: ObstacleBridgeUDPProxyConnection] = [:]
+    private var udpConnectionObjects: [UUID: ObstacleBridgeUDPProxyConnection] = [:]
     private var tcpServiceListeners: [Int: NWListener] = [:]
     private var catalogTCPServiceListeners: [Int: NWListener] = [:]
     private var catalogServiceSpecs: [Int: ObstacleBridgeNativeServiceSpec] = [:]
@@ -2531,7 +2531,10 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(spec.listenBind), port: port)
         let listener = try NWListener(using: params)
         listener.newConnectionHandler = { [weak self] connection in
-            self?.acceptUDPConnection(connection, spec: spec)
+            guard let self else { return }
+            self.withServiceStateQueue {
+                self.acceptUDPConnection(connection, spec: spec)
+            }
         }
         listener.start(queue: serviceStateQueue)
         catalogUDPServiceListeners[spec.svcID] = listener
@@ -2546,7 +2549,10 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(spec.listenBind), port: port)
         let listener = try NWListener(using: params)
         listener.newConnectionHandler = { [weak self] connection in
-            self?.acceptTCPConnection(connection, spec: spec)
+            guard let self else { return }
+            self.withServiceStateQueue {
+                self.acceptTCPConnection(connection, spec: spec)
+            }
         }
         listener.start(queue: serviceStateQueue)
         catalogTCPServiceListeners[spec.svcID] = listener
@@ -2596,6 +2602,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     }
 
     private func acceptUDPConnection(_ connection: NWConnection, spec: ObstacleBridgeNativeServiceSpec) {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue
         if let activeOwner = currentOverlayOwner(),
            activeOwner.owner.acceptLocalUDPConnection(
             connection,
@@ -2611,8 +2618,8 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
             return
         }
         let remote = NWConnection(host: NWEndpoint.Host(spec.targetHost), port: remotePort, using: .udp)
-        var proxy: ObstacleBridgeUDPProxyConnection!
-        proxy = ObstacleBridgeUDPProxyConnection(
+        let proxyID = UUID()
+        let proxy = ObstacleBridgeUDPProxyConnection(
             spec: spec,
             listenerHost: spec.listenBind,
             listenerPort: spec.listenPort,
@@ -2621,25 +2628,25 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
             remoteConnection: remote,
             queue: serviceStateQueue,
             updateState: { [weak self] state in
-                self?.serviceStateQueue.async {
+                guard let self else { return }
+                self.withServiceStateQueue {
                     if let state, let chanID = state["chan_id"] as? Int {
-                        self?.udpConnectionStates[chanID] = state
+                        self.udpConnectionStates[chanID] = state
                     }
                 }
             },
             finish: { [weak self] chanID in
-                self?.serviceStateQueue.async {
+                guard let self else { return }
+                self.withServiceStateQueue {
                     if let chanID {
-                        self?.udpConnectionStates.removeValue(forKey: chanID)
+                        self.udpConnectionStates.removeValue(forKey: chanID)
                     }
-                    self?.udpConnectionObjects.removeValue(forKey: ObjectIdentifier(proxy))
+                    self.udpConnectionObjects.removeValue(forKey: proxyID)
                 }
             }
         )
-        serviceStateQueue.async {
-            self.udpConnectionObjects[ObjectIdentifier(proxy)] = proxy
-            proxy.start()
-        }
+        udpConnectionObjects[proxyID] = proxy
+        proxy.start()
     }
 
     private func startTCPService(_ spec: ObstacleBridgeNativeServiceSpec) throws {
@@ -2651,7 +2658,10 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(spec.listenBind), port: port)
         let listener = try NWListener(using: params)
         listener.newConnectionHandler = { [weak self] connection in
-            self?.acceptTCPConnection(connection, spec: spec)
+            guard let self else { return }
+            self.withServiceStateQueue {
+                self.acceptTCPConnection(connection, spec: spec)
+            }
         }
         listener.start(queue: serviceStateQueue)
         withServiceStateQueue {
@@ -2690,22 +2700,22 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
             remoteConnection: remote,
             queue: serviceStateQueue,
             updateState: { [weak self] state in
-                self?.serviceStateQueue.async {
-                    self?.tcpConnectionStates[acceptSnapshot.chanID] = state
+                guard let self else { return }
+                self.withServiceStateQueue {
+                    self.tcpConnectionStates[acceptSnapshot.chanID] = state
                 }
             },
             finish: { [weak self] (chanID: Int) in
-                self?.serviceStateQueue.async {
-                    self?.tcpConnectionStates.removeValue(forKey: chanID)
-                    self?.tcpConnectionObjects.removeValue(forKey: chanID)
+                guard let self else { return }
+                self.withServiceStateQueue {
+                    self.tcpConnectionStates.removeValue(forKey: chanID)
+                    self.tcpConnectionObjects.removeValue(forKey: chanID)
                 }
             }
         )
-        serviceStateQueue.async {
-            self.tcpConnectionObjects[acceptSnapshot.chanID] = proxy
-            self.tcpConnectionStates[acceptSnapshot.chanID] = proxy.snapshot()
-            proxy.start()
-        }
+        tcpConnectionObjects[acceptSnapshot.chanID] = proxy
+        tcpConnectionStates[acceptSnapshot.chanID] = proxy.snapshot()
+        proxy.start()
     }
 
     private func connectionsSnapshot() -> [String: Any] {
