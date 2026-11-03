@@ -20,8 +20,12 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     }
 
     @Test func unixHelperUsesAuthenticatedCommonIPCControlAndPacketFrames() async throws {
-        let peer = try UnixHelperPeer(connectionCount: 6); await peer.start(); defer { Task { await peer.stop() } }
-        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: await peer.path, sessionToken: await peer.token)
+        let peer = try UnixHelperPeer(connectionCount: 6)
+        // `start()` enters the fixture's blocking accept loop. Capture its
+        // immutable connection settings before that actor begins serving.
+        let path = await peer.path; let token = await peer.token
+        await peer.start(); defer { Task { await peer.stop() } }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: token)
         for command in [ObstacleBridgeTunHelperCommand.openTun, .applyNetwork, .removeNetwork, .snapshot, .stop] {
             let response = try adapter.send(command: command, payload: command == .openTun ? ["ifname": "obtest0", "mtu": 1400] : [:])
             #expect(response["op"] as? String == "\(command.rawValue)_OK")
@@ -33,8 +37,10 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     }
 
     @Test func helperAppliesAndRollsBackCorePacketTunnelPlan() async throws {
-        let peer = try UnixHelperPeer(connectionCount: 2); await peer.start(); defer { Task { await peer.stop() } }
-        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: await peer.path, sessionToken: await peer.token)
+        let peer = try UnixHelperPeer(connectionCount: 2)
+        let path = await peer.path; let token = await peer.token
+        await peer.start(); defer { Task { await peer.stop() } }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: token)
         let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: ["TUN_routing": ["enabled_on_startup": true, "mtu": 1400]]))
         _ = try adapter.apply(packetTunnelPlan: plan, interfaceName: "obtest0")
         _ = try adapter.rollback(packetTunnelPlan: plan, interfaceName: "obtest0")
@@ -61,16 +67,20 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     }
 
     @Test func helperApplyFailureRequestsRollbackOnFreshAuthenticatedExchange() async throws {
-        let peer = try UnixHelperPeer(connectionCount: 2, disconnectFirstCommandReply: true); await peer.start(); defer { Task { await peer.stop() } }
-        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: await peer.path, sessionToken: await peer.token)
+        let peer = try UnixHelperPeer(connectionCount: 2, disconnectFirstCommandReply: true)
+        let path = await peer.path; let token = await peer.token
+        await peer.start(); defer { Task { await peer.stop() } }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: token)
         let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: ["TUN_routing": ["enabled_on_startup": true]]))
         #expect(throws: (any Error).self) { try adapter.applyWithRollback(packetTunnelPlan: plan, interfaceName: "obtest0") }
         #expect(await peer.operations == ["APPLY_NETWORK", "REMOVE_NETWORK"])
     }
 
     @Test func helperRejectsWrongSessionTokenBeforeOperation() async throws {
-        let peer = try UnixHelperPeer(connectionCount: 1); await peer.start(); defer { Task { await peer.stop() } }
-        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: await peer.path, sessionToken: "wrong-token")
+        let peer = try UnixHelperPeer(connectionCount: 1)
+        let path = await peer.path
+        await peer.start(); defer { Task { await peer.stop() } }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "wrong-token")
         #expect(throws: (any Error).self) { try adapter.send(command: .snapshot, payload: [:]) }
         #expect((await peer.operations).isEmpty)
     }

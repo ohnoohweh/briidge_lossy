@@ -27,6 +27,13 @@ copied by hand:
 rg -n '@unchecked Sendable' swift --glob '*.swift'
 ```
 
+## Linux app strict-concurrency findings
+
+The release build invoked by `./scripts/build_linux_app.sh` emits **0 Swift
+concurrency warning records across 0 source files**. This baseline excludes
+SwiftPM dependency-cache notices, which are not compiler diagnostics from the
+Linux app sources.
+
 ## Apple product strict-concurrency findings
 
 The SwiftPM graph is not the full Apple product compile surface. The macOS
