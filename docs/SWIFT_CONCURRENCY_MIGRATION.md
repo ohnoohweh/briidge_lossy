@@ -9,14 +9,14 @@ by `scripts/check_swift_concurrency_guard.py`, except for the named,
 machine-tested Apple serial bridges below.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 22 declarations:
+approval to add lock-based ownership. The inventory contains 32 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
 | Shared Core | 0 |
 | Desktop shared | 0 |
-| Apple shared | 8 |
-| Linux adapters/runtime | 14 |
+| Apple shared | 10 |
+| Linux adapters/runtime | 22 |
 | Executable workers | 0 |
 | Test fixtures | 0 |
 
@@ -34,14 +34,14 @@ packaging build compiles the HostRunner, macOS application, shared Apple
 transports, and the shared iOS tunnel-control source. Its initial complete
 checking run produced 410 compiler warning records across 14 source files. The
 first migration slice isolated the macOS AppKit entry point; the verified
-current baseline is 348 warning records across 9 source files. The same
+current baseline is 330 warning records across 8 source files. The same
 source can be compiled into more than one product, so this number is a
 compiler-output baseline rather than a count of distinct code locations.
 
 | Compile area | Warning records | Affected source files |
 | --- | ---: | --- |
-| macOS host | 114 | `ObstacleBridgeHostRunner.swift` (114) |
-| Shared Apple transport, proxy, Admin, and helper owners | 225 | `ObstacleBridgeTcpOverlayTransportOwner.swift` (50), `ObstacleBridgeWebSocketOverlayTransportOwner.swift` (42), `ObstacleBridgeProxyServer.swift` (40), `ObstacleBridgeChannelMuxTCPTransportOwner.swift` (32), `ObstacleBridgeQuicOverlayTransportOwner.swift` (24), `ObstacleBridgeUdpOverlayTransportOwner.swift` (22), and `ObstacleBridgeTunHelperXPCTransport.swift` (15) |
+| macOS host | 108 | `ObstacleBridgeHostRunner.swift` (108) |
+| Shared Apple transport, proxy, and Admin owners | 210 | `ObstacleBridgeTcpOverlayTransportOwner.swift` (50), `ObstacleBridgeWebSocketOverlayTransportOwner.swift` (42), `ObstacleBridgeProxyServer.swift` (40), `ObstacleBridgeChannelMuxTCPTransportOwner.swift` (32), `ObstacleBridgeQuicOverlayTransportOwner.swift` (24), and `ObstacleBridgeUdpOverlayTransportOwner.swift` (22) |
 | Shared iOS tunnel-control source compiled by the macOS bundle | 12 | `ObstacleBridgeTunnelControl.swift` |
 
 The macOS application entry point now isolates its AppKit and WebKit state with
@@ -84,15 +84,21 @@ The WebAdmin server and its live sessions are confined to the server's serial
 listener queue. Their audited conformances eliminate 18 diagnostics while
 retaining the existing synchronous start-and-wait contract.
 
-The remaining XPC-helper diagnostics divide into three distinct ownership
-defects: the reachability dictionary is mutable static state despite its lock;
-the ping and request timeout racers capture non-Sendable local completion
-functions and `[String: Any]` values; and the completion-owned helper client is
-captured by HostRunner callbacks without a Sendable boundary. The remediation
-must give each request one synchronized completion state, give reachability a
-single synchronized owner, and return immutable response/status projections to
-the HostRunner service queue. Marking the whole XPC client Sendable would hide
-the callback transfer defect and is not an acceptable substitute.
+The XPC-helper bridge now gives reachability one synchronized owner and each
+ping or command one lock-owned request state. That request state arbitrates the
+reply, proxy-error, and timeout paths, records the winning result exactly once,
+and invokes its completion outside the lock so a client may safely re-enter its
+own lifecycle queue. The verified macOS product build emits no diagnostics from
+`ObstacleBridgeTunHelperXPCTransport.swift`. The completion-owned helper client
+is still captured by HostRunner callbacks without a Sendable boundary; that
+remaining issue belongs to the HostRunner inventory. Marking the whole XPC
+client Sendable would hide the callback transfer defect and is not an
+acceptable substitute.
+
+This is deliberately Apple-specific at the implementation boundary because it
+owns `NSXPCConnection` reply/error callbacks. Linux has the same general
+exactly-once request-completion requirement, but uses different IPC owners; it
+must be audited in those owners rather than sharing an Apple XPC wrapper.
 
 The findings fall into four migration groups:
 
@@ -105,9 +111,9 @@ The findings fall into four migration groups:
    runtime and callback properties. The TCP, UDP, QUIC, ChannelMux, WebSocket,
    proxy, and telemetry owners require explicit actor or serial-executor
    ownership before they can satisfy that contract.
-3. Shared mutable statics are not isolated: the helper XPC reachability cache,
-   HostRunner reference, Admin-Web proxy reference, and active tunnel manager
-   are reported as non-concurrency-safe global state.
+3. Shared mutable statics are not isolated: the HostRunner reference, Admin-Web
+   proxy reference, and active tunnel manager are reported as
+   non-concurrency-safe global state.
 4. Callback implementations also capture mutable local variables such as
    `self`, connections, proxy references, forwarded bytes, and tunnel-control
    response payloads. Those values must be represented by immutable snapshots
@@ -119,10 +125,9 @@ replace cross-boundary dictionaries and closures with Sendable value snapshots
 or actor operations, then make each completion route re-enter its owner. Do
 not address this baseline by adding `@unchecked Sendable`, locks, semaphores,
 or warning suppression; those mechanisms would hide the ownership defects that
-complete checking identifies. The documented telemetry state and UDP drivers
-are the only audited synchronous exceptions: the former locks every retained
-mutable value, while the latter confines every retained mutable value to its
-injected serial queue.
+complete checking identifies. The documented telemetry state, queue-confined
+Network bridges, reachability state, and XPC request states are narrow audited
+synchronous exceptions with named ownership and regression evidence.
 `@preconcurrency` is only appropriate at a
 documented imported-framework boundary after the repository-owned callback
 ownership is otherwise sound.

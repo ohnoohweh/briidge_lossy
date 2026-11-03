@@ -1957,3 +1957,14 @@ def test_tun_helper_xpc_reachability_state_is_synchronous_and_owned() -> None:
     assert "private static let reachabilityState = ObstacleBridgeTunHelperReachabilityState()" in source
     assert "return reachabilityState.snapshot()" in source
     assert "reachabilityState.replace(with: result)" in source
+
+
+def test_tun_helper_xpc_request_state_completes_once() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
+
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tun_helper_xpc_request_state_completes_once") == 2
+    assert "ObstacleBridgeTunHelperPingRequestState: @unchecked Sendable" in source
+    assert "ObstacleBridgeTunHelperCommandRequestState: @unchecked Sendable" in source
+    assert "guard !completed else { return nil }" in source
+    assert "completion?(result)" in source
+    assert "requestState.finish" in source

@@ -48,6 +48,12 @@ AUDITED_SYNCHRONOUS_OWNERS = (
         "ObstacleBridgeTunHelperReachabilityState: @unchecked Sendable",
         "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tun_helper_xpc_reachability_state_is_synchronous_and_owned",
     ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunHelperXPCTransport.swift",
+        "ObstacleBridgeTunHelperPingRequestState: @unchecked Sendable",
+        "ObstacleBridgeTunHelperCommandRequestState: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tun_helper_xpc_request_state_completes_once",
+    ),
 )
 
 def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:
