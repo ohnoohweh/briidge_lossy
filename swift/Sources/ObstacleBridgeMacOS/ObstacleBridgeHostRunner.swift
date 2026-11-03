@@ -163,6 +163,41 @@ private final class ObstacleBridgeHostRunnerTelemetryState: @unchecked Sendable 
     }
 }
 
+/// Owns immutable admin snapshots published by service and metrics work.
+private final class ObstacleBridgeHostRunnerAdminSnapshotState: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_host_runner_admin_snapshot_state_owns_async_metrics_cache
+    private let lock = NSLock()
+    private var status: [String: Any] = [:]
+    private var connections: [String: Any] = [:]
+    private var peers: [[String: Any]] = []
+    private var meta: [String: Any] = [:]
+    private var tunRouting: [String: Any] = [:]
+    private var runtimeMetrics: [String: Any] = [:]
+
+    func replace(status: [String: Any], connections: [String: Any], peers: [[String: Any]], meta: [String: Any], tunRouting: [String: Any]) {
+        lock.lock()
+        self.status = status
+        self.connections = connections
+        self.peers = peers
+        self.meta = meta
+        self.tunRouting = tunRouting
+        lock.unlock()
+    }
+
+    func replaceRuntimeMetrics(_ snapshot: [String: Any]) {
+        lock.lock()
+        runtimeMetrics = snapshot
+        lock.unlock()
+    }
+
+    func statusSnapshot() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return status }
+    func connectionsSnapshot() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return connections }
+    func peersSnapshot() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return peers }
+    func metaSnapshot() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return meta }
+    func tunRoutingSnapshot() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return tunRouting }
+    func runtimeMetricsSnapshot() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return runtimeMetrics }
+}
+
 private protocol ObstacleBridgeOverlayTransportOwning: AnyObject {
     func stop()
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]])
@@ -214,7 +249,6 @@ final class ObstacleBridgeHostRunner {
     private var startedAt = Date()
     private let serviceStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Services")
     private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
-    private let adminSnapshotQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.AdminSnapshots")
     private let runtimeHealthQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.RuntimeHealth")
     private let macOSTunHelperPackageQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.TunHelperPackage")
     private let controlActionQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.ControlActions")
@@ -273,12 +307,7 @@ final class ObstacleBridgeHostRunner {
     private var runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
     private var runtimeHealthSequence: UInt64 = 0
     private var previousRuntimeLifetimeEndedCleanly: Bool?
-    private var cachedStatusSnapshot: [String: Any] = [:]
-    private var cachedConnectionsSnapshot: [String: Any] = [:]
-    private var cachedPeersSnapshot: [[String: Any]] = []
-    private var cachedMetaSnapshot: [String: Any] = [:]
-    private var cachedTunRoutingSnapshot: [String: Any] = [:]
-    private var cachedRuntimeMetricsSnapshot: [String: Any] = [:]
+    private let adminSnapshotState = ObstacleBridgeHostRunnerAdminSnapshotState()
     /// Admin requests and the periodic cache publisher can both build a peer
     /// snapshot. Keep rate-history mutation serialized across those queues.
     private let peerTrafficRateLock = NSLock()
@@ -1037,18 +1066,14 @@ final class ObstacleBridgeHostRunner {
         let tunHelper = status["tun_helper"] as? [String: Any] ?? macOSTunHelperStatusSnapshot()
         tunRouting["tun_helper"] = tunHelper
         tunRouting["tun_control"] = tunControlSnapshot(for: tunHelper, routing: ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig))
-        let updateCache = { [weak self] in
-            self?.cachedStatusSnapshot = status
-            self?.cachedConnectionsSnapshot = connections
-            self?.cachedPeersSnapshot = peers
-            self?.cachedMetaSnapshot = meta
-            self?.cachedTunRoutingSnapshot = tunRouting
-        }
-        if sync {
-            adminSnapshotQueue.sync(execute: updateCache)
-        } else {
-            adminSnapshotQueue.async(execute: updateCache)
-        }
+        _ = sync
+        adminSnapshotState.replace(
+            status: status,
+            connections: connections,
+            peers: peers,
+            meta: meta,
+            tunRouting: tunRouting
+        )
     }
 
     private func withCurrentUptime(_ snapshot: [String: Any]) -> [String: Any] {
@@ -1059,7 +1084,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func cachedStatusOrBuild() -> [String: Any] {
-        let cached = adminSnapshotQueue.sync { cachedStatusSnapshot }
+        let cached = adminSnapshotState.statusSnapshot()
         if cached.isEmpty {
             return snapshotUncached()
         }
@@ -1067,28 +1092,27 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func runtimeMetricsSnapshot() -> [String: Any] {
-        let cached = adminSnapshotQueue.sync { cachedRuntimeMetricsSnapshot }
-        Task { [weak self] in
+        let cached = adminSnapshotState.runtimeMetricsSnapshot()
+        let state = adminSnapshotState
+        Task {
             let snapshot = await ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()
-            self?.adminSnapshotQueue.async { [weak self] in
-                self?.cachedRuntimeMetricsSnapshot = snapshot
-            }
+            state.replaceRuntimeMetrics(snapshot)
         }
         return cached.isEmpty ? ObstacleBridgeRuntimeMetrics.Reporter.emptySnapshotPayload() : cached
     }
 
     private func cachedConnectionsOrBuild() -> [String: Any] {
-        let cached = adminSnapshotQueue.sync { cachedConnectionsSnapshot }
+        let cached = adminSnapshotState.connectionsSnapshot()
         return cached.isEmpty ? connectionsSnapshotUncached() : cached
     }
 
     private func cachedPeersOrBuild() -> [[String: Any]] {
-        let cached = adminSnapshotQueue.sync { cachedPeersSnapshot }
+        let cached = adminSnapshotState.peersSnapshot()
         return cached.isEmpty ? peersSnapshotUncached() : cached
     }
 
     private func cachedMetaOrBuild() -> [String: Any] {
-        let cached = adminSnapshotQueue.sync { cachedMetaSnapshot }
+        let cached = adminSnapshotState.metaSnapshot()
         if cached.isEmpty {
             return metaSnapshotUncached()
         }
@@ -1098,7 +1122,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func cachedTunRoutingOrBuild() -> [String: Any] {
-        let cached = adminSnapshotQueue.sync { cachedTunRoutingSnapshot }
+        let cached = adminSnapshotState.tunRoutingSnapshot()
         if !cached.isEmpty {
             return cached
         }
