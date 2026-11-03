@@ -1993,3 +1993,14 @@ def test_websocket_overlay_owner_serializes_public_and_delegate_callbacks() -> N
     assert "withOwnerQueue { sendLocalTunPacketOnOwnerQueue(packet) }" in source
     assert "acceptLocalTCPConnectionOnOwnerQueue(" in source
     assert "acceptLocalUDPConnectionOnOwnerQueue(" in source
+
+
+def test_proxy_server_sessions_stay_on_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift").read_text(encoding="utf-8")
+
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue") == 2
+    assert "ObstacleBridgeProxyServer: @unchecked Sendable" in source
+    assert "ProxySession: @unchecked Sendable" in source
+    assert "private func withOwnerQueue<T>" in source
+    assert "return queue.sync(execute: body)" in source
+    assert "inbound.start(queue: queue)" in source

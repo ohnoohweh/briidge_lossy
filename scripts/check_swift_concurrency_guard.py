@@ -64,6 +64,12 @@ AUDITED_SYNCHRONOUS_OWNERS = (
         "ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWebSocketDelegate, URLSessionTaskDelegate, @unchecked Sendable",
         "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_websocket_overlay_owner_serializes_public_and_delegate_callbacks",
     ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeProxyServer.swift",
+        "ObstacleBridgeProxyServer: @unchecked Sendable",
+        "ProxySession: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue",
+    ),
 )
 
 def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:

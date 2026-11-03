@@ -9,13 +9,13 @@ by `scripts/check_swift_concurrency_guard.py`, except for the named,
 machine-tested Apple serial bridges below.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 34 declarations:
+approval to add lock-based ownership. The inventory contains 36 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
 | Shared Core | 0 |
 | Desktop shared | 0 |
-| Apple shared | 12 |
+| Apple shared | 14 |
 | Linux adapters/runtime | 22 |
 | Executable workers | 0 |
 | Test fixtures | 0 |
@@ -34,14 +34,14 @@ packaging build compiles the HostRunner, macOS application, shared Apple
 transports, and the shared iOS tunnel-control source. Its initial complete
 checking run produced 410 compiler warning records across 14 source files. The
 first migration slice isolated the macOS AppKit entry point; the verified
-current baseline is 238 warning records across 6 source files. The same
+current baseline is 198 warning records across 5 source files. The same
 source can be compiled into more than one product, so this number is a
 compiler-output baseline rather than a count of distinct code locations.
 
 | Compile area | Warning records | Affected source files |
 | --- | ---: | --- |
 | macOS host | 108 | `ObstacleBridgeHostRunner.swift` (108) |
-| Shared Apple transport, proxy, and Admin owners | 118 | `ObstacleBridgeProxyServer.swift` (40), `ObstacleBridgeChannelMuxTCPTransportOwner.swift` (32), `ObstacleBridgeQuicOverlayTransportOwner.swift` (24), and `ObstacleBridgeUdpOverlayTransportOwner.swift` (22) |
+| Shared Apple transport and Admin owners | 78 | `ObstacleBridgeChannelMuxTCPTransportOwner.swift` (32), `ObstacleBridgeQuicOverlayTransportOwner.swift` (24), and `ObstacleBridgeUdpOverlayTransportOwner.swift` (22) |
 | Shared iOS tunnel-control source compiled by the macOS bundle | 12 | `ObstacleBridgeTunnelControl.swift` |
 
 The macOS application entry point now isolates its AppKit and WebKit state with
@@ -86,6 +86,11 @@ work, Network callbacks, public lifecycle mutations, and send completions.
 Its external completion type is explicitly Sendable and every completion
 re-enters the owner queue through an immutable owner reference. The audited
 conformance eliminates 42 diagnostics without changing WebSocket sequencing.
+
+The proxy listener and each proxy session share one Network queue. Lifecycle
+and snapshot operations synchronously enter that queue; request forwarding is
+made immutable before send completion, and connect/reply continuations are
+Sendable. This audited boundary eliminates 40 diagnostics.
 
 The native TCP and UDP proxy connections follow the same serial-owner rule:
 their Network connections start on the injected proxy queue, which owns every
