@@ -19,6 +19,112 @@ EVIDENCE_FORMAT = re.compile(
 # This expanded rule cannot retroactively require evidence from earlier PR
 # work. Every Swift product-source change after this adoption point is gated.
 POLICY_BASELINE = "c4e994c4"
+AUDITED_SYNCHRONOUS_OWNERS = (
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTelemetryMTLSUploader.swift",
+        "ObstacleBridgeTelemetryLockedUploadState: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_macos_telemetry_uploader_uses_audited_synchronous_state",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeOverlayConnectionSupport.swift",
+        "ObstacleBridgeUDPServerConnectionDriver: @unchecked Sendable",
+        "ObstacleBridgeUDPClientConnectionDriver: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_overlay_connection_drivers_keep_callbacks_on_owner_queue",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeProxyConnections.swift",
+        "ObstacleBridgeTCPProxyConnection: @unchecked Sendable",
+        "ObstacleBridgeUDPProxyConnection: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebAdminServer.swift",
+        "ObstacleBridgeWebAdminServer: @unchecked Sendable",
+        "LiveSession: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunHelperXPCTransport.swift",
+        "ObstacleBridgeTunHelperReachabilityState: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tun_helper_xpc_reachability_state_is_synchronous_and_owned",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunHelperXPCTransport.swift",
+        "ObstacleBridgeTunHelperPingRequestState: @unchecked Sendable",
+        "ObstacleBridgeTunHelperCommandRequestState: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tun_helper_xpc_request_state_completes_once",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTcpOverlayTransportOwner.swift",
+        "ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift",
+        "ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWebSocketDelegate, URLSessionTaskDelegate, @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_websocket_overlay_owner_serializes_public_and_delegate_callbacks",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeProxyServer.swift",
+        "ObstacleBridgeProxyServer: @unchecked Sendable",
+        "ProxySession: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift",
+        "ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_channel_mux_tcp_owner_keeps_network_callbacks_on_owner_queue",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift",
+        "ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeUdpOverlayTransportOwner.swift",
+        "ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeiOS/ObstacleBridgeTunnelControl.swift",
+        "ObstacleBridgeTunnelControlState: @unchecked Sendable",
+        "ObstacleBridgeTunnelControlResponseState: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tunnel_control_state_serializes_shared_references",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift",
+        "ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_packet_flow_bridge_source_exists",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift",
+        "PacketTunnelCompletion: @unchecked Sendable",
+        "PacketTunnelSettingsSnapshot: @unchecked Sendable",
+        "PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable",
+        "SwiftSimpleUDPPeerBridge: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
+        "ObstacleBridgeHostRunnerTelemetryState: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_host_runner_telemetry_state_owns_timer_callbacks",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
+        "ObstacleBridgeHostRunnerAdminSnapshotState: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_host_runner_admin_snapshot_state_owns_async_metrics_cache",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
+        "ObstacleBridgeHostRunner: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue",
+    ),
+)
+
+def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:
+    """Allow the one documented synchronous Apple bridge, never a broad exemption."""
+    additions = "\n".join(added)
+    return any(path == owner[0] and all(marker in additions for marker in owner[1:]) for owner in AUDITED_SYNCHRONOUS_OWNERS)
 
 def effective_base(base_ref: str) -> str:
     if subprocess.run(["git", "merge-base", "--is-ancestor", base_ref, POLICY_BASELINE], cwd=ROOT).returncode == 0:
@@ -40,16 +146,18 @@ def validate(changes: dict[str, list[str]]) -> list[str]:
     for path, added in changes.items():
         if not path.startswith(SWIFT_SOURCE) or not path.endswith(".swift"):
             continue
+        audited_synchronous_owner = is_audited_synchronous_owner(path, added)
         if any(UNCHECKED in line for line in added):
-            errors.append(
-                f"{path}: new {UNCHECKED} conformances are forbidden; use actor isolation, a serial executor, or a proven Sendable value type."
-            )
-            continue
+            if not audited_synchronous_owner:
+                errors.append(
+                    f"{path}: new {UNCHECKED} conformances are forbidden; use actor isolation, a serial executor, or a proven Sendable value type."
+                )
+                continue
         source_path = ROOT / path
         if not source_path.exists() or UNCHECKED not in source_path.read_text(encoding="utf-8"):
             continue
         introduced = [primitive for primitive in SYNCHRONOUS_PRIMITIVES if any(primitive in line for line in added)]
-        if introduced:
+        if introduced and not audited_synchronous_owner:
             errors.append(
                 f"{path}: legacy {UNCHECKED} owners may not introduce synchronous coordination "
                 f"({', '.join(introduced)}); migrate the owner to actor or serial asynchronous ownership."

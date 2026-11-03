@@ -1303,6 +1303,11 @@ ARC-IO-001:
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_requires_usable_evidence
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_rejects_new_lock_in_legacy_owner
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_rejects_new_unchecked_owner
+    - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_allows_only_documented_synchronous_telemetry_owner
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_telemetry_uploader_uses_audited_synchronous_state
+    - ios/tests/test_m3_native_sources.py::test_overlay_connection_drivers_keep_callbacks_on_owner_queue
+    - ios/tests/test_m3_native_sources.py::test_native_proxy_connections_keep_callbacks_on_owner_queue
+    - ios/tests/test_m3_native_sources.py::test_web_admin_server_callbacks_keep_owner_queue
     # Also verifies coalesced cache warming after accepted records, so Admin
     # can project completed logs without reintroducing a synchronous receive
     # or transferring the non-Sendable supervisor through a callback.

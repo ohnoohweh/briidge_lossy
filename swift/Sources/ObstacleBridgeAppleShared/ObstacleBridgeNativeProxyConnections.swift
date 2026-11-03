@@ -16,7 +16,10 @@ public enum ObstacleBridgeProxyStatusProjection {
     public static func configuredEnabled(_ enabled: Bool) -> Bool { enabled }
 }
 
-final class ObstacleBridgeTCPProxyConnection {
+/// Both Network connections are started on the injected proxy-owner queue;
+/// all mutable proxy state is accessed only by callbacks on that queue.
+final class ObstacleBridgeTCPProxyConnection: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue
     private let chanID: Int
     private let spec: ObstacleBridgeNativeServiceSpec
     private let listenerHost: String
@@ -211,7 +214,9 @@ final class ObstacleBridgeTCPProxyConnection {
     }
 }
 
-final class ObstacleBridgeUDPProxyConnection {
+/// The UDP proxy shares the same injected serial owner queue.
+final class ObstacleBridgeUDPProxyConnection: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue
     private let spec: ObstacleBridgeNativeServiceSpec
     private let listenerHost: String
     private let listenerPort: Int

@@ -98,7 +98,7 @@ if [ -z "${SWIFTC_CMD}" ]; then
   exit 1
 fi
 
-SWIFT_EXTRA_FLAGS=()
+SWIFT_EXTRA_FLAGS=("-strict-concurrency=complete")
 echo "[build_macos_app] preparing pinned Core Crypto module"
 (cd "${REPO_ROOT}" && swift build --target ObstacleBridgeCore)
 CORE_CRYPTO_MODULE_DIR="$(find "${REPO_ROOT}/.build" -path '*/debug/Modules' -type d -print -quit)"
@@ -240,12 +240,16 @@ echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeTunPrivilegedHelperMain.swift"
 
 echo "[build_macos_app] compiling macOS proxy worker"
-"${SWIFTC_CMD}" -o "${PROXY_WORKER_BINARY_PATH}" \
+"${SWIFTC_CMD}" \
+  "${SWIFT_EXTRA_FLAGS_EXPANDED[@]}" \
+  -o "${PROXY_WORKER_BINARY_PATH}" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeProxyWorker/main.swift"
 
 echo "[build_macos_app] compiling macOS log collector"
-"${SWIFTC_CMD}" -o "${LOG_WORKER_BINARY_PATH}" \
+"${SWIFTC_CMD}" \
+  "${SWIFT_EXTRA_FLAGS_EXPANDED[@]}" \
+  -o "${LOG_WORKER_BINARY_PATH}" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeLogCollector/main.swift"
 

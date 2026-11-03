@@ -90,6 +90,114 @@ private final class ObstacleBridgeConfigStore {
     }
 }
 
+/// Owns telemetry lifecycle and upload state independently of HostRunner.
+private final class ObstacleBridgeHostRunnerTelemetryState: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_host_runner_telemetry_state_owns_timer_callbacks
+    private let lock = NSLock()
+    private var timer: DispatchSourceTimer?
+    private var emitter: ObstacleBridgeTelemetryEmitter?
+    private var spool: ObstacleBridgeTelemetrySpool?
+    private var uploader: ObstacleBridgeTelemetryMTLSUploader?
+
+    func start(emitter: ObstacleBridgeTelemetryEmitter, spool: ObstacleBridgeTelemetrySpool, uploader: ObstacleBridgeTelemetryMTLSUploader) {
+        stop()
+        let timer = DispatchSource.makeTimerSource()
+        timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(5))
+        timer.setEventHandler { [weak self] in self?.flush(startUpload: true) }
+        lock.lock()
+        self.emitter = emitter
+        self.spool = spool
+        self.uploader = uploader
+        self.timer = timer
+        _ = emitter.emit(event: "runtime.lifecycle", fields: ["state": .string("started")], priority: .critical)
+        lock.unlock()
+        timer.resume()
+    }
+
+    func stop() {
+        lock.lock()
+        let timer = self.timer
+        self.timer = nil
+        emitter?.emit(event: "runtime.lifecycle", fields: ["state": .string("stopped")], priority: .critical)
+        flushLocked(startUpload: false)
+        uploader?.cancel()
+        emitter = nil
+        spool = nil
+        uploader = nil
+        lock.unlock()
+        timer?.cancel()
+    }
+
+    func flush(startUpload: Bool) {
+        lock.lock()
+        flushLocked(startUpload: startUpload)
+        lock.unlock()
+    }
+
+    func enqueueHealth(state: String, counter: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let emitter else { return }
+        _ = emitter.emit(
+            event: "runtime.health",
+            fields: ["counter": .integer(Int64(clamping: counter)), "state": .string(state)],
+            priority: .low
+        )
+    }
+
+    func statusSnapshot(runtimeConfig: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        return ObstacleBridgeTelemetryAdminStatus.snapshot(
+            runtimeConfig: runtimeConfig,
+            emitter: emitter,
+            spool: spool,
+            uploader: uploader
+        )
+    }
+
+    private func flushLocked(startUpload: Bool) {
+        guard let emitter, let spool, let uploader else { return }
+        for event in emitter.drain() { _ = spool.append(event) }
+        if startUpload { uploader.uploadOnce() }
+    }
+}
+
+/// Owns immutable admin snapshots published by service and metrics work.
+private final class ObstacleBridgeHostRunnerAdminSnapshotState: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_host_runner_admin_snapshot_state_owns_async_metrics_cache
+    private let lock = NSLock()
+    private var status: [String: Any] = [:]
+    private var connections: [String: Any] = [:]
+    private var peers: [[String: Any]] = []
+    private var meta: [String: Any] = [:]
+    private var tunRouting: [String: Any] = [:]
+    private var runtimeMetrics: [String: Any] = [:]
+
+    func replace(status: [String: Any], connections: [String: Any], peers: [[String: Any]], meta: [String: Any], tunRouting: [String: Any]) {
+        lock.lock()
+        self.status = status
+        self.connections = connections
+        self.peers = peers
+        self.meta = meta
+        self.tunRouting = tunRouting
+        lock.unlock()
+    }
+
+    func replaceRuntimeMetrics(_ snapshot: [String: Any]) {
+        lock.lock()
+        runtimeMetrics = snapshot
+        lock.unlock()
+    }
+
+    func statusSnapshot() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return status }
+    func connectionsSnapshot() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return connections }
+    func peersSnapshot() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return peers }
+    func metaSnapshot() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return meta }
+    func tunRoutingSnapshot() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return tunRouting }
+    func runtimeMetricsSnapshot() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return runtimeMetrics }
+}
+
 private protocol ObstacleBridgeOverlayTransportOwning: AnyObject {
     func stop()
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]])
@@ -119,7 +227,14 @@ extension ObstacleBridgeTcpOverlayTransportOwner: ObstacleBridgeOverlayTransport
 extension ObstacleBridgeQuicOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}
 extension ObstacleBridgeUdpOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}
 
-final class ObstacleBridgeHostRunner {
+// OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue
+// Network and XPC callbacks may arrive on arbitrary system queues.  Every
+// service/lifecycle mutation synchronously re-enters `serviceStateQueue` (or
+// its explicitly named sibling owner queue) before touching state.  This
+// conformance documents that pre-existing synchronous ownership boundary so
+// callbacks do not need to capture mutable local proxies or dispatch an
+// additional unsafe handoff.
+final class ObstacleBridgeHostRunner: @unchecked Sendable {
     typealias MacOSTunHelperClientFactory = (
         DispatchQueue,
         @escaping (Data) -> Void,
@@ -141,9 +256,7 @@ final class ObstacleBridgeHostRunner {
     private var startedAt = Date()
     private let serviceStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Services")
     private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
-    private let adminSnapshotQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.AdminSnapshots")
     private let runtimeHealthQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.RuntimeHealth")
-    private let telemetryQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Telemetry")
     private let macOSTunHelperPackageQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.TunHelperPackage")
     private let controlActionQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.ControlActions")
     private var controlServer: ObstacleBridgeWebAdminServer?
@@ -156,7 +269,7 @@ final class ObstacleBridgeHostRunner {
     private var udpServiceListeners: [Int: NWListener] = [:]
     private var catalogUDPServiceListeners: [Int: NWListener] = [:]
     private var udpConnectionStates: [Int: [String: Any]] = [:]
-    private var udpConnectionObjects: [ObjectIdentifier: ObstacleBridgeUDPProxyConnection] = [:]
+    private var udpConnectionObjects: [UUID: ObstacleBridgeUDPProxyConnection] = [:]
     private var tcpServiceListeners: [Int: NWListener] = [:]
     private var catalogTCPServiceListeners: [Int: NWListener] = [:]
     private var catalogServiceSpecs: [Int: ObstacleBridgeNativeServiceSpec] = [:]
@@ -197,19 +310,11 @@ final class ObstacleBridgeHostRunner {
     private var clientRestartWatchdog: DispatchSourceTimer?
     private var adminSnapshotTimer: DispatchSourceTimer?
     private var runtimeHealthTimer: DispatchSourceTimer?
-    private var telemetryTimer: DispatchSourceTimer?
-    private var telemetryEmitter: ObstacleBridgeTelemetryEmitter?
-    private var telemetrySpool: ObstacleBridgeTelemetrySpool?
-    private var telemetryUploader: ObstacleBridgeTelemetryMTLSUploader?
+    private let telemetryState = ObstacleBridgeHostRunnerTelemetryState()
     private var runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
     private var runtimeHealthSequence: UInt64 = 0
     private var previousRuntimeLifetimeEndedCleanly: Bool?
-    private var cachedStatusSnapshot: [String: Any] = [:]
-    private var cachedConnectionsSnapshot: [String: Any] = [:]
-    private var cachedPeersSnapshot: [[String: Any]] = []
-    private var cachedMetaSnapshot: [String: Any] = [:]
-    private var cachedTunRoutingSnapshot: [String: Any] = [:]
-    private var cachedRuntimeMetricsSnapshot: [String: Any] = [:]
+    private let adminSnapshotState = ObstacleBridgeHostRunnerAdminSnapshotState()
     /// Admin requests and the periodic cache publisher can both build a peer
     /// snapshot. Keep rate-history mutation serialized across those queues.
     private let peerTrafficRateLock = NSLock()
@@ -602,47 +707,23 @@ final class ObstacleBridgeHostRunner {
               let spool = try? ObstacleBridgeTelemetrySpool(directory: spoolURL),
               let policy = try? ObstacleBridgeTelemetryUploadPolicy(spool: spool, endpoint: endpoint)
         else { return }
-        let timer = DispatchSource.makeTimerSource(queue: telemetryQueue)
-        timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(5))
-        timer.setEventHandler { [weak self] in self?.flushTelemetry() }
-        telemetryQueue.sync {
-            telemetryEmitter = emitter
-            telemetrySpool = spool
-            telemetryUploader = ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: telemetryIdentity.identity)
-            _ = emitter.emit(event: "runtime.lifecycle", fields: ["state": .string("started")], priority: .critical)
-            telemetryTimer = timer
-            timer.resume()
-        }
+        telemetryState.start(
+            emitter: emitter,
+            spool: spool,
+            uploader: ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: telemetryIdentity.identity)
+        )
     }
 
     private func flushTelemetry(startUpload: Bool = true) {
-        guard let emitter = telemetryEmitter, let spool = telemetrySpool, let uploader = telemetryUploader else { return }
-        for event in emitter.drain() { _ = spool.append(event) }
-        if startUpload { uploader.uploadOnce() }
+        telemetryState.flush(startUpload: startUpload)
     }
 
     private func stopTelemetry() {
-        telemetryTimer?.cancel(); telemetryTimer = nil
-        telemetryQueue.sync { [weak self] in
-            self?.telemetryEmitter?.emit(event: "runtime.lifecycle", fields: ["state": .string("stopped")], priority: .critical)
-            self?.flushTelemetry(startUpload: false)
-            self?.telemetryUploader?.cancel()
-        }
-        telemetryEmitter = nil; telemetrySpool = nil; telemetryUploader = nil
+        telemetryState.stop()
     }
 
     private func enqueueTelemetryHealth(state: String, counter: UInt64) {
-        telemetryQueue.async { [weak self] in
-            guard let emitter = self?.telemetryEmitter else { return }
-            _ = emitter.emit(
-                event: "runtime.health",
-                fields: [
-                    "counter": .integer(Int64(clamping: counter)),
-                    "state": .string(state),
-                ],
-                priority: .low
-            )
-        }
+        telemetryState.enqueueHealth(state: state, counter: counter)
     }
 
     private func beginRuntimeHealthLifetime() {
@@ -992,18 +1073,14 @@ final class ObstacleBridgeHostRunner {
         let tunHelper = status["tun_helper"] as? [String: Any] ?? macOSTunHelperStatusSnapshot()
         tunRouting["tun_helper"] = tunHelper
         tunRouting["tun_control"] = tunControlSnapshot(for: tunHelper, routing: ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig))
-        let updateCache = { [weak self] in
-            self?.cachedStatusSnapshot = status
-            self?.cachedConnectionsSnapshot = connections
-            self?.cachedPeersSnapshot = peers
-            self?.cachedMetaSnapshot = meta
-            self?.cachedTunRoutingSnapshot = tunRouting
-        }
-        if sync {
-            adminSnapshotQueue.sync(execute: updateCache)
-        } else {
-            adminSnapshotQueue.async(execute: updateCache)
-        }
+        _ = sync
+        adminSnapshotState.replace(
+            status: status,
+            connections: connections,
+            peers: peers,
+            meta: meta,
+            tunRouting: tunRouting
+        )
     }
 
     private func withCurrentUptime(_ snapshot: [String: Any]) -> [String: Any] {
@@ -1014,7 +1091,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func cachedStatusOrBuild() -> [String: Any] {
-        let cached = adminSnapshotQueue.sync { cachedStatusSnapshot }
+        let cached = adminSnapshotState.statusSnapshot()
         if cached.isEmpty {
             return snapshotUncached()
         }
@@ -1022,28 +1099,27 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func runtimeMetricsSnapshot() -> [String: Any] {
-        let cached = adminSnapshotQueue.sync { cachedRuntimeMetricsSnapshot }
-        Task { [weak self] in
+        let cached = adminSnapshotState.runtimeMetricsSnapshot()
+        let state = adminSnapshotState
+        Task {
             let snapshot = await ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()
-            self?.adminSnapshotQueue.async { [weak self] in
-                self?.cachedRuntimeMetricsSnapshot = snapshot
-            }
+            state.replaceRuntimeMetrics(snapshot)
         }
         return cached.isEmpty ? ObstacleBridgeRuntimeMetrics.Reporter.emptySnapshotPayload() : cached
     }
 
     private func cachedConnectionsOrBuild() -> [String: Any] {
-        let cached = adminSnapshotQueue.sync { cachedConnectionsSnapshot }
+        let cached = adminSnapshotState.connectionsSnapshot()
         return cached.isEmpty ? connectionsSnapshotUncached() : cached
     }
 
     private func cachedPeersOrBuild() -> [[String: Any]] {
-        let cached = adminSnapshotQueue.sync { cachedPeersSnapshot }
+        let cached = adminSnapshotState.peersSnapshot()
         return cached.isEmpty ? peersSnapshotUncached() : cached
     }
 
     private func cachedMetaOrBuild() -> [String: Any] {
-        let cached = adminSnapshotQueue.sync { cachedMetaSnapshot }
+        let cached = adminSnapshotState.metaSnapshot()
         if cached.isEmpty {
             return metaSnapshotUncached()
         }
@@ -1053,7 +1129,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func cachedTunRoutingOrBuild() -> [String: Any] {
-        let cached = adminSnapshotQueue.sync { cachedTunRoutingSnapshot }
+        let cached = adminSnapshotState.tunRoutingSnapshot()
         if !cached.isEmpty {
             return cached
         }
@@ -1628,12 +1704,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func telemetryStatusSnapshot() -> [String: Any] {
-        ObstacleBridgeTelemetryAdminStatus.snapshot(
-            runtimeConfig: runtimeConfig,
-            emitter: telemetryEmitter,
-            spool: telemetrySpool,
-            uploader: telemetryUploader
-        )
+        telemetryState.statusSnapshot(runtimeConfig: runtimeConfig)
     }
 
     private func staticFileResponse(path: String) -> (contentType: String, body: Data)? {
@@ -2415,9 +2486,9 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func applyRemoteServiceCatalog(_ install: ObstacleBridgeAppleServiceCatalog.Install) {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue
         guard install.accepted else { return }
-        serviceStateQueue.async { [weak self] in
-            guard let self else { return }
+        withServiceStateQueue {
             for spec in install.removed {
                 let id = spec.svcID
                 self.catalogTCPServiceListeners.removeValue(forKey: id)?.cancel()
@@ -2460,7 +2531,10 @@ final class ObstacleBridgeHostRunner {
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(spec.listenBind), port: port)
         let listener = try NWListener(using: params)
         listener.newConnectionHandler = { [weak self] connection in
-            self?.acceptUDPConnection(connection, spec: spec)
+            guard let self else { return }
+            self.withServiceStateQueue {
+                self.acceptUDPConnection(connection, spec: spec)
+            }
         }
         listener.start(queue: serviceStateQueue)
         catalogUDPServiceListeners[spec.svcID] = listener
@@ -2475,20 +2549,24 @@ final class ObstacleBridgeHostRunner {
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(spec.listenBind), port: port)
         let listener = try NWListener(using: params)
         listener.newConnectionHandler = { [weak self] connection in
-            self?.acceptTCPConnection(connection, spec: spec)
+            guard let self else { return }
+            self.withServiceStateQueue {
+                self.acceptTCPConnection(connection, spec: spec)
+            }
         }
         listener.start(queue: serviceStateQueue)
         catalogTCPServiceListeners[spec.svcID] = listener
     }
 
     private func teardownSharedMacOSTunAdapter(runLifecycleHook: Bool) {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue
         if runLifecycleHook,
            let tunService = ownServerSpecs.first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }) {
             runMacOSTunLifecycleHook(for: tunService, event: "on_stopped")
         }
         if let xpcClient = macOSTunHelperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
             xpcClient.stop { [weak self, xpcClient] _ in
-                self?.serviceStateQueue.async {
+                self?.withServiceStateQueue {
                     guard let self else { return }
                     self.macOSTunHelperRuntimeSnapshot = xpcClient.runtimeSnapshot
                 }
@@ -2525,6 +2603,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func acceptUDPConnection(_ connection: NWConnection, spec: ObstacleBridgeNativeServiceSpec) {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue
         if let activeOwner = currentOverlayOwner(),
            activeOwner.owner.acceptLocalUDPConnection(
             connection,
@@ -2540,8 +2619,8 @@ final class ObstacleBridgeHostRunner {
             return
         }
         let remote = NWConnection(host: NWEndpoint.Host(spec.targetHost), port: remotePort, using: .udp)
-        var proxy: ObstacleBridgeUDPProxyConnection!
-        proxy = ObstacleBridgeUDPProxyConnection(
+        let proxyID = UUID()
+        let proxy = ObstacleBridgeUDPProxyConnection(
             spec: spec,
             listenerHost: spec.listenBind,
             listenerPort: spec.listenPort,
@@ -2550,25 +2629,25 @@ final class ObstacleBridgeHostRunner {
             remoteConnection: remote,
             queue: serviceStateQueue,
             updateState: { [weak self] state in
-                self?.serviceStateQueue.async {
+                guard let self else { return }
+                self.withServiceStateQueue {
                     if let state, let chanID = state["chan_id"] as? Int {
-                        self?.udpConnectionStates[chanID] = state
+                        self.udpConnectionStates[chanID] = state
                     }
                 }
             },
             finish: { [weak self] chanID in
-                self?.serviceStateQueue.async {
+                guard let self else { return }
+                self.withServiceStateQueue {
                     if let chanID {
-                        self?.udpConnectionStates.removeValue(forKey: chanID)
+                        self.udpConnectionStates.removeValue(forKey: chanID)
                     }
-                    self?.udpConnectionObjects.removeValue(forKey: ObjectIdentifier(proxy))
+                    self.udpConnectionObjects.removeValue(forKey: proxyID)
                 }
             }
         )
-        serviceStateQueue.async {
-            self.udpConnectionObjects[ObjectIdentifier(proxy)] = proxy
-            proxy.start()
-        }
+        udpConnectionObjects[proxyID] = proxy
+        proxy.start()
     }
 
     private func startTCPService(_ spec: ObstacleBridgeNativeServiceSpec) throws {
@@ -2580,7 +2659,10 @@ final class ObstacleBridgeHostRunner {
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(spec.listenBind), port: port)
         let listener = try NWListener(using: params)
         listener.newConnectionHandler = { [weak self] connection in
-            self?.acceptTCPConnection(connection, spec: spec)
+            guard let self else { return }
+            self.withServiceStateQueue {
+                self.acceptTCPConnection(connection, spec: spec)
+            }
         }
         listener.start(queue: serviceStateQueue)
         withServiceStateQueue {
@@ -2619,22 +2701,22 @@ final class ObstacleBridgeHostRunner {
             remoteConnection: remote,
             queue: serviceStateQueue,
             updateState: { [weak self] state in
-                self?.serviceStateQueue.async {
-                    self?.tcpConnectionStates[acceptSnapshot.chanID] = state
+                guard let self else { return }
+                self.withServiceStateQueue {
+                    self.tcpConnectionStates[acceptSnapshot.chanID] = state
                 }
             },
             finish: { [weak self] (chanID: Int) in
-                self?.serviceStateQueue.async {
-                    self?.tcpConnectionStates.removeValue(forKey: chanID)
-                    self?.tcpConnectionObjects.removeValue(forKey: chanID)
+                guard let self else { return }
+                self.withServiceStateQueue {
+                    self.tcpConnectionStates.removeValue(forKey: chanID)
+                    self.tcpConnectionObjects.removeValue(forKey: chanID)
                 }
             }
         )
-        serviceStateQueue.async {
-            self.tcpConnectionObjects[acceptSnapshot.chanID] = proxy
-            self.tcpConnectionStates[acceptSnapshot.chanID] = proxy.snapshot()
-            proxy.start()
-        }
+        tcpConnectionObjects[acceptSnapshot.chanID] = proxy
+        tcpConnectionStates[acceptSnapshot.chanID] = proxy.snapshot()
+        proxy.start()
     }
 
     private func connectionsSnapshot() -> [String: Any] {
@@ -2964,7 +3046,7 @@ final class ObstacleBridgeHostRunner {
     private func prepareSharedOverlayBootstrap() {
         if let xpcClient = macOSTunHelperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
             xpcClient.stop { [weak self, xpcClient] _ in
-                self?.serviceStateQueue.async {
+                self?.withServiceStateQueue {
                     guard let self else { return }
                     self.macOSTunHelperRuntimeSnapshot = xpcClient.runtimeSnapshot
                 }
@@ -3434,7 +3516,7 @@ final class ObstacleBridgeHostRunner {
         macOSTunHelperTransportKind = helperClient.transportKind
         if let xpcClient = helperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
             xpcClient.openTun(ObstacleBridgeTunHelperOpenRequest(requestedIfname: ifname, mtu: mtu)) { [weak self, xpcClient] result in
-                self?.serviceStateQueue.async {
+                self?.withServiceStateQueue {
                     guard let self else { return }
                     switch result {
                     case .success:
@@ -3913,7 +3995,7 @@ final class ObstacleBridgeHostRunner {
         let helperEnvSnapshot = Self.macOSTunHelperHookEnvSnapshot(from: env)
         if let xpcClient = macOSTunHelperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
             let completed: (Result<[String: Any], Error>) -> Void = { [weak self, xpcClient] result in
-                self?.serviceStateQueue.async {
+                self?.withServiceStateQueue {
                     guard let self else { return }
                     if case .failure(let error) = result {
                         xpcClient.recordFailure(stage: event == "on_stopped" ? "remove_network" : "apply_network", error: error.localizedDescription)
@@ -3960,7 +4042,7 @@ final class ObstacleBridgeHostRunner {
         guard let helperClient = macOSTunHelperClient else { return }
         if let xpcClient = helperClient as? ObstacleBridgeAsyncXPCTunHelperClient {
             xpcClient.writePacket(packet) { [weak self, xpcClient] result in
-                self?.serviceStateQueue.async {
+                self?.withServiceStateQueue {
                     guard let self else { return }
                     if case .failure(let error) = result {
                         self.recordOperationalLog(event: "macos_utun_write_failed", level: "ERROR", levelNumber: 40)

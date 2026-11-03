@@ -2100,6 +2100,35 @@ def test_macos_app_bundle_embeds_latest_macos_tun_hook() -> None:
     assert 'chmod 755 "${APP_RESOURCES_DIR}/scripts/client-tun-hook-macos.sh"' in build_script
 
 
+def test_macos_app_main_explicitly_owns_ui_state_on_main_actor() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeMacAppMain.swift").read_text(encoding="utf-8")
+
+    assert "@MainActor\nfinal class ObstacleBridgeMacAppMain" in source
+    assert "Task { @MainActor in\n                self?.probeAndLoadWebAdmin()" in source
+
+
+def test_macos_build_enables_complete_strict_concurrency_for_every_swiftc_product() -> None:
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+
+    assert 'SWIFT_EXTRA_FLAGS=("-strict-concurrency=complete")' in build_script
+    assert build_script.count('"${SWIFT_EXTRA_FLAGS_EXPANDED[@]}"') == 5
+
+
+def test_macos_telemetry_uploader_requires_sendable_upload_completions() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift").read_text(encoding="utf-8")
+
+    assert "completion: @escaping @Sendable (Bool) -> Void" in source
+
+
+def test_macos_telemetry_uploader_uses_audited_synchronous_state() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift").read_text(encoding="utf-8")
+
+    assert "private final class ObstacleBridgeTelemetryLockedUploadState: @unchecked Sendable" in source
+    assert "private let lock = NSLock()" in source
+    assert "[weak self]" not in source
+    assert "completion(uploadState.finishUpload" in source
+
+
 class _AsyncBridgeClientThread:
     def __init__(self, config: dict) -> None:
         self.client = ObstacleBridgeClient(_group_python_peer_config(config))

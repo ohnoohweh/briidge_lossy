@@ -1,7 +1,13 @@
 import Foundation
 import Network
 
-final class ObstacleBridgeTcpOverlayTransportOwner {
+/// Owns every mutable transport value on `queue`.
+///
+/// Network callbacks and public lifecycle calls may originate on different
+/// executors. Public mutation entry points synchronously marshal to `queue`,
+/// while callbacks re-enter that same queue before reading or writing state.
+final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
     typealias ServiceCatalogSink = (ObstacleBridgeAppleServiceCatalog.Install) -> Void
@@ -183,7 +189,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             )
         }
         overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in
-            self?.queue.async { self?.applyCoreEffects(effects) }
+            guard let owner = self else { return }
+            owner.queue.async { owner.applyCoreEffects(effects) }
         }
         overlayLayerTransportAdapter?.setPendingSecureLinkPayloadWorkSink { [weak self] in
             self?.scheduleSecureLinkPayloadDrain()
@@ -191,6 +198,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     func start() {
+        withOwnerQueue { startOnOwnerQueue() }
+    }
+
+    private func startOnOwnerQueue() {
         guard !started else {
             return
         }
@@ -214,6 +225,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     func stop() {
+        withOwnerQueue { stopOnOwnerQueue() }
+    }
+
+    private func stopOnOwnerQueue() {
         guard started else {
             return
         }
@@ -382,6 +397,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     func sendLocalTunPacket(_ packet: Data) {
+        withOwnerQueue { sendLocalTunPacketOnOwnerQueue(packet) }
+    }
+
+    private func sendLocalTunPacketOnOwnerQueue(_ packet: Data) {
         do {
             try ObstacleBridgeOverlayChannelCore.sendLocalTunPacket(
                 packet,
@@ -414,6 +433,22 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         listenerHost: String,
         listenerPort: Int
     ) -> Bool {
+        withOwnerQueue {
+            acceptLocalTCPConnectionOnOwnerQueue(
+                connection,
+                spec: spec,
+                listenerHost: listenerHost,
+                listenerPort: listenerPort
+            )
+        }
+    }
+
+    private func acceptLocalTCPConnectionOnOwnerQueue(
+        _ connection: NWConnection,
+        spec: ObstacleBridgeChannelMuxCodec.ServiceSpec,
+        listenerHost: String,
+        listenerPort: Int
+    ) -> Bool {
         ObstacleBridgeOverlayChannelCore.acceptLocalTCPConnection(
             connection,
             spec: spec,
@@ -434,11 +469,28 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         listenerPort: Int,
         serviceKey: String
     ) -> Bool {
+        withOwnerQueue {
+            acceptLocalUDPConnectionOnOwnerQueue(
+                connection,
+                spec: spec,
+                listenerHost: listenerHost,
+                listenerPort: listenerPort,
+                serviceKey: serviceKey
+            )
+        }
+    }
+
+    private func acceptLocalUDPConnectionOnOwnerQueue(
+        _ connection: NWConnection,
+        spec: ObstacleBridgeChannelMuxCodec.ServiceSpec,
+        listenerHost: String,
+        listenerPort: Int,
+        serviceKey: String
+    ) -> Bool {
         var driver: ObstacleBridgeUDPServerConnectionDriver!
         connection.stateUpdateHandler = { [weak self] state in
-            self?.queue.async {
-                self?.handleUDPServerConnectionState(state)
-            }
+            guard let owner = self else { return }
+            owner.queue.async { owner.handleUDPServerConnectionState(state) }
         }
         connection.start(queue: queue)
         driver = ObstacleBridgeUDPServerConnectionDriver(
@@ -570,9 +622,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         let connection = NWConnection(host: NWEndpoint.Host(resolved.host), port: port, using: .tcp)
         overlayConnection = connection
         connection.stateUpdateHandler = { [weak self] state in
-            self?.queue.async {
-                self?.handleOverlayState(state)
-            }
+            guard let owner = self else { return }
+            owner.queue.async { owner.handleOverlayState(state) }
         }
         connection.start(queue: queue)
     }
@@ -587,14 +638,12 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         do {
             let listener = try NWListener(using: params)
             listener.stateUpdateHandler = { [weak self] state in
-                self?.queue.async {
-                    self?.handleOverlayListenerState(state)
-                }
+                guard let owner = self else { return }
+                owner.queue.async { owner.handleOverlayListenerState(state) }
             }
             listener.newConnectionHandler = { [weak self] connection in
-                self?.queue.async {
-                    self?.acceptOverlayConnection(connection)
-                }
+                guard let owner = self else { return }
+                owner.queue.async { owner.acceptOverlayConnection(connection) }
             }
             overlayListener = listener
             listener.start(queue: queue)
@@ -794,30 +843,31 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             return
         }
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
-            self?.queue.async {
-                guard let self, self.started else { return }
-                guard self.overlayConnection === connection else { return }
-                guard self.overlayLayerTransportAdapter == nil || self.coreReceiveEpoch != nil else { return }
+            guard let owner = self else { return }
+            owner.queue.async {
+                guard owner.started else { return }
+                guard owner.overlayConnection === connection else { return }
+                guard owner.overlayLayerTransportAdapter == nil || owner.coreReceiveEpoch != nil else { return }
                 if let data, !data.isEmpty {
-                    self.receiveBuffer.append(data)
-                    let snapshot = self.overlayRuntime.handleInboundBytes(self.receiveBuffer)
+                    owner.receiveBuffer.append(data)
+                    let snapshot = owner.overlayRuntime.handleInboundBytes(owner.receiveBuffer)
                     if snapshot.consumedBytes > 0 {
-                        self.receiveBuffer.removeSubrange(0..<snapshot.consumedBytes)
+                        owner.receiveBuffer.removeSubrange(0..<snapshot.consumedBytes)
                     }
                     for payload in snapshot.completedPayloads {
-                        self.handleOverlayTransportPayload(payload)
+                        owner.handleOverlayTransportPayload(payload)
                     }
                 }
                 if isComplete || error != nil {
-                    self.coreReceiveEpoch = nil
-                    if self.peerHost.isEmpty {
-                        self.closeAcceptedOverlayConnection(connection)
+                    owner.coreReceiveEpoch = nil
+                    if owner.peerHost.isEmpty {
+                        owner.closeAcceptedOverlayConnection(connection)
                     } else {
-                        self.overlayConnected = false
+                        owner.overlayConnected = false
                     }
                     return
                 }
-                self.receiveFromOverlay()
+                owner.receiveFromOverlay()
             }
         }
     }

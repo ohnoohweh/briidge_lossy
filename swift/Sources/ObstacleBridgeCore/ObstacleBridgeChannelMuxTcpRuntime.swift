@@ -34,7 +34,7 @@ public struct ObstacleBridgeChannelMuxChannelIDAllocation: Equatable, Sendable {
 }
 
 public final class ObstacleBridgeChannelMuxTcpRuntime {
-    public struct LocalServerAcceptSnapshot {
+    public struct LocalServerAcceptSnapshot: Sendable {
         public let chanID: Int
         public let frames: [Data]
         public let nextTcpID: Int

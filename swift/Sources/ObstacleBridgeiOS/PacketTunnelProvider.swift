@@ -1,6 +1,6 @@
 import Foundation
 import Network
-import NetworkExtension
+@preconcurrency import NetworkExtension
 import Darwin
 
 #if OB_IPSERVER_SWIFT_SMOKE || OB_IPSERVER_SWIFT_PROBE
@@ -23,8 +23,37 @@ private enum PacketTunnelProviderOnboardingError: LocalizedError {
     }
 }
 
+// OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
+// NetworkExtension owns the lifecycle callback. This immutable cell transfers
+// only its completion across that imported-framework boundary.
+private final class PacketTunnelCompletion: @unchecked Sendable {
+    private let handler: (Error?) -> Void
+
+    init(_ handler: @escaping (Error?) -> Void) {
+        self.handler = handler
+    }
+
+    func finish(_ error: Error?) {
+        handler(error)
+    }
+}
+
+// OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
+// A routing update callback reads this immutable snapshot after the imported
+// NetworkExtension completion re-enters the provider owner.
+private final class PacketTunnelSettingsSnapshot: @unchecked Sendable {
+    let value: [String: Any]
+
+    init(_ value: [String: Any]) {
+        self.value = value
+    }
+}
+
 @objc(PacketTunnelProvider)
-class PacketTunnelProvider: NEPacketTunnelProvider {
+// OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
+// NetworkExtension serializes provider lifecycle callbacks; private queues own
+// the independently scheduled telemetry, snapshot, and health state.
+class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     static let defaultTunnelAddress = "192.168.106.1"
     static let defaultTunnelPrefix = 30
     static let defaultIncludedRoutes = ["0.0.0.0/0"]
@@ -696,6 +725,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 fields: settingsPayload
             )
             let settings = configuration.makeNetworkSettings(includeRoutes: tunRoutingEnabled)
+            let completion = PacketTunnelCompletion(completionHandler)
             setTunnelNetworkSettings(settings) { [weak self] error in
                 guard let self else { return }
                 if let error {
@@ -704,15 +734,24 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         fields: ["error": error.localizedDescription]
                     )
                     self.updateProviderState("setTunnelNetworkSettings_failed", extraFields: ["error": error.localizedDescription])
-                    completionHandler(error)
+                    completion.finish(error)
                     return
                 }
                 self.recordNativeEvent(
                     "tunnel_network_settings_applied",
-                    fields: settingsPayload
+                    fields: self.effectivePacketTunnelSettingsState
                 )
+                let callbackProviderConfiguration = (self.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
+                guard let callbackConfiguration = self.packetTunnelConfiguration else {
+                    completion.finish(NSError(
+                        domain: self.errorDomain,
+                        code: 4,
+                        userInfo: [NSLocalizedDescriptionKey: "Tunnel configuration was cleared before network settings completed"]
+                    ))
+                    return
+                }
                 do {
-                    try self.startProxyProviderIfConfigured(providerConfiguration: providerConfiguration)
+                    try self.startProxyProviderIfConfigured(providerConfiguration: callbackProviderConfiguration)
                 } catch {
                     self.recordNativeEvent(
                         "startTunnel_proxy_provider_failed",
@@ -722,15 +761,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         "startTunnel_proxy_provider_failed",
                         extraFields: ["error": error.localizedDescription]
                     )
-                    completionHandler(error)
+                    completion.finish(error)
                     return
                 }
-                self.prepareSharedOverlayBootstrap(providerConfiguration: providerConfiguration)
-                self.startTelemetryIfConfigured(providerConfiguration: providerConfiguration)
-                let connectorMode = self.packetflowConnectorMode(providerConfiguration: providerConfiguration) ?? ""
+                self.prepareSharedOverlayBootstrap(providerConfiguration: callbackProviderConfiguration)
+                self.startTelemetryIfConfigured(providerConfiguration: callbackProviderConfiguration)
+                let connectorMode = self.packetflowConnectorMode(providerConfiguration: callbackProviderConfiguration) ?? ""
                 guard let swiftSettings = self.swiftSimpleUDPPeerSettings(
-                    providerConfiguration: providerConfiguration,
-                    defaultMTU: configuration.mtu
+                    providerConfiguration: callbackProviderConfiguration,
+                    defaultMTU: callbackConfiguration.mtu
                 ) else {
                     if connectorMode == "swift_udp" {
                         self.runtimeMode = "swift_udp"
@@ -747,7 +786,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                             )
                             self.enqueueTelemetryFailure(errorCode: "admin_web_start")
                             self.stopProxyProvider()
-                            completionHandler(error)
+                            completion.finish(error)
                             return
                         }
                         self.startProviderHeartbeat()
@@ -759,7 +798,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                             "startTunnel_waiting_for_onboarding",
                             extraFields: ["mode": connectorMode]
                         )
-                        completionHandler(nil)
+                        completion.finish(nil)
                         return
                     }
                     let error = NSError(
@@ -777,7 +816,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     )
                     self.enqueueTelemetryFailure(errorCode: "unsupported_runtime_mode")
                     self.stopProxyProvider()
-                    completionHandler(error)
+                    completion.finish(error)
                     return
                 }
                 self.runtimeMode = swiftSettings.runtimeMode
@@ -792,18 +831,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 do {
                     let muxInstanceID = UInt64.random(in: 1...UInt64.max)
                     let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
-                    let tcpServiceSpecs = self.localTCPServiceSpecs(providerConfiguration: providerConfiguration)
-                    let udpServiceSpecs = self.localUDPServiceSpecs(providerConfiguration: providerConfiguration)
+                    let tcpServiceSpecs = self.localTCPServiceSpecs(providerConfiguration: callbackProviderConfiguration)
+                    let udpServiceSpecs = self.localUDPServiceSpecs(providerConfiguration: callbackProviderConfiguration)
                     let startupMuxFrames = self.remoteServiceCatalogMuxFrames(
-                        providerConfiguration: providerConfiguration,
+                        providerConfiguration: callbackProviderConfiguration,
                         instanceID: muxInstanceID,
                         connectionSeq: muxConnectionSeq
                     )
                     let bridge = try SwiftSimpleUDPPeerBridge(
                         provider: self,
                         settings: swiftSettings,
-                        tunnelAddress: configuration.tunnelAddress,
-                        tunnelAddress6: configuration.tunnelAddress6,
+                        tunnelAddress: callbackConfiguration.tunnelAddress,
+                        tunnelAddress6: callbackConfiguration.tunnelAddress6,
                         tcpServiceSpecs: tcpServiceSpecs,
                         udpServiceSpecs: udpServiceSpecs,
                         startupMuxFrames: startupMuxFrames,
@@ -826,7 +865,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         )
                         self.enqueueTelemetryFailure(errorCode: "admin_web_start")
                         self.stopProxyProvider()
-                        completionHandler(error)
+                        completion.finish(error)
                         return
                     }
                     self.recordNativeEvent(
@@ -845,7 +884,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     if swiftSettings.runtimeMode == "swift_simple_udp" {
                         self.startProviderHeartbeat()
                         self.updateProviderState("startTunnel_completed_swift_simple_udp")
-                        completionHandler(nil)
+                        completion.finish(nil)
                         return
                     }
                     self.startProviderHeartbeat()
@@ -854,7 +893,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         "startTunnel_completed_swift_udp",
                         extraFields: ["mode": swiftSettings.runtimeMode]
                     )
-                    completionHandler(nil)
+                    completion.finish(nil)
                     return
                 } catch {
                     self.recordNativeEvent(
@@ -878,7 +917,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     )
                     self.enqueueTelemetryFailure(errorCode: "bridge_start")
                     self.stopProxyProvider()
-                    completionHandler(error)
+                    completion.finish(error)
                     return
                 }
             }
@@ -1699,46 +1738,47 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             return
         }
 
-        let refreshWork = { [weak self] in
-            guard let self else { return }
-            defer {
-                self.adminTunVerificationQueue.async {
-                    self.adminTunVerificationRefreshInFlight = false
-                }
-            }
-            let runtimeConfig = self.adminRuntimeConfigPayload() ?? [:]
-            let tunRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
-            let peerTarget = {
-                let gateway4 = (tunRouting?.tunnelGateway ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !gateway4.isEmpty {
-                    return gateway4
-                }
-                return (tunRouting?.tunnelGateway6 ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            }()
-            let globalHost = (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["global_connectivity_host"])
-                ?? ObstacleBridgeRuntimeConfig.stringValue(from: (runtimeConfig["TUN_routing"] as? [String: Any])?["global_connectivity_host"])
-                ?? "google.de")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let peerVerification = self.probeTunConnectivityVerification(
-                probeKind: "peer",
-                target: peerTarget,
-                timeoutSeconds: 2.0
-            )
-            let globalVerification = self.probeTunConnectivityVerification(
-                probeKind: "global",
-                target: globalHost,
-                timeoutSeconds: 2.5
-            )
-            self.adminTunVerificationQueue.async {
-                self.cachedTunConnectivityVerification = peerVerification
-                self.cachedTunGlobalConnectivityVerification = globalVerification
+        if sync {
+            performAdminTunVerificationRefresh()
+        } else {
+            adminTunVerificationRefreshQueue.async { [weak self] in
+                self?.performAdminTunVerificationRefresh()
             }
         }
+    }
 
-        if sync {
-            refreshWork()
-        } else {
-            adminTunVerificationRefreshQueue.async(execute: refreshWork)
+    private func performAdminTunVerificationRefresh() {
+        defer {
+            adminTunVerificationQueue.sync {
+                adminTunVerificationRefreshInFlight = false
+            }
+        }
+        let runtimeConfig = adminRuntimeConfigPayload() ?? [:]
+        let tunRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
+        let peerTarget = {
+            let gateway4 = (tunRouting?.tunnelGateway ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !gateway4.isEmpty {
+                return gateway4
+            }
+            return (tunRouting?.tunnelGateway6 ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }()
+        let globalHost = (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["global_connectivity_host"])
+            ?? ObstacleBridgeRuntimeConfig.stringValue(from: (runtimeConfig["TUN_routing"] as? [String: Any])?["global_connectivity_host"])
+            ?? "google.de")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let peerVerification = probeTunConnectivityVerification(
+            probeKind: "peer",
+            target: peerTarget,
+            timeoutSeconds: 2.0
+        )
+        let globalVerification = probeTunConnectivityVerification(
+            probeKind: "global",
+            target: globalHost,
+            timeoutSeconds: 2.5
+        )
+        adminTunVerificationQueue.sync {
+            cachedTunConnectivityVerification = peerVerification
+            cachedTunGlobalConnectivityVerification = globalVerification
         }
     }
 
@@ -1754,17 +1794,15 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         )
         let meta = adminMetaSnapshotUncached(bridgeSnapshot: status["swift_udp_bridge_state"] as? [String: Any] ?? [:])
         let tunRouting = adminTunRoutingSnapshotUncached(connections: connections)
-        let updateCache = { [weak self] in
-            self?.cachedStatusSnapshot = status
-            self?.cachedConnectionsSnapshot = connections
-            self?.cachedPeersSnapshot = peers
-            self?.cachedMetaSnapshot = meta
-            self?.cachedTunRoutingSnapshot = tunRouting
-        }
-        if sync {
-            adminSnapshotQueue.sync(execute: updateCache)
-        } else {
-            adminSnapshotQueue.async(execute: updateCache)
+        // The cache queue is the sole owner of these mutable snapshots. A
+        // synchronous re-entry keeps heterogeneous admin dictionaries out of
+        // an escaping Dispatch closure.
+        adminSnapshotQueue.sync {
+            cachedStatusSnapshot = status
+            cachedConnectionsSnapshot = connections
+            cachedPeersSnapshot = peers
+            cachedMetaSnapshot = meta
+            cachedTunRoutingSnapshot = tunRouting
         }
     }
 
@@ -1789,7 +1827,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let cached = adminSnapshotQueue.sync { cachedRuntimeMetricsSnapshot }
         Task { [weak self] in
             let snapshot = await ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()
-            self?.adminSnapshotQueue.async { [weak self] in
+            self?.adminSnapshotQueue.sync {
                 self?.cachedRuntimeMetricsSnapshot = snapshot
             }
         }
@@ -2169,7 +2207,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         }
 
         let previousEnabled = tunRoutingEnabled
-        let previousSettingsState = effectivePacketTunnelSettingsState
+        let previousSettingsState = PacketTunnelSettingsSnapshot(effectivePacketTunnelSettingsState)
         tunRoutingEnabled = enabled
         effectivePacketTunnelSettingsState = Self.packetTunnelSettingsSnapshot(
             configuration,
@@ -2180,7 +2218,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             guard let self else { return }
             if let error {
                 self.tunRoutingEnabled = previousEnabled
-                self.effectivePacketTunnelSettingsState = previousSettingsState
+                self.effectivePacketTunnelSettingsState = previousSettingsState.value
                 self.recordNativeEvent(
                     "tun_routing_control_failed",
                     fields: ["enabled": enabled, "error": error.localizedDescription]
@@ -3375,7 +3413,8 @@ private struct SwiftSimpleUDPPeerSettings {
     let runtimeConfig: [String: Any]
 }
 
-private final class SwiftSimpleUDPPeerBridge {
+// OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
+private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
     private static let queueKey = DispatchSpecificKey<UInt8>()
     private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
     private static let tunProbeIdentifier: UInt16 = UInt16.random(in: 1...UInt16.max)
@@ -4588,13 +4627,15 @@ private final class SwiftSimpleUDPPeerBridge {
                 parameters.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(spec.lBind), port: port)
                 let listener = try NWListener(using: parameters)
                 listener.stateUpdateHandler = { [weak self] state in
-                    self?.queue.async {
-                        self?.handleTCPListenerState(state, spec: spec)
+                    guard let owner = self else { return }
+                    owner.queue.async {
+                        owner.handleTCPListenerState(state, spec: spec)
                     }
                 }
                 listener.newConnectionHandler = { [weak self] connection in
-                    self?.queue.async {
-                        self?.handleAcceptedTCPConnection(connection, spec: spec)
+                    guard let owner = self else { return }
+                    owner.queue.async {
+                        owner.handleAcceptedTCPConnection(connection, spec: spec)
                     }
                 }
                 tcpListeners[spec.svcID] = listener

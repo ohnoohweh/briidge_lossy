@@ -31,7 +31,7 @@ extension ObstacleBridgeChannelMuxCodec {
         case openChunk = 7
     }
 
-    enum JSONValue: Equatable {
+    enum JSONValue: Equatable, Sendable {
         case object([String: JSONValue])
         case array([JSONValue])
         case string(String)
@@ -41,7 +41,7 @@ extension ObstacleBridgeChannelMuxCodec {
         case null
     }
 
-    struct ServiceSpec: Equatable {
+    struct ServiceSpec: Equatable, Sendable {
         var svcID: Int
         var lProto: String
         var lBind: String

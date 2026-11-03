@@ -12,13 +12,85 @@ import Foundation
     func handleEventFromHelper(_ message: NSDictionary)
 }
 
-enum ObstacleBridgeTunHelperXPC {
-    static let requestTimeoutSeconds: TimeInterval = 15.0
-    private static let reachabilityLock = NSLock()
-    private static var cachedReachability: [String: Any] = [
+/// Owns the synchronous reachability projection returned to status callers.
+private final class ObstacleBridgeTunHelperReachabilityState: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tun_helper_xpc_reachability_state_is_synchronous_and_owned
+    private let lock = NSLock()
+    private var cached: [String: Any] = [
         "ok": false,
         "error": "helper XPC reachability check pending",
     ]
+
+    func snapshot() -> [String: Any] {
+        lock.withLock { cached }
+    }
+
+    func replace(with result: [String: Any]) {
+        lock.withLock { cached = result }
+    }
+}
+
+/// Resolves all terminal paths for one reachability request exactly once.
+///
+/// The XPC reply, proxy error, and timeout can arrive on unrelated queues.
+/// This state keeps their shared completion ownership synchronous and local to
+/// the request, then invokes the winner outside the lock so client callbacks
+/// may safely re-enter their own lifecycle queue.
+private final class ObstacleBridgeTunHelperPingRequestState: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tun_helper_xpc_request_state_completes_once
+    private let lock = NSLock()
+    private let connection: NSXPCConnection
+    private let reachabilityState: ObstacleBridgeTunHelperReachabilityState
+    private let completion: ([String: Any]) -> Void
+    private var completed = false
+
+    init(
+        connection: NSXPCConnection,
+        reachabilityState: ObstacleBridgeTunHelperReachabilityState,
+        completion: @escaping ([String: Any]) -> Void
+    ) {
+        self.connection = connection
+        self.reachabilityState = reachabilityState
+        self.completion = completion
+    }
+
+    func finish(_ result: [String: Any]) {
+        let completion = lock.withLock { () -> (([String: Any]) -> Void)? in
+            guard !completed else { return nil }
+            completed = true
+            return self.completion
+        }
+        guard let completion else { return }
+        reachabilityState.replace(with: result)
+        connection.invalidate()
+        completion(result)
+    }
+}
+
+/// Resolves all terminal paths for one helper command exactly once.
+private final class ObstacleBridgeTunHelperCommandRequestState: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tun_helper_xpc_request_state_completes_once
+    private let lock = NSLock()
+    private let completion: (Result<[String: Any], Error>) -> Void
+    private var completed = false
+
+    init(completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        self.completion = completion
+    }
+
+    func finish(_ result: Result<[String: Any], Error>) {
+        let completion = lock.withLock { () -> ((Result<[String: Any], Error>) -> Void)? in
+            guard !completed else { return nil }
+            completed = true
+            return self.completion
+        }
+        completion?(result)
+    }
+}
+
+enum ObstacleBridgeTunHelperXPC {
+    static let requestTimeoutSeconds: TimeInterval = 15.0
+    private static let reachabilityState = ObstacleBridgeTunHelperReachabilityState()
 
     static func interface() -> NSXPCInterface {
         NSXPCInterface(with: ObstacleBridgeTunHelperXPCServicing.self)
@@ -33,9 +105,7 @@ enum ObstacleBridgeTunHelperXPC {
         timeout: TimeInterval = 0.25
     ) -> [String: Any] {
         ping(machServiceName: machServiceName, timeout: timeout) { _ in }
-        reachabilityLock.lock()
-        defer { reachabilityLock.unlock() }
-        return cachedReachability
+        return reachabilityState.snapshot()
     }
 
     static func ping(
@@ -45,32 +115,24 @@ enum ObstacleBridgeTunHelperXPC {
     ) {
         let connection = NSXPCConnection(machServiceName: machServiceName, options: [.privileged])
         connection.remoteObjectInterface = interface()
-        let finishLock = NSLock()
-        var finished = false
-        func finish(_ result: [String: Any]) {
-            finishLock.lock()
-            defer { finishLock.unlock() }
-            guard !finished else { return }
-            finished = true
-            reachabilityLock.lock()
-            cachedReachability = result
-            reachabilityLock.unlock()
-            connection.invalidate()
-            completion(result)
-        }
+        let requestState = ObstacleBridgeTunHelperPingRequestState(
+            connection: connection,
+            reachabilityState: reachabilityState,
+            completion: completion
+        )
         connection.resume()
         let proxy = connection.remoteObjectProxyWithErrorHandler { error in
-            finish(["ok": false, "error": error.localizedDescription])
+            requestState.finish(["ok": false, "error": error.localizedDescription])
         } as? ObstacleBridgeTunHelperXPCServicing
         guard let proxy else {
-            finish(["ok": false, "error": "helper XPC proxy unavailable"])
+            requestState.finish(["ok": false, "error": "helper XPC proxy unavailable"])
             return
         }
         proxy.ping { payload in
-            finish(payload as? [String: Any] ?? ["ok": false, "error": "helper XPC ping returned invalid payload"])
+            requestState.finish(payload as? [String: Any] ?? ["ok": false, "error": "helper XPC ping returned invalid payload"])
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-            finish(["ok": false, "error": "helper XPC ping timed out"])
+            requestState.finish(["ok": false, "error": "helper XPC ping timed out"])
         }
     }
 }
@@ -143,35 +205,27 @@ final class ObstacleBridgeNSXPCTunHelperCommandTransport: ObstacleBridgeTunHelpe
         packetResponse: Bool,
         completion: @escaping (Result<[String: Any], Error>) -> Void
     ) {
-        let completionLock = NSLock()
-        var completed = false
-        func finish(_ result: Result<[String: Any], Error>) {
-            completionLock.lock()
-            defer { completionLock.unlock() }
-            guard !completed else { return }
-            completed = true
-            completion(result)
-        }
+        let requestState = ObstacleBridgeTunHelperCommandRequestState(completion: completion)
         let proxy = connection.remoteObjectProxyWithErrorHandler { error in
-            finish(.failure(ObstacleBridgeTunHelperCommandError.invalidResponse(error.localizedDescription)))
+            requestState.finish(.failure(ObstacleBridgeTunHelperCommandError.invalidResponse(error.localizedDescription)))
         } as? ObstacleBridgeTunHelperXPCServicing
         guard let proxy else {
-            finish(.failure(ObstacleBridgeTunHelperCommandError.invalidResponse("helper XPC proxy unavailable")))
+            requestState.finish(.failure(ObstacleBridgeTunHelperCommandError.invalidResponse("helper XPC proxy unavailable")))
             return
         }
         sender(proxy) { payload in
             let response = payload as? [String: Any] ?? [:]
             do {
-                try self.validateResponse(response, expectedOperation: expectedOperation, expectedSequence: expectedSequence, packetResponse: packetResponse)
-                finish(.success(response))
-            } catch { finish(.failure(error)) }
+                try Self.validateResponse(response, expectedOperation: expectedOperation, expectedSequence: expectedSequence, packetResponse: packetResponse)
+                requestState.finish(.success(response))
+            } catch { requestState.finish(.failure(error)) }
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-            finish(.failure(ObstacleBridgeTunHelperCommandError.invalidResponse("helper XPC request timed out")))
+            requestState.finish(.failure(ObstacleBridgeTunHelperCommandError.invalidResponse("helper XPC request timed out")))
         }
     }
 
-    private func validateResponse(
+    private static func validateResponse(
         _ response: [String: Any],
         expectedOperation: String,
         expectedSequence: Int,

@@ -89,6 +89,9 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     policy = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
     assert "SecIdentity" in source
+    assert "private final class ObstacleBridgeTelemetryMTLSDelegate" in source
+    assert "final class ObstacleBridgeTelemetryMTLSUploader {" in source
+    assert "delegate: sessionDelegate" in source
     assert "NSURLAuthenticationMethodClientCertificate" in source
     assert "performDefaultHandling" in source
     assert "ObstacleBridgeTelemetryAdminStatus" in source
@@ -110,7 +113,7 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "uploader: telemetryUploader" in provider
     assert "func statusSnapshot() -> [String: Any]" in source
     assert "private let telemetryQueue = DispatchQueue(label: \"PacketTunnelProvider.Telemetry\")" in provider
-    assert "startTelemetryIfConfigured(providerConfiguration: providerConfiguration)" in provider
+    assert "startTelemetryIfConfigured(providerConfiguration: callbackProviderConfiguration)" in provider
     control = (IOS_SWIFT_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeTelemetryIdentityStore.importStagedIdentityIfPresent()" in control
     assert "@objc class func clearSharedLogs()" in control
@@ -294,6 +297,8 @@ def test_native_packet_flow_bridge_source_exists() -> None:
     bridge = (IOS_SWIFT_DIR / "ObstacleBridgePacketFlowBridge.swift").read_text(encoding="utf-8")
 
     assert "@objc(ObstacleBridgePacketFlowBridge)" in bridge
+    assert "ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable" in bridge
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_packet_flow_bridge_source_exists" in bridge
     assert "PacketFlowPCAPWriter" in bridge
     assert "dequeueIncomingPacket" in bridge
     assert "writePacket" in bridge
@@ -1916,3 +1921,147 @@ def test_native_ios_tun_connector_schema_is_shared_with_macos_host_runner() -> N
         assert f'schemaItem(key: "{key}"' in policy
     assert "ObstacleBridgeRuntimeConfig.configSchemaSnapshot()" in macos_runner
     assert "_ = try controlServer.startAndWait(timeout: 5)" in macos_runner
+
+
+def test_overlay_connection_drivers_keep_callbacks_on_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayConnectionSupport.swift").read_text(encoding="utf-8")
+
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_overlay_connection_drivers_keep_callbacks_on_owner_queue") == 2
+    assert "final class ObstacleBridgeUDPServerConnectionDriver: @unchecked Sendable" in source
+    assert "final class ObstacleBridgeUDPClientConnectionDriver: @unchecked Sendable" in source
+    assert "guard let driver = self else { return }" in source
+    assert "driver.queue.async" in source
+
+
+def test_native_proxy_connections_keep_callbacks_on_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeNativeProxyConnections.swift").read_text(encoding="utf-8")
+
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue") == 2
+    assert "final class ObstacleBridgeTCPProxyConnection: @unchecked Sendable" in source
+    assert "final class ObstacleBridgeUDPProxyConnection: @unchecked Sendable" in source
+    assert "localConnection.start(queue: queue)" in source
+    assert "remoteConnection.start(queue: queue)" in source
+
+
+def test_web_admin_server_callbacks_keep_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift").read_text(encoding="utf-8")
+
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue") == 2
+    assert "final class ObstacleBridgeWebAdminServer: @unchecked Sendable" in source
+    assert "private final class LiveSession: @unchecked Sendable" in source
+    assert "listener.start(queue: queue)" in source
+
+
+def test_tun_helper_xpc_reachability_state_is_synchronous_and_owned() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeTunHelperReachabilityState: @unchecked Sendable" in source
+    assert "private static let reachabilityState = ObstacleBridgeTunHelperReachabilityState()" in source
+    assert "return reachabilityState.snapshot()" in source
+    assert "reachabilityState.replace(with: result)" in source
+
+
+def test_tun_helper_xpc_request_state_completes_once() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
+
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tun_helper_xpc_request_state_completes_once") == 2
+    assert "ObstacleBridgeTunHelperPingRequestState: @unchecked Sendable" in source
+    assert "ObstacleBridgeTunHelperCommandRequestState: @unchecked Sendable" in source
+    assert "guard !completed else { return nil }" in source
+    assert "completion?(result)" in source
+    assert "requestState.finish" in source
+
+
+def test_tcp_overlay_owner_serializes_public_and_network_callbacks() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks" in source
+    assert "withOwnerQueue { startOnOwnerQueue() }" in source
+    assert "withOwnerQueue { stopOnOwnerQueue() }" in source
+    assert "withOwnerQueue { sendLocalTunPacketOnOwnerQueue(packet) }" in source
+    assert "acceptLocalTCPConnectionOnOwnerQueue(" in source
+    assert "acceptLocalUDPConnectionOnOwnerQueue(" in source
+    assert "owner.queue.async" in source
+
+
+def test_websocket_overlay_owner_serializes_public_and_delegate_callbacks() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "URLSessionTaskDelegate, @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_websocket_overlay_owner_serializes_public_and_delegate_callbacks" in source
+    assert "withOwnerQueue { startOnOwnerQueue() }" in source
+    assert "withOwnerQueue { stopOnOwnerQueue() }" in source
+    assert "withOwnerQueue { sendLocalTunPacketOnOwnerQueue(packet) }" in source
+    assert "acceptLocalTCPConnectionOnOwnerQueue(" in source
+    assert "acceptLocalUDPConnectionOnOwnerQueue(" in source
+
+
+def test_proxy_server_sessions_stay_on_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift").read_text(encoding="utf-8")
+
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue") == 2
+    assert "ObstacleBridgeProxyServer: @unchecked Sendable" in source
+    assert "ProxySession: @unchecked Sendable" in source
+    assert "private func withOwnerQueue<T>" in source
+    assert "return queue.sync(execute: body)" in source
+    assert "inbound.start(queue: queue)" in source
+
+
+def test_channel_mux_tcp_owner_keeps_network_callbacks_on_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_channel_mux_tcp_owner_keeps_network_callbacks_on_owner_queue" in source
+    assert "connection.start(queue: queue)" in source
+
+
+def test_quic_overlay_owner_keeps_callbacks_on_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue" in source
+    assert "connection.start(queue: queue)" in source
+
+
+def test_udp_overlay_owner_keeps_callbacks_on_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue" in source
+    assert "queue.setSpecific" in source
+
+
+def test_tunnel_control_state_serializes_shared_references() -> None:
+    source = (IOS_SWIFT_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeTunnelControlState: @unchecked Sendable" in source
+    assert "ObstacleBridgeTunnelControlResponseState: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tunnel_control_state_serializes_shared_references" in source
+    assert "private static let state = ObstacleBridgeTunnelControlState()" in source
+    assert "@preconcurrency import NetworkExtension" in source
+
+
+def test_host_runner_telemetry_state_owns_timer_callbacks() -> None:
+    source = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeHostRunnerTelemetryState: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_host_runner_telemetry_state_owns_timer_callbacks" in source
+    assert "timer.setEventHandler { [weak self] in self?.flush(startUpload: true) }" in source
+    assert "private let telemetryState = ObstacleBridgeHostRunnerTelemetryState()" in source
+
+
+def test_host_runner_admin_snapshot_state_owns_async_metrics_cache() -> None:
+    source = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeHostRunnerAdminSnapshotState: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_host_runner_admin_snapshot_state_owns_async_metrics_cache" in source
+    assert "private let adminSnapshotState = ObstacleBridgeHostRunnerAdminSnapshotState()" in source
+    assert "state.replaceRuntimeMetrics(snapshot)" in source
+
+
+def test_host_runner_service_catalog_stays_on_service_queue() -> None:
+    source = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue" in source
+    assert "private func applyRemoteServiceCatalog" in source
+    assert "withServiceStateQueue {" in source

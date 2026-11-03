@@ -3,6 +3,7 @@ import Foundation
 import WebKit
 
 @main
+@MainActor
 final class ObstacleBridgeMacAppMain: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     private var window: NSWindow?
     private var webView: WKWebView?
@@ -201,7 +202,7 @@ final class ObstacleBridgeMacAppMain: NSObject, NSApplicationDelegate, WKScriptM
         }
     }
 
-    private func requestControlAction(path: String, completion: @escaping () -> Void) {
+    private func requestControlAction(path: String, completion: @escaping @MainActor @Sendable () -> Void) {
         refreshTimer?.invalidate()
         refreshTimer = nil
 
@@ -251,7 +252,9 @@ final class ObstacleBridgeMacAppMain: NSObject, NSApplicationDelegate, WKScriptM
     private func scheduleWebAdminPolling() {
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.probeAndLoadWebAdmin()
+            Task { @MainActor in
+                self?.probeAndLoadWebAdmin()
+            }
         }
         refreshTimer?.tolerance = 0.1
         probeAndLoadWebAdmin()

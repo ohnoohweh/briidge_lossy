@@ -271,6 +271,15 @@ swift test --filter ObstacleBridgeApplePackageProbeTests
 
 The package manifest exposes only portable Core targets on macOS; Linux adapter
 and executable targets remain available when the manifest is evaluated on Linux.
+The macOS telemetry source guard verifies the one audited synchronous upload
+state: it owns the legacy policy and admin status projection behind one lock,
+so URLSession callbacks never capture the uploader owner.
+The shared Apple UDP-driver source guard verifies Network callbacks re-enter
+their injected serial owner queue before reading or mutating driver state.
+The native-proxy source guard verifies its TCP and UDP connection callbacks
+remain on the injected proxy owner queue.
+The WebAdmin source guard verifies server and live-session callbacks remain on
+the serial listener owner queue.
 The shared corpus verifies Python and Core agree on exact binary and text
 WebSocket payload forms, including strict malformed text rejection. The Apple
 probe executes every shared wire-codec owner through its imported Core module.

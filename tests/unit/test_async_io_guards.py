@@ -87,6 +87,23 @@ def test_swift_concurrency_guard_rejects_new_unchecked_owner(monkeypatch, tmp_pa
     assert "forbidden" in errors[0]
 
 
+def test_swift_concurrency_guard_allows_only_documented_synchronous_telemetry_owner(monkeypatch, tmp_path) -> None:
+    guard = _load("check_swift_concurrency_guard")
+    relative_path = "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTelemetryMTLSUploader.swift"
+    source = tmp_path / relative_path
+    source.parent.mkdir(parents=True)
+    source.write_text("final class ObstacleBridgeTelemetryLockedUploadState: @unchecked Sendable {}", encoding="utf-8")
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    errors = guard.validate({
+        relative_path: [
+            "private final class ObstacleBridgeTelemetryLockedUploadState: @unchecked Sendable {",
+            "// OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_macos_telemetry_uploader_uses_audited_synchronous_state",
+            "private let lock = NSLock()",
+        ],
+    })
+    assert errors == []
+
+
 def test_swift_concurrency_guard_rejects_new_lock_in_legacy_owner(monkeypatch, tmp_path) -> None:
     guard = _load("check_swift_concurrency_guard")
     source = tmp_path / "swift" / "Sources" / "ObstacleBridgeiOS" / "PacketTunnelProvider.swift"

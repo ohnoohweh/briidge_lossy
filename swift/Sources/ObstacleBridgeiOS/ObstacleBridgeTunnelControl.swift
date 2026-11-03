@@ -1,5 +1,77 @@
 import Foundation
-import NetworkExtension
+@preconcurrency import NetworkExtension
+
+/// The Objective-C control surface has synchronous reads while NetworkExtension
+/// callbacks arrive independently. This state owns those shared references.
+private final class ObstacleBridgeTunnelControlState: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tunnel_control_state_serializes_shared_references
+    private let lock = NSLock()
+    private var activeManager: NETunnelProviderManager?
+#if os(macOS)
+    private var adminWebProxy: AnyObject?
+    private var hostRunner: ObstacleBridgeHostRunner?
+#endif
+
+    func replaceActiveManager(_ manager: NETunnelProviderManager?) {
+        lock.lock()
+        activeManager = manager
+        lock.unlock()
+    }
+
+    func activeManagerSnapshot() -> NETunnelProviderManager? {
+        lock.lock()
+        defer { lock.unlock() }
+        return activeManager
+    }
+
+#if os(macOS)
+    func adminWebProxySnapshot() -> AnyObject? {
+        lock.lock()
+        defer { lock.unlock() }
+        return adminWebProxy
+    }
+
+    func installAdminWebProxyIfAbsent(_ candidate: AnyObject) -> AnyObject {
+        lock.lock()
+        defer { lock.unlock() }
+        if let adminWebProxy {
+            return adminWebProxy
+        }
+        adminWebProxy = candidate
+        return candidate
+    }
+
+    func hostRunnerSnapshot() -> ObstacleBridgeHostRunner? {
+        lock.lock()
+        defer { lock.unlock() }
+        return hostRunner
+    }
+
+    func replaceHostRunner(_ runner: ObstacleBridgeHostRunner?) {
+        lock.lock()
+        hostRunner = runner
+        lock.unlock()
+    }
+#endif
+}
+
+private final class ObstacleBridgeTunnelControlResponseState: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tunnel_control_state_serializes_shared_references
+    private let lock = NSLock()
+    private var payload: [String: Any]?
+
+    func replacePayload(_ payload: [String: Any]) {
+        lock.lock()
+        self.payload = payload
+        lock.unlock()
+    }
+
+    func payloadSnapshot() -> [String: Any]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return payload
+    }
+}
 
 @objc(ObstacleBridgeTunnelControl)
 final class ObstacleBridgeTunnelControl: NSObject {
@@ -29,10 +101,8 @@ final class ObstacleBridgeTunnelControl: NSObject {
     private static let defaultDNS = ["1.1.1.1"]
     private static let defaultMTU = 1600
     private static let defaultIOSIfname = "ios-utun"
-    private static var activeManager: NETunnelProviderManager?
-    private static var adminWebProxy: ObstacleBridgeIOSAppAdminWebProxy?
+    private static let state = ObstacleBridgeTunnelControlState()
 #if os(macOS)
-    private static var hostRunner: ObstacleBridgeHostRunner?
     private static let privilegedHostRunnerExecutableName = "ObstacleBridgeHostRunner"
 #endif
 
@@ -115,8 +185,9 @@ final class ObstacleBridgeTunnelControl: NSObject {
         queue.async {
 #if os(macOS)
             if mode == "swift_host_runner" {
-                hostRunner?.stop()
-                hostRunner = nil
+                let runner = state.hostRunnerSnapshot()
+                state.replaceHostRunner(nil)
+                runner?.stop()
                 updateStatus(ok: true, event: "swift_host_runner_stopped", extra: ["stopped": true])
                 return
             }
@@ -189,7 +260,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
                 "mode": "swift_host_runner",
                 "config_sync": configSync,
             ]
-            if let hostRunner {
+            if let hostRunner = state.hostRunnerSnapshot() {
                 payload["swift_host_runner"] = hostRunner.snapshot()
             }
             return jsonString(payload) as NSString
@@ -218,7 +289,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
             return jsonString([
                 "ok": true,
                 "mode": "swift_host_runner",
-                "status": hostRunner == nil ? "stopped" : "running",
+                "status": state.hostRunnerSnapshot() == nil ? "stopped" : "running",
                 "cached": false,
             ]) as NSString
         }
@@ -262,7 +333,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
                 return
             }
 
-            activeManager = selection.manager
+            state.replaceActiveManager(selection.manager)
             ensureAdminWebProxy(selection.manager)
             if selection.needsSave {
 
@@ -1292,7 +1363,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
 
     private class func reloadCanonicalManager(
         event: String,
-        completion: @escaping (NETunnelProviderManager?) -> Void
+        completion: @escaping @Sendable (NETunnelProviderManager?) -> Void
     ) {
         NETunnelProviderManager.loadAllFromPreferences { managers, error in
             if let error {
@@ -1302,8 +1373,8 @@ final class ObstacleBridgeTunnelControl: NSObject {
             }
 
             let selection = selectCanonicalManager(from: managers ?? [])
-            activeManager = selection.manager
-                ensureAdminWebProxy(selection.manager)
+            state.replaceActiveManager(selection.manager)
+            ensureAdminWebProxy(selection.manager)
             updateStatus(
                 ok: true,
                 event: event,
@@ -1427,21 +1498,17 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
 
     private class func ensureAdminWebProxy(_ manager: NETunnelProviderManager?) {
+        // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tunnel_control_state_serializes_shared_references
 #if !os(macOS)
         // iOS displays the extension's Admin API directly; no foreground proxy.
         _ = manager
         return
-#endif
-#if os(macOS)
+#else
         let runtimeConfig = loadRuntimeConfiguration()
         let bindHost = (runtimeConfig["admin_web_bind"] as? String) ?? webAdminBind
         let port = (runtimeConfig["admin_web_port"] as? Int) ?? webAdminPort
-#else
-        let bindHost = webAdminBind
-        let port = appWebAdminPort
-#endif
         let adminWebDirectory = resolveAdminWebDirectory()
-        if adminWebProxy == nil {
+        if state.adminWebProxySnapshot() == nil {
             do {
                 let proxy = try ObstacleBridgeIOSAppAdminWebProxy(
                     bindHost: bindHost,
@@ -1455,8 +1522,10 @@ final class ObstacleBridgeTunnelControl: NSObject {
                         ]
                     }
                 )
-                adminWebProxy = proxy
-                proxy.start()
+                let installedProxy = state.installAdminWebProxyIfAbsent(proxy)
+                if installedProxy === proxy {
+                    proxy.start()
+                }
                 recordEvent("app_admin_web_proxy_started", payload: [
                     "bind_host": bindHost,
                     "port": port,
@@ -1470,8 +1539,10 @@ final class ObstacleBridgeTunnelControl: NSObject {
                 ])
             }
         }
-        adminWebProxy?.updateManager(manager)
-        adminWebProxy?.updateAdminWebDirectory(adminWebDirectory)
+        let proxy = state.adminWebProxySnapshot() as? ObstacleBridgeIOSAppAdminWebProxy
+        proxy?.updateManager(manager)
+        proxy?.updateAdminWebDirectory(adminWebDirectory)
+#endif
     }
 
     private class func resolveAdminWebDirectory() -> URL {
@@ -1643,7 +1714,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
                     return
                 }
                 let manager = (managers ?? []).first(where: isObstacleBridgeManager)
-                updateStatus(ok: true, event: "status_refreshed", manager: manager ?? activeManager)
+                updateStatus(ok: true, event: "status_refreshed", manager: manager ?? state.activeManagerSnapshot())
             }
         }
     }
@@ -1853,7 +1924,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
             }
             return
         }
-        if let hostRunner {
+        if let hostRunner = state.hostRunnerSnapshot() {
             updateStatus(
                 ok: true,
                 event: "swift_host_runner_reused",
@@ -1867,7 +1938,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
         do {
             let runner = try ObstacleBridgeHostRunner.makeAppScopedRunner()
             try runner.start()
-            hostRunner = runner
+            state.replaceHostRunner(runner)
             updateStatus(
                 ok: true,
                 event: "swift_host_runner_started",
@@ -1910,7 +1981,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
             }
             return
         }
-        if let hostRunner {
+        if let hostRunner = state.hostRunnerSnapshot() {
             updateStatus(
                 ok: true,
                 event: "swift_host_runner_status_refreshed",
@@ -1959,7 +2030,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
             return nil
         }
         let semaphore = DispatchSemaphore(value: 0)
-        var responsePayload: [String: Any]?
+        let responseState = ObstacleBridgeTunnelControlResponseState()
         var request = URLRequest(url: url)
         request.timeoutInterval = 1.0
         URLSession.shared.dataTask(with: request) { data, response, _ in
@@ -1971,10 +2042,10 @@ final class ObstacleBridgeTunnelControl: NSObject {
             else {
                 return
             }
-            responsePayload = object
+            responseState.replacePayload(object)
         }.resume()
         _ = semaphore.wait(timeout: .now() + 2.0)
-        guard var payload = responsePayload else {
+        guard var payload = responseState.payloadSnapshot() else {
             return nil
         }
         payload["launch_style"] = "bundled_privileged_helper"

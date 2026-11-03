@@ -19,7 +19,9 @@ enum ObstacleBridgeWebAdminServerError: Error, LocalizedError {
     }
 }
 
-final class ObstacleBridgeWebAdminServer {
+/// Listener and live-session state is confined to the server's serial queue.
+final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue
     typealias APIProvider = (String, String, [String: String], Data?) -> ObstacleBridgeAdminAPIResponse?
     typealias StaticFileProvider = (String) -> (contentType: String, body: Data)?
     typealias LiveTopicProvider = (String) -> Any?
@@ -608,7 +610,9 @@ final class ObstacleBridgeWebAdminServer {
         return output
     }
 
-    private final class LiveSession {
+    /// Every connection callback is started on and returns to the server queue.
+    private final class LiveSession: @unchecked Sendable {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue
         private let connection: NWConnection
         private let queue: DispatchQueue
         private let topicProvider: LiveTopicProvider

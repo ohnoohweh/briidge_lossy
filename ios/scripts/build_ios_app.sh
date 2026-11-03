@@ -131,6 +131,8 @@ XCODEBUILD_ARGS=(
   CURRENT_PROJECT_VERSION="${IOS_BUILD_NUMBER}"
   INFOPLIST_KEY_CFBundleDisplayName=ObstacleBridge
   CODE_SIGN_STYLE=Automatic
+  SWIFT_STRICT_CONCURRENCY=complete
+  "OTHER_SWIFT_FLAGS=\$(inherited) -strict-concurrency=complete"
   -derivedDataPath "${DERIVED_DATA_PATH}"
   build
 )
@@ -139,7 +141,31 @@ if [ "${#PROVISIONING_ARGS[@]}" -gt 0 ]; then
   XCODEBUILD_ARGS=("${XCODEBUILD_ARGS[@]:0:8}" "${PROVISIONING_ARGS[@]}" "${XCODEBUILD_ARGS[@]:8}")
 fi
 
-xcodebuild "${XCODEBUILD_ARGS[@]}"
+BUILD_LOG="$(mktemp -t obstaclebridge-ios-xcodebuild.XXXXXX)"
+trap 'rm -f "${BUILD_LOG}"' EXIT
+
+echo "[build_ios_app] compiling with -strict-concurrency=complete"
+set +e
+xcodebuild "${XCODEBUILD_ARGS[@]}" 2>&1 | tee "${BUILD_LOG}"
+XCODEBUILD_STATUS=${PIPESTATUS[0]}
+set -e
+
+# App Intents metadata extraction emits this informational tool message when a
+# target has no AppIntents dependency. It is not a compiler diagnostic.
+WARNING_COUNT="$(rg 'warning:' "${BUILD_LOG}" | rg -v 'Metadata extraction skipped\. No AppIntents\.framework dependency found\.' | wc -l | tr -d ' ' || true)"
+ERROR_COUNT="$(rg -c 'error:' "${BUILD_LOG}" || true)"
+WARNING_COUNT="${WARNING_COUNT:-0}"
+ERROR_COUNT="${ERROR_COUNT:-0}"
+echo "[build_ios_app] compiler diagnostics: warnings=${WARNING_COUNT} errors=${ERROR_COUNT}"
+
+if [ "${XCODEBUILD_STATUS}" -ne 0 ]; then
+  exit "${XCODEBUILD_STATUS}"
+fi
+
+if [ "${WARNING_COUNT}" -ne 0 ] || [ "${ERROR_COUNT}" -ne 0 ]; then
+  echo "[build_ios_app] strict-concurrency diagnostics must be zero" >&2
+  exit 1
+fi
 
 echo "[build_ios_app] build completed"
 echo "[build_ios_app] app bundle: ${DERIVED_DATA_PATH}/Build/Products/Debug-iphoneos/ObstacleBridge.app"

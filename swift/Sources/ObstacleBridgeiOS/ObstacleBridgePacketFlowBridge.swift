@@ -3,13 +3,16 @@ import NetworkExtension
 import Darwin
 
 @objc(ObstacleBridgePacketFlowBridge)
-final class ObstacleBridgePacketFlowBridge: NSObject {
+// OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_packet_flow_bridge_source_exists
+// Packet-flow state is synchronously owned by `queue`; outgoing drains take
+// immutable batches before calling NetworkExtension outside that owner.
+final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
     private struct OutgoingQueueLevelBucket {
         var slot: UInt64 = 0
         var maximum: Int = 0
     }
 
-    private final class PacketFlowPCAPWriter {
+    private final class PacketFlowPCAPWriter: @unchecked Sendable {
         private var fd: Int32 = -1
         let path: String
         private let captureQueue: DispatchQueue
@@ -351,19 +354,19 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
     }
 
     class func enqueueIncomingPacket(_ packet: Data, protocolFamily: NSNumber) {
-        let eventPayload = shared.queue.sync { () -> [String: Any]? in
+        let event = shared.queue.sync { () -> ([String: Any]?, PacketTunnelProvider?) in
             guard shared.active else {
-                return ["reason": "bridge_inactive", "packet_bytes": packet.count]
+                return (["reason": "bridge_inactive", "packet_bytes": packet.count], nil)
             }
             shared.incomingPCAPWriter?.enqueuePacket(packet)
             if shared.incomingPackets.count >= shared.maxQueuedPackets {
                 shared.droppedIncomingPackets += 1
-                return [
+                return ([
                     "reason": "queue_full",
                     "packet_bytes": packet.count,
                     "queued_packets": shared.incomingPackets.count,
                     "dropped_incoming_packets": shared.droppedIncomingPackets,
-                ]
+                ], shared.provider)
             }
             let shouldSignal = shared.incomingPackets.isEmpty
             shared.incomingPackets.append(packet)
@@ -374,17 +377,17 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
             shared.packetsFromSystem += 1
             shared.bytesFromSystem += packet.count
             if shared.packetsFromSystem <= 3 || (shared.packetsFromSystem % 128) == 0 {
-                return [
+                return ([
                     "packet_bytes": packet.count,
                     "protocol_family": protocolFamily.intValue,
                     "queued_packets": shared.incomingPackets.count,
                     "packets_from_system": shared.packetsFromSystem,
                     "bytes_from_system": shared.bytesFromSystem,
-                ]
+                ], shared.provider)
             }
-            return nil
+            return (nil, shared.provider)
         }
-        guard let payload = eventPayload, let provider = shared.provider else {
+        guard let payload = event.0, let provider = event.1 else {
             return
         }
         provider.recordPacketBridgeEvent("packet_bridge_incoming_enqueued", fields: payload)

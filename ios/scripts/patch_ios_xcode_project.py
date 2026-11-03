@@ -1060,6 +1060,25 @@ def ensure_ios_bundle_versions(text: str) -> str:
     return text
 
 
+def ensure_ios_strict_concurrency(text: str) -> str:
+    """Require complete Swift concurrency checking for both iOS targets."""
+
+    configuration_ids = (
+        "60796F0F19190F4100A9926B",  # ObstacleBridge Debug
+        "60796F1019190F4100A9926B",  # ObstacleBridge Release
+        "71C2000000000000000000A0",  # IPServer Debug
+        "71C2000000000000000000A1",  # IPServer Release
+    )
+    for configuration_id in configuration_ids:
+        text = _ensure_configuration_setting(
+            text,
+            configuration_id,
+            "SWIFT_STRICT_CONCURRENCY",
+            "complete",
+        )
+    return text
+
+
 def enforce_ios_deployment_target(text: str) -> str:
     """Keep every generated iOS target within the supported iOS 15 baseline.
 
@@ -1315,6 +1334,7 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \"com.obstaclebridge.obstacle-bridge-ios.IPServer\";\n"
         "\t\t\t\tPRODUCT_NAME = \"$(TARGET_NAME)\";\n"
         "\t\t\t\tSKIP_INSTALL = YES;\n"
+        "\t\t\t\tSWIFT_STRICT_CONCURRENCY = complete;\n"
         "\t\t\t\tSWIFT_VERSION = 5.0;\n"
         "\t\t\t\tTARGETED_DEVICE_FAMILY = \"1,2\";\n"
         "\t\t\t\tWRAPPER_EXTENSION = appex;\n"
@@ -1341,6 +1361,7 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \"com.obstaclebridge.obstacle-bridge-ios.IPServer\";\n"
         "\t\t\t\tPRODUCT_NAME = \"$(TARGET_NAME)\";\n"
         "\t\t\t\tSKIP_INSTALL = YES;\n"
+        "\t\t\t\tSWIFT_STRICT_CONCURRENCY = complete;\n"
         "\t\t\t\tSWIFT_VERSION = 5.0;\n"
         "\t\t\t\tTARGETED_DEVICE_FAMILY = \"1,2\";\n"
         "\t\t\t\tWRAPPER_EXTENSION = appex;\n"
@@ -1394,6 +1415,7 @@ def patch_pbxproj_text(text: str) -> str:
     text = patch_app_target(text)
     text = patch_ipserver_target(text)
     text = ensure_ios_bundle_versions(text)
+    text = ensure_ios_strict_concurrency(text)
     text = add_core_crypto_package(text)
     text = enforce_ios_deployment_target(text)
     return text

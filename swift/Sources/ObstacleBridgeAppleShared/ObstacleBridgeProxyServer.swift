@@ -1,7 +1,9 @@
 import Foundation
 import Network
 
-final class ObstacleBridgeProxyServer {
+/// Serializes listener state, sessions, and snapshots on the Network queue.
+final class ObstacleBridgeProxyServer: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue
     typealias Credentials = ObstacleBridgeProxyCredentials
 
     struct Configuration {
@@ -54,6 +56,7 @@ final class ObstacleBridgeProxyServer {
     private let configuration: Configuration
     private let listener: NWListener
     private let queue = DispatchQueue(label: "ObstacleBridgeProxyServer")
+    private let queueSpecificKey = DispatchSpecificKey<Int>()
     private var sessions: [ObjectIdentifier: ProxySession] = [:]
     private var snapshotState = ProxySnapshot()
 
@@ -68,6 +71,7 @@ final class ObstacleBridgeProxyServer {
         }
         self.configuration = configuration
         self.listener = try NWListener(using: parameters)
+        self.queue.setSpecific(key: queueSpecificKey, value: 1)
         listener.stateUpdateHandler = { state in
             switch state {
             case .failed(let error):
@@ -82,26 +86,35 @@ final class ObstacleBridgeProxyServer {
     }
 
     func start() {
-        listener.start(queue: queue)
+        withOwnerQueue { listener.start(queue: queue) }
     }
 
     func stop() {
-        listener.cancel()
-        for session in sessions.values {
-            session.stop()
+        withOwnerQueue {
+            listener.cancel()
+            for session in sessions.values {
+                session.stop()
+            }
+            sessions.removeAll()
+            snapshotState.activeConnections = 0
         }
-        sessions.removeAll()
-        snapshotState.activeConnections = 0
     }
 
     func snapshot() -> [String: Any] {
-        var result = snapshotState.dictionary()
-        result["bind_host"] = configuration.bindHost
-        result["port"] = configuration.port
-        result["http_enabled"] = configuration.allowHTTP
-        result["socks5_enabled"] = configuration.allowSOCKS5
-        result["auth_required"] = configuration.credentials != nil
-        return result
+        withOwnerQueue {
+            var result = snapshotState.dictionary()
+            result["bind_host"] = configuration.bindHost
+            result["port"] = configuration.port
+            result["http_enabled"] = configuration.allowHTTP
+            result["socks5_enabled"] = configuration.allowSOCKS5
+            result["auth_required"] = configuration.credentials != nil
+            return result
+        }
+    }
+
+    private func withOwnerQueue<T>(_ body: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: queueSpecificKey) != nil { return body() }
+        return queue.sync(execute: body)
     }
 
     private static func normalizedListenerHost(_ bindHost: String) -> String? {
@@ -143,7 +156,9 @@ final class ObstacleBridgeProxyServer {
     }
 }
 
-private final class ProxySession {
+/// A connection pair whose state is accessed only from the server queue.
+private final class ProxySession: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue
     private let inbound: NWConnection
     private let configuration: ObstacleBridgeProxyServer.Configuration
     private let queue: DispatchQueue
@@ -274,9 +289,10 @@ private final class ProxySession {
         connectOutbound(host: host, port: port) { [weak self] success in
             guard let self else { return }
             guard success else { return }
-            var forwarded = ObstacleBridgeProxyProtocolCodec.rewriteHTTPRequestForOriginServer(request)
+            var mutableForwarded = ObstacleBridgeProxyProtocolCodec.rewriteHTTPRequestForOriginServer(request)
             let remainder = Self.remainder(buffer: buffer, after: request.headerLength)
-            forwarded.append(remainder)
+            mutableForwarded.append(remainder)
+            let forwarded = mutableForwarded
             self.outbound?.send(content: forwarded, completion: .contentProcessed { [weak self] error in
                 guard let self else { return }
                 if let error {
@@ -422,7 +438,7 @@ private final class ProxySession {
         }
     }
 
-    private func connectOutbound(host: String, port: Int, completion: @escaping (Bool) -> Void) {
+    private func connectOutbound(host: String, port: Int, completion: @escaping @Sendable (Bool) -> Void) {
         guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
             sendHTTPError(status: "400 Bad Request", message: "invalid destination port")
             completion(false)
@@ -500,7 +516,7 @@ private final class ProxySession {
         inbound.send(content: response, completion: .contentProcessed { [weak self] _ in self?.finish(error: message) })
     }
 
-    private func sendSOCKS5Reply(status: UInt8, completion: (() -> Void)? = nil) {
+    private func sendSOCKS5Reply(status: UInt8, completion: (@Sendable () -> Void)? = nil) {
         let response = Data([0x05, status, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
         inbound.send(content: response, completion: .contentProcessed { [weak self] error in
             if let error {

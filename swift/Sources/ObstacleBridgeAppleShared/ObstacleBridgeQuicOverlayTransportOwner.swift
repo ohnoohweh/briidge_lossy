@@ -2,7 +2,9 @@ import Foundation
 import Network
 
 @available(iOS 15.0, *)
-final class ObstacleBridgeQuicOverlayTransportOwner {
+/// Owns QUIC connection and overlay state on its injected serial queue.
+final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
     typealias ServiceCatalogSink = (ObstacleBridgeAppleServiceCatalog.Install) -> Void
@@ -186,7 +188,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
             )
         }
         overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in
-            self?.queue.async { self?.applyCoreEffects(effects) }
+            guard let owner = self else { return }
+            owner.queue.async { owner.applyCoreEffects(effects) }
         }
         overlayLayerTransportAdapter?.setPendingSecureLinkPayloadWorkSink { [weak self] in
             self?.scheduleSecureLinkPayloadDrain()
@@ -498,9 +501,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
             let connection = NWConnection(to: endpoint, using: params)
             overlayConnection = connection
             connection.stateUpdateHandler = { [weak self] state in
-                self?.queue.async {
-                    self?.handleOverlayState(state)
-                }
+                guard let owner = self else { return }
+                owner.queue.async { owner.handleOverlayState(state) }
             }
             connection.start(queue: queue)
         } catch {
