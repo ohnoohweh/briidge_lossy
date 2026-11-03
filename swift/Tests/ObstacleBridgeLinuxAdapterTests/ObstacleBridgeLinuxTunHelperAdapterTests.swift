@@ -23,7 +23,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         let peer = try UnixHelperPeer(connectionCount: 6)
         // `start()` enters the fixture's blocking accept loop. Capture its
         // immutable connection settings before that actor begins serving.
-        let path = await peer.path; let token = await peer.token
+        let path = peer.path; let token = peer.token
         await peer.start(); defer { Task { await peer.stop() } }
         let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: token)
         for command in [ObstacleBridgeTunHelperCommand.openTun, .applyNetwork, .removeNetwork, .snapshot, .stop] {
@@ -38,12 +38,13 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
 
     @Test func helperAppliesAndRollsBackCorePacketTunnelPlan() async throws {
         let peer = try UnixHelperPeer(connectionCount: 2)
-        let path = await peer.path; let token = await peer.token
+        let path = peer.path; let token = peer.token
         await peer.start(); defer { Task { await peer.stop() } }
         let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: token)
         let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: ["TUN_routing": ["enabled_on_startup": true, "mtu": 1400]]))
         _ = try adapter.apply(packetTunnelPlan: plan, interfaceName: "obtest0")
         _ = try adapter.rollback(packetTunnelPlan: plan, interfaceName: "obtest0")
+        #expect(await peer.waitForExpectedConnections())
         #expect(await peer.operations == ["APPLY_NETWORK", "REMOVE_NETWORK"])
         let payload = try #require(await peer.payloads.first)
         let apply = try #require(try JSONSerialization.jsonObject(with: payload) as? [String: Any])
@@ -68,20 +69,22 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
 
     @Test func helperApplyFailureRequestsRollbackOnFreshAuthenticatedExchange() async throws {
         let peer = try UnixHelperPeer(connectionCount: 2, disconnectFirstCommandReply: true)
-        let path = await peer.path; let token = await peer.token
+        let path = peer.path; let token = peer.token
         await peer.start(); defer { Task { await peer.stop() } }
         let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: token)
         let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: ["TUN_routing": ["enabled_on_startup": true]]))
         #expect(throws: (any Error).self) { try adapter.applyWithRollback(packetTunnelPlan: plan, interfaceName: "obtest0") }
+        #expect(await peer.waitForExpectedConnections())
         #expect(await peer.operations == ["APPLY_NETWORK", "REMOVE_NETWORK"])
     }
 
     @Test func helperRejectsWrongSessionTokenBeforeOperation() async throws {
         let peer = try UnixHelperPeer(connectionCount: 1)
-        let path = await peer.path
+        let path = peer.path
         await peer.start(); defer { Task { await peer.stop() } }
         let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "wrong-token")
         #expect(throws: (any Error).self) { try adapter.send(command: .snapshot, payload: [:]) }
+        #expect(await peer.waitForExpectedConnections())
         #expect((await peer.operations).isEmpty)
     }
 
@@ -611,10 +614,10 @@ private actor UnixHelperPeer {
         let expectedConnections = expectedConnections
         let disconnectFirstCommandReply = disconnectFirstCommandReply
         let token = token
-        // The fixture is actor-owned, so blocking accept(2) must not occupy a
-        // cooperative Swift Testing executor worker while sibling tests run.
-        Task.detached {
-            await Self.serve(
+        // The fixture is actor-owned, so blocking accept(2) runs on a
+        // Foundation thread rather than a cooperative Swift executor worker.
+        Thread.detachNewThread {
+            Self.serve(
                 listener: listener,
                 expectedConnections: expectedConnections,
                 token: token,
@@ -640,7 +643,7 @@ private actor UnixHelperPeer {
         token: String,
         disconnectFirstCommandReply: Bool,
         peer: UnixHelperPeer
-    ) async {
+    ) {
         for index in 0..<expectedConnections {
             let fd = accept(listener, nil, nil); guard fd >= 0 else { return }
             do {
@@ -651,24 +654,28 @@ private actor UnixHelperPeer {
                 try writeAll(try ObstacleBridgeWorkerIPC.hello(generation: hello.generation, role: "tun-helper", capabilities: ["tun.control", "tun.packet", "tun.event"]), fd)
                 try writeControl("READY", ["capabilities": ["tun.control", "tun.event", "tun.packet"]], kind: .ready, generation: hello.generation, fd)
                 guard let tokenHello = try? readControl(fd), tokenHello.op == "HELLO" else { return }
-                guard tokenHello.payload["token"] as? String == token else { try? writeControl("ERROR", ["detail": "invalid session token"], generation: hello.generation, fd); continue }
+                guard tokenHello.payload["token"] as? String == token else {
+                    try? writeControl("ERROR", ["detail": "invalid session token"], generation: hello.generation, fd)
+                    Task.detached { await peer.finishedConnection() }
+                    continue
+                }
                 try? writeControl("HELLO_OK", ["authenticated": true], generation: hello.generation, fd)
                 let frame = try readFrame(fd)
                 guard frame.generation == hello.generation else { return }
                 if frame.kind == .data {
-                    await peer.recordPacket(frame.payload)
-                    await peer.finishedConnection()
+                    let packet = frame.payload
+                    Task.detached { [peer, packet] in await peer.recordPacketAndFinish(packet) }
                     continue
                 }
                 guard frame.kind == .request, let request = try? decodeControl(frame) else { return }
+                let operation = request.op
                 let payload = try JSONSerialization.data(withJSONObject: request.payload, options: [.sortedKeys])
-                await peer.recordControl(operation: request.op, payload: payload)
                 if disconnectFirstCommandReply && index == 0 {
-                    await peer.finishedConnection()
+                    Task.detached { [peer, operation, payload] in await peer.recordControlAndFinish(operation: operation, payload: payload) }
                     continue
                 }
-                try? writeControl("\(request.op)_OK", ["handled": true], generation: hello.generation, fd)
-                await peer.finishedConnection()
+                try? writeControl("\(operation)_OK", ["handled": true], generation: hello.generation, fd)
+                Task.detached { [peer, operation, payload] in await peer.recordControlAndFinish(operation: operation, payload: payload) }
             } catch {
                 // This test peer deliberately models owner loss and malformed
                 // connection shutdowns. A single client failure must not stop
@@ -678,13 +685,15 @@ private actor UnixHelperPeer {
         }
     }
 
-    private func recordPacket(_ packet: Data) {
+    private func recordPacketAndFinish(_ packet: Data) {
         capturedOperations.append("WRITE_PACKET")
         capturedPackets.append(packet)
+        completedConnections += 1
     }
-    private func recordControl(operation: String, payload: Data) {
+    private func recordControlAndFinish(operation: String, payload: Data) {
         capturedOperations.append(operation)
         capturedPayloads.append(payload)
+        completedConnections += 1
     }
     private func finishedConnection() { completedConnections += 1 }
 
