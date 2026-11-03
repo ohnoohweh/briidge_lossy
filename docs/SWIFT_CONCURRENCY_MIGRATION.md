@@ -15,7 +15,7 @@ approval to add lock-based ownership. The inventory contains 44 declarations:
 | --- | ---: | --- |
 | Shared Core | 0 |
 | Desktop shared | 0 |
-| Apple shared | 22 |
+| Apple shared | 23 |
 | Linux adapters/runtime | 22 |
 | Executable workers | 0 |
 | Test fixtures | 0 |
@@ -36,7 +36,9 @@ checking run produced 410 compiler warning records across 14 source files.
 The verified current macOS baseline is zero warning records across every
 product source. The iOS device build explicitly supplies both
 `SWIFT_STRICT_CONCURRENCY=complete` and `-strict-concurrency=complete`, then
-reports its compiler warning and error totals from the `xcodebuild` log.
+reports its compiler warning and error totals from the `xcodebuild` log. The
+script fails the build unless both totals are zero, which makes the source test
+that asserts this contract a CI regression gate.
 
 | Compile area | Warning records | Affected source files |
 | --- | ---: | --- |
@@ -99,6 +101,12 @@ or teardown.
 XPC helper completions also synchronously refresh the host-owned helper
 snapshot. Their result and client references therefore never cross a second
 concurrently executing Dispatch closure after the imported XPC callback.
+
+The iOS packet-flow bridge is an audited serial owner. Its singleton state is
+only accessed through its private queue, and packet event delivery carries the
+provider snapshot captured while holding that queue. The iOS tunnel-control
+Admin-Web proxy remains macOS-only; iOS returns before macOS-only proxy state
+is referenced.
 
 HostRunner telemetry is now a separate lock-owned state cell. Its timer,
 upload drain, lifecycle events, health events, and admin snapshot retain only

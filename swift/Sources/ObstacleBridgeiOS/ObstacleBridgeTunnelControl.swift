@@ -1502,15 +1502,10 @@ final class ObstacleBridgeTunnelControl: NSObject {
         // iOS displays the extension's Admin API directly; no foreground proxy.
         _ = manager
         return
-#endif
-#if os(macOS)
+#else
         let runtimeConfig = loadRuntimeConfiguration()
         let bindHost = (runtimeConfig["admin_web_bind"] as? String) ?? webAdminBind
         let port = (runtimeConfig["admin_web_port"] as? Int) ?? webAdminPort
-#else
-        let bindHost = webAdminBind
-        let port = appWebAdminPort
-#endif
         let adminWebDirectory = resolveAdminWebDirectory()
         if state.adminWebProxySnapshot() == nil {
             do {
@@ -1546,6 +1541,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
         let proxy = state.adminWebProxySnapshot() as? ObstacleBridgeIOSAppAdminWebProxy
         proxy?.updateManager(manager)
         proxy?.updateAdminWebDirectory(adminWebDirectory)
+#endif
     }
 
     private class func resolveAdminWebDirectory() -> URL {

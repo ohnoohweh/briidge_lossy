@@ -92,6 +92,19 @@ AUDITED_SYNCHRONOUS_OWNERS = (
         "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tunnel_control_state_serializes_shared_references",
     ),
     (
+        "swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift",
+        "ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_packet_flow_bridge_source_exists",
+    ),
+    (
+        "swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift",
+        "PacketTunnelCompletion: @unchecked Sendable",
+        "PacketTunnelSettingsSnapshot: @unchecked Sendable",
+        "PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable",
+        "SwiftSimpleUDPPeerBridge: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics",
+    ),
+    (
         "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
         "ObstacleBridgeHostRunnerTelemetryState: @unchecked Sendable",
         "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_host_runner_telemetry_state_owns_timer_callbacks",

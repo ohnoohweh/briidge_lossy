@@ -113,7 +113,7 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "uploader: telemetryUploader" in provider
     assert "func statusSnapshot() -> [String: Any]" in source
     assert "private let telemetryQueue = DispatchQueue(label: \"PacketTunnelProvider.Telemetry\")" in provider
-    assert "startTelemetryIfConfigured(providerConfiguration: providerConfiguration)" in provider
+    assert "startTelemetryIfConfigured(providerConfiguration: callbackProviderConfiguration)" in provider
     control = (IOS_SWIFT_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeTelemetryIdentityStore.importStagedIdentityIfPresent()" in control
     assert "@objc class func clearSharedLogs()" in control
@@ -297,6 +297,8 @@ def test_native_packet_flow_bridge_source_exists() -> None:
     bridge = (IOS_SWIFT_DIR / "ObstacleBridgePacketFlowBridge.swift").read_text(encoding="utf-8")
 
     assert "@objc(ObstacleBridgePacketFlowBridge)" in bridge
+    assert "ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable" in bridge
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_packet_flow_bridge_source_exists" in bridge
     assert "PacketFlowPCAPWriter" in bridge
     assert "dequeueIncomingPacket" in bridge
     assert "writePacket" in bridge

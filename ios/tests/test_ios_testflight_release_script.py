@@ -45,3 +45,7 @@ def test_device_build_script_accepts_release_version_and_generic_signing_update(
     assert 'OB_IOS_PREPARE_ONLY' in source
     assert 'skipping Debug xcodebuild' in source
     assert 'rev-parse --short=8 HEAD' in source
+    assert 'SWIFT_STRICT_CONCURRENCY=complete' in source
+    assert '-strict-concurrency=complete' in source
+    assert 'compiler diagnostics: warnings=${WARNING_COUNT} errors=${ERROR_COUNT}' in source
+    assert 'strict-concurrency diagnostics must be zero' in source
