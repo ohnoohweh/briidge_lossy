@@ -2,7 +2,9 @@ import Foundation
 import Network
 import Darwin
 
-final class ObstacleBridgeUdpOverlayTransportOwner {
+/// Owns socket, timer, and overlay state on its injected serial queue.
+final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
     typealias ServiceCatalogSink = (ObstacleBridgeAppleServiceCatalog.Install) -> Void
@@ -210,7 +212,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             )
         }
         overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in
-            self?.queue.async { self?.applyCoreEffects(effects) }
+            guard let owner = self else { return }
+            owner.queue.async { owner.applyCoreEffects(effects) }
         }
         overlayLayerTransportAdapter?.setPendingSecureLinkPayloadWorkSink { [weak self] in
             self?.scheduleSecureLinkPayloadDrain()
@@ -666,8 +669,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     ) -> Bool {
         var driver: ObstacleBridgeUDPServerConnectionDriver!
         connection.stateUpdateHandler = { [weak self] state in
-            self?.queue.async {
-                self?.handleUDPServerConnectionState(state)
+            guard let owner = self else { return }
+            owner.queue.async {
+                owner.handleUDPServerConnectionState(state)
             }
         }
         connection.start(queue: queue)

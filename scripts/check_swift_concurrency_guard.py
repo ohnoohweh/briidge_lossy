@@ -80,6 +80,11 @@ AUDITED_SYNCHRONOUS_OWNERS = (
         "ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable",
         "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue",
     ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeUdpOverlayTransportOwner.swift",
+        "ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue",
+    ),
 )
 
 def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:

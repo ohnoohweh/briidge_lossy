@@ -2020,3 +2020,11 @@ def test_quic_overlay_owner_keeps_callbacks_on_owner_queue() -> None:
     assert "ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable" in source
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue" in source
     assert "connection.start(queue: queue)" in source
+
+
+def test_udp_overlay_owner_keeps_callbacks_on_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue" in source
+    assert "queue.setSpecific" in source
