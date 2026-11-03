@@ -9,13 +9,13 @@ by `scripts/check_swift_concurrency_guard.py`, except for the named,
 machine-tested Apple serial bridges below.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 37 declarations:
+approval to add lock-based ownership. The inventory contains 38 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
 | Shared Core | 0 |
 | Desktop shared | 0 |
-| Apple shared | 15 |
+| Apple shared | 16 |
 | Linux adapters/runtime | 22 |
 | Executable workers | 0 |
 | Test fixtures | 0 |
@@ -34,14 +34,14 @@ packaging build compiles the HostRunner, macOS application, shared Apple
 transports, and the shared iOS tunnel-control source. Its initial complete
 checking run produced 410 compiler warning records across 14 source files. The
 first migration slice isolated the macOS AppKit entry point; the verified
-current baseline is 166 warning records across 4 source files. The same
+current baseline is 142 warning records across 3 source files. The same
 source can be compiled into more than one product, so this number is a
 compiler-output baseline rather than a count of distinct code locations.
 
 | Compile area | Warning records | Affected source files |
 | --- | ---: | --- |
 | macOS host | 108 | `ObstacleBridgeHostRunner.swift` (108) |
-| Shared Apple transport owners | 46 | `ObstacleBridgeQuicOverlayTransportOwner.swift` (24) and `ObstacleBridgeUdpOverlayTransportOwner.swift` (22) |
+| Shared Apple transport owner | 22 | `ObstacleBridgeUdpOverlayTransportOwner.swift` (22) |
 | Shared iOS tunnel-control source compiled by the macOS bundle | 12 | `ObstacleBridgeTunnelControl.swift` |
 
 The macOS application entry point now isolates its AppKit and WebKit state with

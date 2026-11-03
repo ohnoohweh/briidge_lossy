@@ -2012,3 +2012,11 @@ def test_channel_mux_tcp_owner_keeps_network_callbacks_on_owner_queue() -> None:
     assert "ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable" in source
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_channel_mux_tcp_owner_keeps_network_callbacks_on_owner_queue" in source
     assert "connection.start(queue: queue)" in source
+
+
+def test_quic_overlay_owner_keeps_callbacks_on_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue" in source
+    assert "connection.start(queue: queue)" in source

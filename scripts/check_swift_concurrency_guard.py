@@ -75,6 +75,11 @@ AUDITED_SYNCHRONOUS_OWNERS = (
         "ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable",
         "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_channel_mux_tcp_owner_keeps_network_callbacks_on_owner_queue",
     ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift",
+        "ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue",
+    ),
 )
 
 def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:
