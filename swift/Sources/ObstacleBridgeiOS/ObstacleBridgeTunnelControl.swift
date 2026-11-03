@@ -1498,6 +1498,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
 
     private class func ensureAdminWebProxy(_ manager: NETunnelProviderManager?) {
+        // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tunnel_control_state_serializes_shared_references
 #if !os(macOS)
         // iOS displays the extension's Admin API directly; no foreground proxy.
         _ = manager
