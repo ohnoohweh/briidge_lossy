@@ -1948,3 +1948,12 @@ def test_web_admin_server_callbacks_keep_owner_queue() -> None:
     assert "final class ObstacleBridgeWebAdminServer: @unchecked Sendable" in source
     assert "private final class LiveSession: @unchecked Sendable" in source
     assert "listener.start(queue: queue)" in source
+
+
+def test_tun_helper_xpc_reachability_state_is_synchronous_and_owned() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeTunHelperReachabilityState: @unchecked Sendable" in source
+    assert "private static let reachabilityState = ObstacleBridgeTunHelperReachabilityState()" in source
+    assert "return reachabilityState.snapshot()" in source
+    assert "reachabilityState.replace(with: result)" in source

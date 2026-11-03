@@ -12,13 +12,27 @@ import Foundation
     func handleEventFromHelper(_ message: NSDictionary)
 }
 
-enum ObstacleBridgeTunHelperXPC {
-    static let requestTimeoutSeconds: TimeInterval = 15.0
-    private static let reachabilityLock = NSLock()
-    private static var cachedReachability: [String: Any] = [
+/// Owns the synchronous reachability projection returned to status callers.
+private final class ObstacleBridgeTunHelperReachabilityState: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tun_helper_xpc_reachability_state_is_synchronous_and_owned
+    private let lock = NSLock()
+    private var cached: [String: Any] = [
         "ok": false,
         "error": "helper XPC reachability check pending",
     ]
+
+    func snapshot() -> [String: Any] {
+        lock.withLock { cached }
+    }
+
+    func replace(with result: [String: Any]) {
+        lock.withLock { cached = result }
+    }
+}
+
+enum ObstacleBridgeTunHelperXPC {
+    static let requestTimeoutSeconds: TimeInterval = 15.0
+    private static let reachabilityState = ObstacleBridgeTunHelperReachabilityState()
 
     static func interface() -> NSXPCInterface {
         NSXPCInterface(with: ObstacleBridgeTunHelperXPCServicing.self)
@@ -33,9 +47,7 @@ enum ObstacleBridgeTunHelperXPC {
         timeout: TimeInterval = 0.25
     ) -> [String: Any] {
         ping(machServiceName: machServiceName, timeout: timeout) { _ in }
-        reachabilityLock.lock()
-        defer { reachabilityLock.unlock() }
-        return cachedReachability
+        return reachabilityState.snapshot()
     }
 
     static func ping(
@@ -52,9 +64,7 @@ enum ObstacleBridgeTunHelperXPC {
             defer { finishLock.unlock() }
             guard !finished else { return }
             finished = true
-            reachabilityLock.lock()
-            cachedReachability = result
-            reachabilityLock.unlock()
+            reachabilityState.replace(with: result)
             connection.invalidate()
             completion(result)
         }

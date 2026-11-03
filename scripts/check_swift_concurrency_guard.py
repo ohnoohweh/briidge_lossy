@@ -43,6 +43,11 @@ AUDITED_SYNCHRONOUS_OWNERS = (
         "LiveSession: @unchecked Sendable",
         "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue",
     ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunHelperXPCTransport.swift",
+        "ObstacleBridgeTunHelperReachabilityState: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tun_helper_xpc_reachability_state_is_synchronous_and_owned",
+    ),
 )
 
 def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:
