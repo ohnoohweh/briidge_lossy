@@ -1151,10 +1151,12 @@ REQ-LIFE-010:
     - tests/unit/test_swift_concurrency_guard.py::test_accepts_lock_marker_with_named_test
     - ios/tests/test_m3_native_sources.py::test_overlay_connection_drivers_keep_callbacks_on_owner_queue
     - ios/tests/test_m3_native_sources.py::test_native_proxy_connections_keep_callbacks_on_owner_queue
+    - ios/tests/test_m3_native_sources.py::test_web_admin_server_callbacks_keep_owner_queue
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_allows_only_documented_synchronous_telemetry_owner
     - ios/tests/test_macos_swift_host_runner.py::test_macos_telemetry_uploader_uses_audited_synchronous_state
     - ios/tests/test_m3_native_sources.py::test_overlay_connection_drivers_keep_callbacks_on_owner_queue
     - ios/tests/test_m3_native_sources.py::test_native_proxy_connections_keep_callbacks_on_owner_queue
+    - ios/tests/test_m3_native_sources.py::test_web_admin_server_callbacks_keep_owner_queue
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxProxyProviderTests.swift::listenerReadinessDrainAdmitsEveryQueuedSOCKSClient
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxProxyProviderTests.swift::socksParserCompletesFragmentedGreetingWithoutBlockingRead
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunPingTests.swift::protocolV1FramesAndControlsRemainPythonCompatible

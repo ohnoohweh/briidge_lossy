@@ -278,6 +278,8 @@ The shared Apple UDP-driver source guard verifies Network callbacks re-enter
 their injected serial owner queue before reading or mutating driver state.
 The native-proxy source guard verifies its TCP and UDP connection callbacks
 remain on the injected proxy owner queue.
+The WebAdmin source guard verifies server and live-session callbacks remain on
+the serial listener owner queue.
 The shared corpus verifies Python and Core agree on exact binary and text
 WebSocket payload forms, including strict malformed text rejection. The Apple
 probe executes every shared wire-codec owner through its imported Core module.

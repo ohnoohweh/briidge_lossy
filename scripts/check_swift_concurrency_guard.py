@@ -37,6 +37,12 @@ AUDITED_SYNCHRONOUS_OWNERS = (
         "ObstacleBridgeUDPProxyConnection: @unchecked Sendable",
         "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue",
     ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebAdminServer.swift",
+        "ObstacleBridgeWebAdminServer: @unchecked Sendable",
+        "LiveSession: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue",
+    ),
 )
 
 def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:

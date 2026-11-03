@@ -1939,3 +1939,12 @@ def test_native_proxy_connections_keep_callbacks_on_owner_queue() -> None:
     assert "final class ObstacleBridgeUDPProxyConnection: @unchecked Sendable" in source
     assert "localConnection.start(queue: queue)" in source
     assert "remoteConnection.start(queue: queue)" in source
+
+
+def test_web_admin_server_callbacks_keep_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift").read_text(encoding="utf-8")
+
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue") == 2
+    assert "final class ObstacleBridgeWebAdminServer: @unchecked Sendable" in source
+    assert "private final class LiveSession: @unchecked Sendable" in source
+    assert "listener.start(queue: queue)" in source
