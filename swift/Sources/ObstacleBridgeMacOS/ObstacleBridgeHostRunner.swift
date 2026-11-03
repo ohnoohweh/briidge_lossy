@@ -90,6 +90,79 @@ private final class ObstacleBridgeConfigStore {
     }
 }
 
+/// Owns telemetry lifecycle and upload state independently of HostRunner.
+private final class ObstacleBridgeHostRunnerTelemetryState: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_host_runner_telemetry_state_owns_timer_callbacks
+    private let lock = NSLock()
+    private var timer: DispatchSourceTimer?
+    private var emitter: ObstacleBridgeTelemetryEmitter?
+    private var spool: ObstacleBridgeTelemetrySpool?
+    private var uploader: ObstacleBridgeTelemetryMTLSUploader?
+
+    func start(emitter: ObstacleBridgeTelemetryEmitter, spool: ObstacleBridgeTelemetrySpool, uploader: ObstacleBridgeTelemetryMTLSUploader) {
+        stop()
+        let timer = DispatchSource.makeTimerSource()
+        timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(5))
+        timer.setEventHandler { [weak self] in self?.flush(startUpload: true) }
+        lock.lock()
+        self.emitter = emitter
+        self.spool = spool
+        self.uploader = uploader
+        self.timer = timer
+        _ = emitter.emit(event: "runtime.lifecycle", fields: ["state": .string("started")], priority: .critical)
+        lock.unlock()
+        timer.resume()
+    }
+
+    func stop() {
+        lock.lock()
+        let timer = self.timer
+        self.timer = nil
+        emitter?.emit(event: "runtime.lifecycle", fields: ["state": .string("stopped")], priority: .critical)
+        flushLocked(startUpload: false)
+        uploader?.cancel()
+        emitter = nil
+        spool = nil
+        uploader = nil
+        lock.unlock()
+        timer?.cancel()
+    }
+
+    func flush(startUpload: Bool) {
+        lock.lock()
+        flushLocked(startUpload: startUpload)
+        lock.unlock()
+    }
+
+    func enqueueHealth(state: String, counter: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let emitter else { return }
+        _ = emitter.emit(
+            event: "runtime.health",
+            fields: ["counter": .integer(Int64(clamping: counter)), "state": .string(state)],
+            priority: .low
+        )
+    }
+
+    func statusSnapshot(runtimeConfig: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        return ObstacleBridgeTelemetryAdminStatus.snapshot(
+            runtimeConfig: runtimeConfig,
+            emitter: emitter,
+            spool: spool,
+            uploader: uploader
+        )
+    }
+
+    private func flushLocked(startUpload: Bool) {
+        guard let emitter, let spool, let uploader else { return }
+        for event in emitter.drain() { _ = spool.append(event) }
+        if startUpload { uploader.uploadOnce() }
+    }
+}
+
 private protocol ObstacleBridgeOverlayTransportOwning: AnyObject {
     func stop()
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]])
@@ -143,7 +216,6 @@ final class ObstacleBridgeHostRunner {
     private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
     private let adminSnapshotQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.AdminSnapshots")
     private let runtimeHealthQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.RuntimeHealth")
-    private let telemetryQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Telemetry")
     private let macOSTunHelperPackageQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.TunHelperPackage")
     private let controlActionQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.ControlActions")
     private var controlServer: ObstacleBridgeWebAdminServer?
@@ -197,10 +269,7 @@ final class ObstacleBridgeHostRunner {
     private var clientRestartWatchdog: DispatchSourceTimer?
     private var adminSnapshotTimer: DispatchSourceTimer?
     private var runtimeHealthTimer: DispatchSourceTimer?
-    private var telemetryTimer: DispatchSourceTimer?
-    private var telemetryEmitter: ObstacleBridgeTelemetryEmitter?
-    private var telemetrySpool: ObstacleBridgeTelemetrySpool?
-    private var telemetryUploader: ObstacleBridgeTelemetryMTLSUploader?
+    private let telemetryState = ObstacleBridgeHostRunnerTelemetryState()
     private var runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
     private var runtimeHealthSequence: UInt64 = 0
     private var previousRuntimeLifetimeEndedCleanly: Bool?
@@ -602,47 +671,23 @@ final class ObstacleBridgeHostRunner {
               let spool = try? ObstacleBridgeTelemetrySpool(directory: spoolURL),
               let policy = try? ObstacleBridgeTelemetryUploadPolicy(spool: spool, endpoint: endpoint)
         else { return }
-        let timer = DispatchSource.makeTimerSource(queue: telemetryQueue)
-        timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(5))
-        timer.setEventHandler { [weak self] in self?.flushTelemetry() }
-        telemetryQueue.sync {
-            telemetryEmitter = emitter
-            telemetrySpool = spool
-            telemetryUploader = ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: telemetryIdentity.identity)
-            _ = emitter.emit(event: "runtime.lifecycle", fields: ["state": .string("started")], priority: .critical)
-            telemetryTimer = timer
-            timer.resume()
-        }
+        telemetryState.start(
+            emitter: emitter,
+            spool: spool,
+            uploader: ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: telemetryIdentity.identity)
+        )
     }
 
     private func flushTelemetry(startUpload: Bool = true) {
-        guard let emitter = telemetryEmitter, let spool = telemetrySpool, let uploader = telemetryUploader else { return }
-        for event in emitter.drain() { _ = spool.append(event) }
-        if startUpload { uploader.uploadOnce() }
+        telemetryState.flush(startUpload: startUpload)
     }
 
     private func stopTelemetry() {
-        telemetryTimer?.cancel(); telemetryTimer = nil
-        telemetryQueue.sync { [weak self] in
-            self?.telemetryEmitter?.emit(event: "runtime.lifecycle", fields: ["state": .string("stopped")], priority: .critical)
-            self?.flushTelemetry(startUpload: false)
-            self?.telemetryUploader?.cancel()
-        }
-        telemetryEmitter = nil; telemetrySpool = nil; telemetryUploader = nil
+        telemetryState.stop()
     }
 
     private func enqueueTelemetryHealth(state: String, counter: UInt64) {
-        telemetryQueue.async { [weak self] in
-            guard let emitter = self?.telemetryEmitter else { return }
-            _ = emitter.emit(
-                event: "runtime.health",
-                fields: [
-                    "counter": .integer(Int64(clamping: counter)),
-                    "state": .string(state),
-                ],
-                priority: .low
-            )
-        }
+        telemetryState.enqueueHealth(state: state, counter: counter)
     }
 
     private func beginRuntimeHealthLifetime() {
@@ -1628,12 +1673,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func telemetryStatusSnapshot() -> [String: Any] {
-        ObstacleBridgeTelemetryAdminStatus.snapshot(
-            runtimeConfig: runtimeConfig,
-            emitter: telemetryEmitter,
-            spool: telemetrySpool,
-            uploader: telemetryUploader
-        )
+        telemetryState.statusSnapshot(runtimeConfig: runtimeConfig)
     }
 
     private func staticFileResponse(path: String) -> (contentType: String, body: Data)? {

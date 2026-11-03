@@ -2038,3 +2038,12 @@ def test_tunnel_control_state_serializes_shared_references() -> None:
     assert "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tunnel_control_state_serializes_shared_references" in source
     assert "private static let state = ObstacleBridgeTunnelControlState()" in source
     assert "@preconcurrency import NetworkExtension" in source
+
+
+def test_host_runner_telemetry_state_owns_timer_callbacks() -> None:
+    source = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeHostRunnerTelemetryState: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_host_runner_telemetry_state_owns_timer_callbacks" in source
+    assert "timer.setEventHandler { [weak self] in self?.flush(startUpload: true) }" in source
+    assert "private let telemetryState = ObstacleBridgeHostRunnerTelemetryState()" in source

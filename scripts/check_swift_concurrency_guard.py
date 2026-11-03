@@ -91,6 +91,11 @@ AUDITED_SYNCHRONOUS_OWNERS = (
         "ObstacleBridgeTunnelControlResponseState: @unchecked Sendable",
         "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tunnel_control_state_serializes_shared_references",
     ),
+    (
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
+        "ObstacleBridgeHostRunnerTelemetryState: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_host_runner_telemetry_state_owns_timer_callbacks",
+    ),
 )
 
 def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:
