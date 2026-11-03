@@ -54,6 +54,11 @@ AUDITED_SYNCHRONOUS_OWNERS = (
         "ObstacleBridgeTunHelperCommandRequestState: @unchecked Sendable",
         "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tun_helper_xpc_request_state_completes_once",
     ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTcpOverlayTransportOwner.swift",
+        "ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks",
+    ),
 )
 
 def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:

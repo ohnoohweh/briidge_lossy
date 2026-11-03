@@ -9,13 +9,13 @@ by `scripts/check_swift_concurrency_guard.py`, except for the named,
 machine-tested Apple serial bridges below.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 32 declarations:
+approval to add lock-based ownership. The inventory contains 33 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
 | Shared Core | 0 |
 | Desktop shared | 0 |
-| Apple shared | 10 |
+| Apple shared | 11 |
 | Linux adapters/runtime | 22 |
 | Executable workers | 0 |
 | Test fixtures | 0 |
@@ -34,14 +34,14 @@ packaging build compiles the HostRunner, macOS application, shared Apple
 transports, and the shared iOS tunnel-control source. Its initial complete
 checking run produced 410 compiler warning records across 14 source files. The
 first migration slice isolated the macOS AppKit entry point; the verified
-current baseline is 330 warning records across 8 source files. The same
+current baseline is 280 warning records across 7 source files. The same
 source can be compiled into more than one product, so this number is a
 compiler-output baseline rather than a count of distinct code locations.
 
 | Compile area | Warning records | Affected source files |
 | --- | ---: | --- |
 | macOS host | 108 | `ObstacleBridgeHostRunner.swift` (108) |
-| Shared Apple transport, proxy, and Admin owners | 210 | `ObstacleBridgeTcpOverlayTransportOwner.swift` (50), `ObstacleBridgeWebSocketOverlayTransportOwner.swift` (42), `ObstacleBridgeProxyServer.swift` (40), `ObstacleBridgeChannelMuxTCPTransportOwner.swift` (32), `ObstacleBridgeQuicOverlayTransportOwner.swift` (24), and `ObstacleBridgeUdpOverlayTransportOwner.swift` (22) |
+| Shared Apple transport, proxy, and Admin owners | 160 | `ObstacleBridgeWebSocketOverlayTransportOwner.swift` (42), `ObstacleBridgeProxyServer.swift` (40), `ObstacleBridgeChannelMuxTCPTransportOwner.swift` (32), `ObstacleBridgeQuicOverlayTransportOwner.swift` (24), and `ObstacleBridgeUdpOverlayTransportOwner.swift` (22) |
 | Shared iOS tunnel-control source compiled by the macOS bundle | 12 | `ObstacleBridgeTunnelControl.swift` |
 
 The macOS application entry point now isolates its AppKit and WebKit state with
@@ -74,6 +74,12 @@ their mutable state and owner callbacks stay on the injected transport queue,
 while Network callbacks transfer only their immutable callback values onto that
 queue. Their audited Sendable conformances eliminate 18 diagnostics without
 moving packet processing off its established synchronous owner.
+
+The TCP overlay owner applies the same boundary to its lifecycle, local TCP and
+UDP acceptance, and local TUN injection: each public mutation synchronously
+marshals to its queue, and Network callbacks capture an immutable owner before
+re-entering it. Its audited serial conformance eliminates 50 diagnostics while
+preserving the existing owner-queue transport lifecycle.
 
 The native TCP and UDP proxy connections follow the same serial-owner rule:
 their Network connections start on the injected proxy queue, which owns every

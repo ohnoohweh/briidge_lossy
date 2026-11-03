@@ -1968,3 +1968,16 @@ def test_tun_helper_xpc_request_state_completes_once() -> None:
     assert "guard !completed else { return nil }" in source
     assert "completion?(result)" in source
     assert "requestState.finish" in source
+
+
+def test_tcp_overlay_owner_serializes_public_and_network_callbacks() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks" in source
+    assert "withOwnerQueue { startOnOwnerQueue() }" in source
+    assert "withOwnerQueue { stopOnOwnerQueue() }" in source
+    assert "withOwnerQueue { sendLocalTunPacketOnOwnerQueue(packet) }" in source
+    assert "acceptLocalTCPConnectionOnOwnerQueue(" in source
+    assert "acceptLocalUDPConnectionOnOwnerQueue(" in source
+    assert "owner.queue.async" in source
