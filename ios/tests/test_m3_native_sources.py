@@ -2028,3 +2028,13 @@ def test_udp_overlay_owner_keeps_callbacks_on_owner_queue() -> None:
     assert "ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable" in source
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue" in source
     assert "queue.setSpecific" in source
+
+
+def test_tunnel_control_state_serializes_shared_references() -> None:
+    source = (IOS_SWIFT_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeTunnelControlState: @unchecked Sendable" in source
+    assert "ObstacleBridgeTunnelControlResponseState: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_tunnel_control_state_serializes_shared_references" in source
+    assert "private static let state = ObstacleBridgeTunnelControlState()" in source
+    assert "@preconcurrency import NetworkExtension" in source
