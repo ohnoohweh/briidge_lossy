@@ -1981,3 +1981,15 @@ def test_tcp_overlay_owner_serializes_public_and_network_callbacks() -> None:
     assert "acceptLocalTCPConnectionOnOwnerQueue(" in source
     assert "acceptLocalUDPConnectionOnOwnerQueue(" in source
     assert "owner.queue.async" in source
+
+
+def test_websocket_overlay_owner_serializes_public_and_delegate_callbacks() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "URLSessionTaskDelegate, @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_websocket_overlay_owner_serializes_public_and_delegate_callbacks" in source
+    assert "withOwnerQueue { startOnOwnerQueue() }" in source
+    assert "withOwnerQueue { stopOnOwnerQueue() }" in source
+    assert "withOwnerQueue { sendLocalTunPacketOnOwnerQueue(packet) }" in source
+    assert "acceptLocalTCPConnectionOnOwnerQueue(" in source
+    assert "acceptLocalUDPConnectionOnOwnerQueue(" in source
