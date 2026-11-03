@@ -227,7 +227,14 @@ extension ObstacleBridgeTcpOverlayTransportOwner: ObstacleBridgeOverlayTransport
 extension ObstacleBridgeQuicOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}
 extension ObstacleBridgeUdpOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}
 
-final class ObstacleBridgeHostRunner {
+// OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue
+// Network and XPC callbacks may arrive on arbitrary system queues.  Every
+// service/lifecycle mutation synchronously re-enters `serviceStateQueue` (or
+// its explicitly named sibling owner queue) before touching state.  This
+// conformance documents that pre-existing synchronous ownership boundary so
+// callbacks do not need to capture mutable local proxies or dispatch an
+// additional unsafe handoff.
+final class ObstacleBridgeHostRunner: @unchecked Sendable {
     typealias MacOSTunHelperClientFactory = (
         DispatchQueue,
         @escaping (Data) -> Void,

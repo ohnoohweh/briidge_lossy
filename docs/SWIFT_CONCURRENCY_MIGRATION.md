@@ -9,13 +9,13 @@ by `scripts/check_swift_concurrency_guard.py`, except for the named,
 machine-tested Apple serial bridges below.
 
 The remaining unchecked conformances are a live migration inventory, not an
-approval to add lock-based ownership. The inventory contains 43 declarations:
+approval to add lock-based ownership. The inventory contains 44 declarations:
 
 | Area | Owners |
 | --- | ---: | --- |
 | Shared Core | 0 |
 | Desktop shared | 0 |
-| Apple shared | 21 |
+| Apple shared | 22 |
 | Linux adapters/runtime | 22 |
 | Executable workers | 0 |
 | Test fixtures | 0 |
@@ -78,6 +78,13 @@ its overlay lifecycle and local UDP connection state. Its Network and overlay
 callbacks bind an immutable owner before re-entering the transport queue. The
 audited conformance eliminates 22 diagnostics while retaining its synchronous
 owner-queue operations.
+
+HostRunner itself is an audited serial bridge: its Network and XPC callbacks
+synchronously re-enter `serviceStateQueue` (or the specific sibling queue
+that owns the relevant state) before any mutation. This preserves lifecycle
+ordering at imported-framework boundaries and avoids transferring mutable
+proxy, service-specification, or callback-result state through an unowned
+asynchronous closure.
 
 HostRunner telemetry is now a separate lock-owned state cell. Its timer,
 upload drain, lifecycle events, health events, and admin snapshot retain only
