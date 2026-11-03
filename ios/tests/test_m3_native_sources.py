@@ -2004,3 +2004,11 @@ def test_proxy_server_sessions_stay_on_owner_queue() -> None:
     assert "private func withOwnerQueue<T>" in source
     assert "return queue.sync(execute: body)" in source
     assert "inbound.start(queue: queue)" in source
+
+
+def test_channel_mux_tcp_owner_keeps_network_callbacks_on_owner_queue() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_channel_mux_tcp_owner_keeps_network_callbacks_on_owner_queue" in source
+    assert "connection.start(queue: queue)" in source

@@ -70,6 +70,11 @@ AUDITED_SYNCHRONOUS_OWNERS = (
         "ProxySession: @unchecked Sendable",
         "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue",
     ),
+    (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift",
+        "ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_channel_mux_tcp_owner_keeps_network_callbacks_on_owner_queue",
+    ),
 )
 
 def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:
