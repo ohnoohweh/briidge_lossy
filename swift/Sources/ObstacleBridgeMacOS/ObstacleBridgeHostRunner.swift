@@ -2479,9 +2479,9 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func applyRemoteServiceCatalog(_ install: ObstacleBridgeAppleServiceCatalog.Install) {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue
         guard install.accepted else { return }
-        serviceStateQueue.async { [weak self] in
-            guard let self else { return }
+        withServiceStateQueue {
             for spec in install.removed {
                 let id = spec.svcID
                 self.catalogTCPServiceListeners.removeValue(forKey: id)?.cancel()

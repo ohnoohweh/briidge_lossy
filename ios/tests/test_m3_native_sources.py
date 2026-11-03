@@ -2056,3 +2056,10 @@ def test_host_runner_admin_snapshot_state_owns_async_metrics_cache() -> None:
     assert "OBSTACLEBRIDGE-CONCURRENCY: lock; test=test_host_runner_admin_snapshot_state_owns_async_metrics_cache" in source
     assert "private let adminSnapshotState = ObstacleBridgeHostRunnerAdminSnapshotState()" in source
     assert "state.replaceRuntimeMetrics(snapshot)" in source
+
+
+def test_host_runner_service_catalog_stays_on_service_queue() -> None:
+    source = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue" in source
+    assert "private func applyRemoteServiceCatalog" in source
+    assert "withServiceStateQueue {" in source
