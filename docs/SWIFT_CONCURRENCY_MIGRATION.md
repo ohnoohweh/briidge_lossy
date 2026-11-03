@@ -80,6 +80,16 @@ their Network connections start on the injected proxy queue, which owns every
 mutable connection field and callback. Their audited conformances eliminate 16
 diagnostics without changing the synchronous proxy lifecycle.
 
+The remaining XPC-helper diagnostics divide into three distinct ownership
+defects: the reachability dictionary is mutable static state despite its lock;
+the ping and request timeout racers capture non-Sendable local completion
+functions and `[String: Any]` values; and the completion-owned helper client is
+captured by HostRunner callbacks without a Sendable boundary. The remediation
+must give each request one synchronized completion state, give reachability a
+single synchronized owner, and return immutable response/status projections to
+the HostRunner service queue. Marking the whole XPC client Sendable would hide
+the callback transfer defect and is not an acceptable substitute.
+
 The findings fall into four migration groups:
 
 1. Dispatch, Network, URLSession, XPC, and Network Extension callbacks capture
