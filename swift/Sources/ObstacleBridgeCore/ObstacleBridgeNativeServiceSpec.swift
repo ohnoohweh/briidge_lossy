@@ -265,7 +265,7 @@ struct ObstacleBridgeRuntimeServiceSpec {
     }
 }
 
-public struct ObstacleBridgeNativeServiceSpec {
+public struct ObstacleBridgeNativeServiceSpec: Sendable {
     public let svcID: Int
     public let name: String?
     public let listenProtocol: String

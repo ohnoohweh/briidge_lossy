@@ -86,6 +86,11 @@ ordering at imported-framework boundaries and avoids transferring mutable
 proxy, service-specification, or callback-result state through an unowned
 asynchronous closure.
 
+Service specifications, their recursive JSON values, and TCP acceptance
+snapshots are immutable `Sendable` value types. Network listener callbacks can
+therefore carry configuration and acceptance effects across the imported
+framework boundary without sharing a mutable runtime owner.
+
 HostRunner telemetry is now a separate lock-owned state cell. Its timer,
 upload drain, lifecycle events, health events, and admin snapshot retain only
 that state cell, never the multi-domain HostRunner. This removes the telemetry
