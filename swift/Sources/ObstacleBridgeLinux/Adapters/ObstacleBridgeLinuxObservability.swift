@@ -9,14 +9,11 @@ import ObstacleBridgeDesktopShared
 /// Non-Sendable observability state. Its dedicated file-I/O queue owns log
 /// writes; callers receive only telemetry and diagnostic value snapshots.
 public final class ObstacleBridgeLinuxObservability {
-    private static let diagnosticLogMaximumBytes = 1_048_576
-    private static let diagnosticLogBackupCount = 5
     private static let diagnosticLogMaximumPendingWrites = 64
     private let lock = NSLock()
     private let logWorker: ObstacleBridgeLogWorkerSupervisor?
     private let fileURL: URL?
-    private let logMaximumBytes: Int
-    private let logBackupCount: Int
+    private let managedLogFile: ObstacleBridgeManagedLogFile?
     private let fileWriteQueue = DispatchQueue(label: "org.obstaclebridge.linux.diagnostic-log", qos: .utility)
     private let pendingWriteLock = NSLock()
     private var pendingWrites = 0
@@ -32,9 +29,16 @@ public final class ObstacleBridgeLinuxObservability {
         self.logWorker = logWorker
         let logging = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("debug_logging", from: configuration)
         let logPath = (logging["log_file"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        fileURL = logPath.isEmpty ? nil : URL(fileURLWithPath: logPath)
-        logMaximumBytes = max(0, logging["log_file_max_bytes"] as? Int ?? Self.diagnosticLogMaximumBytes)
-        logBackupCount = max(1, logging["log_file_backup_count"] as? Int ?? Self.diagnosticLogBackupCount)
+        let configuredLog = logPath.isEmpty ? nil : URL(fileURLWithPath: logPath)
+        // The desktop collector owns this file when enabled; otherwise this
+        // foreground producer owns its direct native log.
+        let directLog = logWorker == nil ? configuredLog : nil
+        let managedLog = directLog.map { ObstacleBridgeManagedLogFile(url: $0, settings: .debugLogging(from: configuration)) }
+        // Use the local value during initialization: capturing `self` in the
+        // queue closure here is illegal before telemetry members are set.
+        managedLog?.prepareForStart()
+        fileURL = directLog
+        managedLogFile = managedLog
         maximumRecentLines = max(1, min(logging["admin_web_log_max_lines"] as? Int ?? 1_200, 10_000))
         let telemetry = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("telemetry_client", from: configuration)
         let enabled = telemetry["telemetry_enabled"] as? Bool ?? false
@@ -142,35 +146,7 @@ public final class ObstacleBridgeLinuxObservability {
 
     /// Runs only on the utility queue.  File failures are diagnostic-only.
     private func appendLogLine(_ data: Data, to fileURL: URL) {
-        let manager = FileManager.default
-        try? manager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let currentSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        if logMaximumBytes > 0, currentSize > 0, currentSize + data.count > logMaximumBytes {
-            rotateLog(at: fileURL, manager: manager)
-        }
-        if !manager.fileExists(atPath: fileURL.path) {
-            _ = manager.createFile(atPath: fileURL.path, contents: nil)
-        }
-        if let handle = try? FileHandle(forWritingTo: fileURL) {
-            do {
-                try handle.seekToEnd()
-                try handle.write(contentsOf: data)
-            } catch {
-                // Logging is best effort; the runtime must remain available if the log cannot be written.
-            }
-            _ = try? handle.close()
-        }
-    }
-
-    /// Runs only on `fileWriteQueue`.
-    private func rotateLog(at fileURL: URL, manager: FileManager) {
-        guard manager.fileExists(atPath: fileURL.path) else { return }
-        for index in stride(from: logBackupCount, through: 1, by: -1) {
-            let destination = fileURL.appendingPathExtension("\(index)")
-            try? manager.removeItem(at: destination)
-            let source = index == 1 ? fileURL : fileURL.appendingPathExtension("\(index - 1)")
-            if manager.fileExists(atPath: source.path) { try? manager.moveItem(at: source, to: destination) }
-        }
+        managedLogFile?.append(data)
     }
 
     private func logValue(_ value: ObstacleBridgeTelemetryFieldValue) -> String {

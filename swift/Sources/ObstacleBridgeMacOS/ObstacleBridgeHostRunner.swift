@@ -290,6 +290,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     private let loggingWorkerLock = NSLock()
     private var loggingWorker: ObstacleBridgeLogWorkerSupervisor?
     private var loggingWorkerConfigured = false
+    private var managedDiagnosticLog: ObstacleBridgeManagedLogFile?
     private var peerWorkerLogProducer: ObstacleBridgeLogProducer?
     private var proxyProviderLastError = ""
     private var macOSTunHelperClient: ObstacleBridgeTunHelperClienting?
@@ -636,6 +637,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     }
 
     func start() throws {
+        configureManagedDiagnosticLog()
         beginRuntimeHealthLifetime()
         try ensureControlServerStarted()
         prepareSharedOverlayBootstrap()
@@ -760,6 +762,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         } else {
             peerWorkerLogProducer?.emit(name: "macos.runtime", level: "INFO", levelNumber: 20, message: event)
         }
+        appendManagedDiagnosticLog(name: "macos.runtime", level: "INFO", message: event)
     }
 
     private func activeLoggingWorker() -> ObstacleBridgeLogWorkerSupervisor? {
@@ -777,6 +780,29 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         } else {
             NSLog("[ObstacleBridgeHostRunner][%@]", event)
         }
+        appendManagedDiagnosticLog(name: "macos.host", level: level, message: event)
+    }
+
+    /// The private collector remains an optional live Admin-log source.  The
+    /// configured file is independently owned by the native host so its
+    /// rollover policy is the same on macOS and Linux.
+    private func configureManagedDiagnosticLog() {
+        let section = runtimeConfigRaw["debug_logging"] as? [String: Any] ?? [:]
+        guard let path = Self.stringValue(from: section["log_file"] ?? runtimeConfigRaw["log_file"]), !path.isEmpty else {
+            managedDiagnosticLog = nil
+            return
+        }
+        let sink = ObstacleBridgeManagedLogFile(
+            url: URL(fileURLWithPath: path),
+            settings: .debugLogging(from: runtimeConfigRaw)
+        )
+        sink.prepareForStart()
+        managedDiagnosticLog = sink
+    }
+
+    private func appendManagedDiagnosticLog(name: String, level: String, message: String) {
+        let line = "\(ISO8601DateFormatter().string(from: Date())) [\(name)] [\(level)] \(message)\n"
+        managedDiagnosticLog?.append(Data(line.utf8))
     }
 
     private func stopLoggingWorker() {

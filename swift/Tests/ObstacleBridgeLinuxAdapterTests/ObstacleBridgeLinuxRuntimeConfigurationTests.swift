@@ -19,7 +19,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(policy["blocked_host_patterns"] as? [String] == ["blocked.example"])
     }
 
-    @Test func debugLoggingIsOptInFromTheGroupedConfiguration() throws {
+    @Test func channelMuxDebugLoggingIsOptInFromTheGroupedConfiguration() throws {
         let base: [String: Any] = [
             "runner": ["overlay_transport": "myudp"],
             "udp_session": ["udp_peer": "127.0.0.1", "udp_peer_port": 4444],
@@ -30,7 +30,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(!disabled.debugLoggingEnabled)
 
         var enabled = base
-        enabled["debug_logging"] = ["debug_enabled": true]
+        enabled["channel_mux"] = ["log_channel_mux": "DEBUG"]
         let configured = try ObstacleBridgeLinuxRuntimeConfiguration.parse(
             data: try JSONSerialization.data(withJSONObject: enabled)
         )

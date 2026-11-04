@@ -329,6 +329,7 @@ def test_native_packet_flow_bridge_source_exists() -> None:
 
 def test_ios_native_provider_log_reads_are_bounded_and_tail_chunked() -> None:
     provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    managed_log = (CORE_SWIFT_DIR / "ObstacleBridgeManagedLogFile.swift").read_text(encoding="utf-8")
 
     shared = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     assert "nativeProviderLogMaximumBytes = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogMaximumBytes" in provider
@@ -345,6 +346,13 @@ def test_ios_native_provider_log_reads_are_bounded_and_tail_chunked() -> None:
     assert "nativeProviderLogQueue.async" in provider
     assert "rotateNativeProviderLog(at: logURL" in provider
     assert "nativeProviderLogQueue.sync" in provider
+    assert "private var nativeProviderManagedLog: ObstacleBridgeManagedLogFile?" in provider
+    assert "configureNativeProviderManagedLog(providerConfiguration: providerConfiguration)" in provider
+    assert "managedLog.append(line)" in provider
+    assert "settings: .debugLogging(from: root)" in provider
+    assert "func prepareForStart()" in managed_log
+    assert 'appendingPathExtension("lastsession")' in managed_log
+    assert "func append(_ data: Data)" in managed_log
     assert "FileHandle(forReadingFrom: url)" in provider
     assert "handle.readData(ofLength: count)" in provider
     assert "older native provider diagnostic lines omitted" in provider

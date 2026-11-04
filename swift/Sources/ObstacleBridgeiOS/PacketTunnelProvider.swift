@@ -96,6 +96,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     )
     private let nativeProviderLogPendingLock = NSLock()
     private var nativeProviderLogPendingWrites = 0
+    private var nativeProviderManagedLog: ObstacleBridgeManagedLogFile?
     private let telemetryQueue = DispatchQueue(label: "PacketTunnelProvider.Telemetry")
     private var telemetryTimer: DispatchSourceTimer?
     private var telemetryEmitter: ObstacleBridgeTelemetryEmitter?
@@ -382,7 +383,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                 self.nativeProviderLogPendingWrites -= 1
                 self.nativeProviderLogPendingLock.unlock()
             }
-            self.appendNativeProviderLogLine(line, to: logURL)
+            if let managedLog = self.nativeProviderManagedLog {
+                managedLog.append(line)
+            } else {
+                self.appendNativeProviderLogLine(line, to: logURL)
+            }
         }
     }
 
@@ -416,6 +421,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                 try? fileManager.moveItem(at: source, to: destination)
             }
         }
+    }
+
+    private func configureNativeProviderManagedLog(providerConfiguration: [String: Any]?) {
+        guard let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.obstaclebridge.shared"
+        ) else { return }
+        let root = rawRuntimeConfigPayload(providerConfiguration: providerConfiguration) ?? [:]
+        let logURL = containerURL
+            .appendingPathComponent("logs", isDirectory: true)
+            .appendingPathComponent("ipserver-native-provider.jsonl")
+        let managedLog = ObstacleBridgeManagedLogFile(
+            url: logURL,
+            settings: .debugLogging(from: root)
+        )
+        nativeProviderLogQueue.sync { managedLog.prepareForStart() }
+        nativeProviderManagedLog = managedLog
     }
 
     private var heartbeatTimer: DispatchSourceTimer?
@@ -694,6 +715,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         packetTunnelConfiguration = nil
         tunRoutingEnabled = false
         providerStartedAt = Date().timeIntervalSince1970
+        let providerConfiguration = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
+        configureNativeProviderManagedLog(providerConfiguration: providerConfiguration)
         recordNativeEvent(
             "startTunnel_entered",
             fields: [
@@ -705,8 +728,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             ]
         )
         updateProviderState("startTunnel_entered")
-        let providerConfiguration = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
-
         do {
             let configuration = try ObstacleBridgePacketTunnelConfiguration(
                 providerConfiguration,

@@ -540,12 +540,10 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         let secureLinkRekeyAfterFrames = max(0, integer(flat["secure_link_rekey_after_frames"]) ?? 0)
         let secureLinkRekeyAfterSeconds = max(0, Double(integer(flat["secure_link_rekey_after_seconds"]) ?? 0))
         let channelMux = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("channel_mux", from: root)
-        let debugLogging = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("debug_logging", from: root)
-        // Keep the existing explicit debug switch, but let the Python-parity
-        // ChannelMux level suppress native per-frame traces before producers
-        // allocate their event fields.
-        let channelMuxLevel = (string(channelMux["log_channel_mux"]) ?? "DEBUG").uppercased()
-        let debugLoggingEnabled = (boolean(debugLogging["debug_enabled"]) ?? false) && channelMuxLevel == "DEBUG"
+        // Match the Python runtime: the ChannelMux component level alone
+        // enables high-rate, payload-free diagnostic metadata.
+        let channelMuxLevel = (string(channelMux["log_channel_mux"]) ?? "INFO").uppercased()
+        let debugLoggingEnabled = channelMuxLevel == "DEBUG"
         let listenerRemoteServicePublicationEnabled = boolean(channelMux["channel_mux_listener_publish_remote_services"]) ?? false
         let candidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !candidates.isEmpty else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires at least one non-empty \(sessionName).\(peerKey)") }

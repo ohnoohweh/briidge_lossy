@@ -131,13 +131,17 @@ def test_macos_logging_producer_inventory_has_no_private_mode_direct_sink() -> N
     assert "stderr=asyncio.subprocess.DEVNULL if self._log_relay is not None else None" in peer
     assert "if log_fd is not None:" in peer and "else:\n            logging.basicConfig" in peer
 
-    # Native host, proxy, and peer producers likewise use only the selected
-    # collector or inherited record descriptor. The one NSLog is the explicit
-    # no-collector fallback and must not be available in private-worker mode.
+    # Native host, proxy, and peer producers use the selected collector or an
+    # inherited record descriptor. The host additionally owns the configured
+    # bounded local diagnostic file; the one NSLog is its no-collector fallback.
     assert "worker.emit(name: \"macos.host\"" in host
     assert "if let worker = activeLoggingWorker()" in host
     assert "else {\n            NSLog(\"[ObstacleBridgeHostRunner][%@]\", event)" in host
     assert host.count("NSLog(") == 1
+    assert "private var managedDiagnosticLog: ObstacleBridgeManagedLogFile?" in host
+    assert "configureManagedDiagnosticLog()" in host
+    assert "sink.prepareForStart()" in host
+    assert "appendManagedDiagnosticLog(name:" in host
     assert "loggingWorker.makeProducerRelay()" in native_proxy
     assert "--log-fd" in native_proxy
     assert "ObstacleBridgeLogProducer(inheritedFD: $0" in native_peer
