@@ -1166,6 +1166,7 @@ def test_macos_app_main_source_exists() -> None:
     assert "ObstacleBridge.app" in build_script
     assert "ObstacleBridgeMacAppMain.swift" in build_script
     assert "ObstacleBridgeMacOSTunAdapter.swift" in build_script
+    assert build_script.count("ObstacleBridgeManagedLogFile.swift") == 2
     assert "ObstacleBridgeTunHelperContract.swift" in build_script
     assert "ObstacleBridgeTunHelperProtocolV1.swift" in build_script
     assert "ObstacleBridgeMacOSTunHelperClient.swift" in build_script
