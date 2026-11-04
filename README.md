@@ -1663,7 +1663,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `81` | `1185` |
-| macOS Swift app | `1` | `92` |
+| macOS Swift app | `1` | `93` |
 | iOS app/extension | `31` | `232` |
 
 #### Requirement traceability
@@ -1679,7 +1679,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `8/8 = 100.0%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
-| macOS Swift app | `1/8 = 12.5%` | `4/8 = 50.0%` | `4/8 = 50.0%` |
+| macOS Swift app | `3/8 = 37.5%` | `4/8 = 50.0%` | `5/8 = 62.5%` |
 | iOS app/extension | `4/8 = 50.0%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
 
 The supporting manifests remain shared:
@@ -1706,9 +1706,9 @@ Desktop-only process ownership is reviewed across macOS and Linux; iOS extension
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `92` | `0` | `92` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `93` | `0` | `93` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `34` | `34` |
-| Total parity-oriented evidence | Sum of the lanes above | `104` | `154` | `258` |
+| Total parity-oriented evidence | Sum of the lanes above | `105` | `154` | `259` |
 
 Important caveat:
 

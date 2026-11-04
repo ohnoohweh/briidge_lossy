@@ -29,6 +29,7 @@ ARC-CMP-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delayed_reply
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_and_control_idle
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_myudp_python_tcp_service_survives_ten_rekeys_with_two_clients
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_worker_e2e_python_http_https_and_socks5
   unit_tests:
@@ -219,6 +220,8 @@ ARC-CMP-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_server_linux_native_client_myudp_basic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_native_python_myudp_window_pressure
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_myudp_python_tcp_service_survives_ten_rekeys_with_two_clients
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_udp_fragmentation_survives_text_mode
 
 ARC-CMP-003:

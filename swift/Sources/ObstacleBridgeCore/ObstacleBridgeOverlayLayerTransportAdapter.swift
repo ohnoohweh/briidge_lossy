@@ -111,7 +111,11 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         coreEffectSink = sink
     }
 
-    func setPendingSecureLinkPayloadWorkSink(_ sink: @escaping () -> Void) {
+    /// Installs the owner callback used to resume application delivery after
+    /// SecureLink completes a rekey.  Platform owners must schedule the work
+    /// outside their receive callback because that callback owns protocol
+    /// state while it processes the rekey control frame.
+    public func setPendingSecureLinkPayloadWorkSink(_ sink: @escaping () -> Void) {
         secureLinkAdapter?.setPendingPayloadWorkSink(sink)
     }
 
@@ -457,7 +461,9 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     /// Runs exactly one queued SecureLink application payload.  This method is
     /// deliberately not timed as a worker: the nested `securelink` scope is
     /// the atomic encrypt/decrypt operation reported to WebAdmin.
-    func drainOnePendingSecureLinkPayload() throws -> OutboundSnapshot {
+    /// Returns one FIFO application record that was held during a pending
+    /// SecureLink rekey.  Owners call it from their serialized send path.
+    public func drainOnePendingSecureLinkPayload() throws -> OutboundSnapshot {
         guard let secureLinkAdapter else { return OutboundSnapshot(emittedFrames: []) }
         let snapshot = try secureLinkAdapter.drainOnePendingPayload()
         return OutboundSnapshot(emittedFrames: snapshot.emittedFrames, queuedPayloads: snapshot.queuedPayloads)

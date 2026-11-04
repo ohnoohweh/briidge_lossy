@@ -8794,6 +8794,41 @@ def test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys(tmp_path: Path, 
             rekeys_completed = 0
             deadline = time.time() + 240.0
             next_status_poll = 0.0
+            secondary_stop = threading.Event()
+            secondary_ready = threading.Event()
+            secondary_done = threading.Event()
+            secondary_errors: list[str] = []
+            secondary_exchanges = [0]
+            secondary_thread: Optional[threading.Thread] = None
+
+            def run_second_tcp_client() -> None:
+                """Keep an independent service channel active after rekey one."""
+                secondary = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                secondary.settimeout(0.5)
+                try:
+                    secondary.connect(('127.0.0.1', service_port))
+                    secondary_ready.set()
+                    while not secondary_stop.is_set():
+                        payload = b'\x03'
+                        secondary.sendall(payload)
+                        received = bytearray()
+                        while len(received) < len(payload):
+                            chunk = secondary.recv(len(payload) - len(received))
+                            if not chunk:
+                                raise AssertionError('second TCP service channel closed')
+                            received.extend(chunk)
+                        if bytes(received) != response_payload(payload):
+                            raise AssertionError(f'second TCP service response mismatch: {bytes(received)!r}')
+                        secondary_exchanges[0] += 1
+                        secondary_stop.wait(0.025)
+                except Exception as exc:
+                    if not secondary_stop.is_set():
+                        secondary_errors.append(repr(exc))
+                    secondary_ready.set()
+                finally:
+                    secondary.close()
+                    secondary_done.set()
+
             try:
                 while time.time() < deadline and rekeys_completed < 10:
                     # The echo fixture transforms the first byte of every TCP
@@ -8810,13 +8845,27 @@ def test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys(tmp_path: Path, 
                         secure = dict((first_active_secure_link_row(peers, transport='myudp').get('secure_link') or {}))
                         rekeys_completed = int(secure.get('rekeys_completed_total') or 0)
                         next_status_poll = time.monotonic() + 0.25
+
+                    if rekeys_completed >= 1 and secondary_thread is None:
+                        secondary_thread = threading.Thread(target=run_second_tcp_client, daemon=True)
+                        secondary_thread.start()
+                        assert secondary_ready.wait(4.0), 'second TCP service channel did not connect after first rekey'
+                    if secondary_errors:
+                        raise AssertionError(f'second TCP client failed during rekey traffic: {secondary_errors[0]}')
             finally:
+                secondary_stop.set()
+                if secondary_thread is not None:
+                    secondary_thread.join(timeout=3.0)
                 client.close()
 
             assert sequence >= 10, 'test did not sustain enough bidirectional TCP traffic'
+            assert secondary_thread is not None, 'test did not start the second TCP service channel after first rekey'
+            assert secondary_done.is_set(), 'second TCP service channel did not stop cleanly'
+            assert not secondary_errors, f'second TCP client failed during rekey traffic: {secondary_errors[0]}'
+            assert secondary_exchanges[0] >= 10, 'second TCP client did not sustain enough bidirectional traffic'
             assert rekeys_completed >= 10, (
                 f'{client_runtime} MyUDP runtime completed {rekeys_completed} rekeys during {sequence} '
-                'bidirectional TCP exchanges; expected at least 10'
+                f'primary and {secondary_exchanges[0]} secondary bidirectional TCP exchanges; expected at least 10'
             )
             _code, peers = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=1.0)
             secure = dict((first_active_secure_link_row(peers, transport='myudp').get('secure_link') or {}))

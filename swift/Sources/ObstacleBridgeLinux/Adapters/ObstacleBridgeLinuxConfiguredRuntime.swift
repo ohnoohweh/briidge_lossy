@@ -95,6 +95,11 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// owner uses this to refresh its redacted Admin projection after a
     /// rekey, whose control exchange deliberately carries no ChannelMux data.
     public var onSecureLinkStateChange: (() -> Void)?
+    /// Core calls this after a rekey completes when application records were
+    /// queued while its commit was in flight.  The live owner must schedule a
+    /// drain on its serial queue; invoking it inline from the receive path
+    /// would re-enter `protocolLock`.
+    public var onPendingSecureLinkPayloadWork: (() -> Void)?
     /// Optional foreground-owned, payload-free debug sink. It is nil in the
     /// normal path, so its fields are never constructed unless enabled.
     public var onDebugDiagnostic: ((String, [String: String]) -> Void)?
@@ -134,6 +139,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         lowerSession.onLivenessSample = { [weak self] delayMilliseconds in
             self?.onTransportLivenessSample?(delayMilliseconds)
         }
+        overlayAdapter.setPendingSecureLinkPayloadWorkSink { [weak self] in
+            self?.onPendingSecureLinkPayloadWork?()
+        }
     }
 
     init(lowerSession: ObstacleBridgeLinuxOverlayTransportSession, overlayAdapter: ObstacleBridgeOverlayLayerTransportAdapter, transport: ObstacleBridgeLinuxTransport) {
@@ -145,6 +153,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         self.snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
         lowerSession.onLivenessSample = { [weak self] delayMilliseconds in
             self?.onTransportLivenessSample?(delayMilliseconds)
+        }
+        overlayAdapter.setPendingSecureLinkPayloadWorkSink { [weak self] in
+            self?.onPendingSecureLinkPayloadWork?()
         }
     }
 
@@ -227,6 +238,25 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
             fail(error)
             throw error
         }
+    }
+
+    /// Sends one FIFO application record that SecureLink held while a rekey
+    /// was pending.  The caller schedules this outside the receive callback;
+    /// this method shares the normal protocol/send serialization boundary.
+    @discardableResult
+    public func drainOnePendingSecureLinkPayload() throws -> Int {
+        protocolLock.lock()
+        defer { protocolLock.unlock() }
+        guard let overlayAdapter else { return 0 }
+        let outbound = try overlayAdapter.drainOnePendingSecureLinkPayload()
+        for frame in outbound.emittedFrames {
+            try sendSecureLinkBoundaryFrame(frame)
+        }
+        debug("secure_link.pending_payload_drained", [
+            "emitted_frames": String(outbound.emittedFrames.count),
+            "queued_payloads": String(outbound.queuedPayloads),
+        ])
+        return outbound.queuedPayloads
     }
 
     public func receiveInbound() throws -> Data {

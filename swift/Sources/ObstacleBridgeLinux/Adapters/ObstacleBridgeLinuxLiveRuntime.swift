@@ -366,6 +366,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 connectedSession.onSecureLinkStateChange = { [weak self] in
                     self?.queue.async { [weak self] in self?.refreshStatusProjection() }
                 }
+                connectedSession.onPendingSecureLinkPayloadWork = { [weak self, weak connectedSession] in
+                    guard let self, let connectedSession else { return }
+                    self.queue.async { [weak self, weak connectedSession] in
+                        guard let self, let connectedSession else { return }
+                        self.drainPendingSecureLinkPayload(from: connectedSession)
+                    }
+                }
                 let mux = try ObstacleBridgeLinuxChannelMuxSession(
                     runtime: self.configuredRuntime, session: connectedSession,
                     diagnosticSink: { [weak self] level, event, fields in
@@ -705,6 +712,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             }
             connectedSession.onSecureLinkStateChange = { [weak self] in
                 self?.queue.async { [weak self] in self?.refreshStatusProjection() }
+            }
+            connectedSession.onPendingSecureLinkPayloadWork = { [weak self, weak connectedSession] in
+                guard let self, let connectedSession else { return }
+                self.queue.async { [weak self, weak connectedSession] in
+                    guard let self, let connectedSession else { return }
+                    self.drainPendingSecureLinkPayload(from: connectedSession)
+                }
             }
             let mux = try ObstacleBridgeLinuxChannelMuxSession(
                 runtime: configuredRuntime, session: connectedSession,
@@ -1077,6 +1091,32 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 }
             }
             if !self.muxEgressScheduler.isEmpty { self.scheduleMuxEgressDrain() }
+        }
+    }
+
+    /// SecureLink queues application records while its rekey commit is in
+    /// flight.  Drain one record per owner-queue turn once `REKEY_DONE`
+    /// installs the new generation, so a busy service cannot remain stalled
+    /// behind a completed rekey or monopolize lifecycle work.
+    private func drainPendingSecureLinkPayload(from session: ObstacleBridgeLinuxConfiguredSession) {
+        guard !stopped, self.session === session else { return }
+        do {
+            let remaining = try session.drainOnePendingSecureLinkPayload()
+            emitDebugDiagnostic("secure_link.pending_payload_drain", [
+                "remaining_payloads": String(remaining),
+            ])
+            if remaining > 0 {
+                queue.async { [weak self, weak session] in
+                    guard let self, let session else { return }
+                    self.drainPendingSecureLinkPayload(from: session)
+                }
+            }
+        } catch {
+            emitDebugDiagnostic("secure_link.pending_payload_drain_failed", [
+                "reason": error.localizedDescription,
+            ])
+            guard let epoch = activeCoordinatorEpoch else { return }
+            apply(coordinator.handle(.transportFailed(epoch: epoch, reason: "secure-link pending payload drain failed: \(error.localizedDescription)")))
         }
     }
 
