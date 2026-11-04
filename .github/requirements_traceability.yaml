@@ -1202,6 +1202,9 @@ REQ-LIFE-010:
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_verification_checks
     - tests/unit/test_admin_web_payloads.py::test_cached_probe_verification_returns_pending_and_schedules_background_refresh_on_admin_thread
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_ui_binds_tun_helper_fields
+    - tests/unit/test_admin_web_payloads.py::test_optional_tun_and_certificate_secure_link_tabs_follow_runtime_capability
+    - tests/unit/test_admin_web_component_parity.py::test_swift_tun_routing_snapshot_matches_python
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_tun_routing_route_matches_python
     - tests/unit/test_admin_web_payloads.py::test_tun_helper_repair_endpoint_returns_runner_payload
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk
@@ -1836,7 +1839,7 @@ REQ-ADM-001:
     # Telemetry navigation is conditional on client or collector configured intent;
     # each card is conditional on its own enabled role.
     - tests/unit/test_admin_web_payloads.py::test_telemetry_tab_renders_client_and_collector_status
-    - tests/unit/test_admin_web_payloads.py::test_optional_tun_and_certificate_secure_link_tabs_follow_configuration
+    - tests/unit/test_admin_web_payloads.py::test_optional_tun_and_certificate_secure_link_tabs_follow_runtime_capability
     - tests/unit/test_admin_web_payloads.py::test_admin_web_does_not_embed_ios_native_tunnel_controls
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
     - tests/unit/test_runner_events.py::test_get_debug_logs_reads_only_a_bounded_file_tail

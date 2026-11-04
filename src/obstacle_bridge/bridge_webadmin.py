@@ -1139,6 +1139,13 @@ class AdminWebUI:
             if not isinstance(row.get("shared_tun_ownership"), dict)
         ] + physical_shared_rows
         payload = {
+            # Keep the browser-facing route capability identical to the Core
+            # generator used by the Swift hosts.
+            "api": {
+                "name": "tun-routing",
+                "version": 1,
+                "available": True,
+            },
             "tun": interface_rows,
             "shared_tun": shared_rows,
             "tun_helper": dict(status_snapshot.get("tun_helper") or {}),

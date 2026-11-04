@@ -1615,16 +1615,13 @@ function syncTelemetryTabVisibility() {
   if (!enabled && isTabActive('telemetry')) setActiveTab('status');
 }
 
-function tunRoutingConfigEnabled() {
-  const root = configState.config || {};
-  const cfg = root.TUN_routing && typeof root.TUN_routing === 'object'
-    ? root.TUN_routing
-    : root;
-  return Boolean(cfg.enabled_on_startup ?? root.enabled_on_startup);
+function tunRoutingAPIAvailable(payload) {
+  const api = payload?.api;
+  return api?.name === 'tun-routing' && api?.version === 1 && api?.available === true;
 }
 
-function syncTunRoutingTabVisibility() {
-  const enabled = tunRoutingConfigEnabled();
+function syncTunRoutingTabVisibility(payload) {
+  const enabled = tunRoutingAPIAvailable(payload);
   const panel = document.getElementById('tab-tun-routing');
   const nav = document.querySelector('.nav-tab[data-tab="tun-routing"]');
   if (panel) panel.classList.toggle('hidden', !enabled);
@@ -3294,8 +3291,10 @@ async function loadTunRouting() {
     const r = await apiFetch('/api/tun-routing/status', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
+    syncTunRoutingTabVisibility(j);
     applyTunRoutingDoc(j);
   } catch (e) {
+    syncTunRoutingTabVisibility(null);
     console.error('tun routing load failed', e);
   }
 }
@@ -3525,7 +3524,6 @@ async function loadConfig() {
     renderConfigSections(configState.schema, configState.config);
     syncProxyTabVisibility();
     syncTelemetryTabVisibility();
-    syncTunRoutingTabVisibility();
     syncSecureLinkTabVisibility();
     applyProxyDoc();
     if (uiState.onboarding.initialized) {

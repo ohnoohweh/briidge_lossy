@@ -939,9 +939,9 @@ ARC-CMP-005:
     # Telemetry navigation is omitted without an enabled client or collector;
     # each role's card is independently conditional.
     - tests/unit/test_admin_web_payloads.py::test_telemetry_tab_renders_client_and_collector_status
-    # TUN navigation requires enabled startup routing; certificate material
+    # TUN navigation follows the common Core API capability; certificate material
     # controls are omitted for PSK mode.
-    - tests/unit/test_admin_web_payloads.py::test_optional_tun_and_certificate_secure_link_tabs_follow_configuration
+    - tests/unit/test_admin_web_payloads.py::test_optional_tun_and_certificate_secure_link_tabs_follow_runtime_capability
     # The Proxy Worker lifecycle is available in the closed Proxy Technical details disclosure.
     - tests/unit/test_admin_web_payloads.py::test_proxy_page_renders_private_worker_lifecycle
     # Proxy observability keeps rates as plain fields and stacks listener cards.

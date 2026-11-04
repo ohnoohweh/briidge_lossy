@@ -18,12 +18,14 @@ SWIFT_CHANNELMUX_CORE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridg
 SWIFT_CHANNELMUX_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxCompatibilityCodec.swift"
 SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"
 SWIFT_CHANNELMUX_SESSION_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxSession.swift"
+SWIFT_COMPRESSION_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompression.swift"
 SWIFT_BINARY_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"
 SWIFT_CONTROL_CHUNK_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"
 SWIFT_SERVICE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"
 SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayStackPlanner.swift"
 SWIFT_RUNTIME_CONFIG_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared" / "ObstacleBridgeRuntimeConfig.swift"
 SWIFT_RUNTIME_CONFIG_POLICY_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeRuntimeConfigPolicy.swift"
+SWIFT_RUNTIME_METRICS_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeRuntimeMetrics.swift"
 SWIFT_PACKET_TUNNEL_ROUTE_POLICY_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePacketTunnelRoutePolicy.swift"
 SWIFT_PEER_ADDRESS_POLICY_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePeerAddressPolicy.swift"
 SWIFT_PEER_ADDRESS_RESOLVER_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared" / "ObstacleBridgePeerAddressResolver.swift"
@@ -172,6 +174,7 @@ def swift_admin_web_component_runner(tmp_path_factory: pytest.TempPathFactory) -
         str(SWIFT_BINARY_CODEC_SOURCE),
         str(SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE),
         str(SWIFT_CHANNELMUX_SESSION_SOURCE),
+        str(SWIFT_COMPRESSION_SOURCE),
         str(SWIFT_CONTROL_CHUNK_CODEC_SOURCE),
         str(SWIFT_SERVICE_CODEC_SOURCE),
         str(SWIFT_CHANNELMUX_CORE_CODEC_SOURCE),
@@ -180,6 +183,7 @@ def swift_admin_web_component_runner(tmp_path_factory: pytest.TempPathFactory) -
         str(SWIFT_PEER_ADDRESS_POLICY_SOURCE),
         str(SWIFT_PEER_ADDRESS_RESOLVER_SOURCE),
         str(SWIFT_RUNTIME_CONFIG_POLICY_SOURCE),
+        str(SWIFT_RUNTIME_METRICS_SOURCE),
         str(SWIFT_PACKET_TUNNEL_ROUTE_POLICY_SOURCE),
         str(SWIFT_RUNTIME_CONFIG_SOURCE),
         str(SWIFT_ADMIN_WEB_SUPPORT_SOURCE),

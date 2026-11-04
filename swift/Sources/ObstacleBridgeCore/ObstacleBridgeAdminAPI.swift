@@ -573,10 +573,26 @@ public enum ObstacleBridgeAdminAPI {
             }
         }
         return [
+            // Every host exposes this route, even before it has a configured
+            // or active packet device. The browser consumes this Core-owned
+            // capability instead of inferring availability from local config.
+            "api": [
+                "name": "tun-routing",
+                "version": 1,
+                "available": true,
+            ],
             "tun": interfaceRows,
             "shared_tun": sharedRows,
             "tun_helper": [:],
+            // Hosts replace these defaults only when their resource owner can
+            // actually control packet routing.
+            "tun_control": [
+                "enabled": false,
+                "startup_enabled": true,
+                "supported": false,
+            ],
             "summary": [
+                "snapshot_marker": "tun-summary-marker-2026-08-16a",
                 "tun_total": interfaceRows.count,
                 "tun_open": tunOpen,
                 "tun_listening": tunListening,
