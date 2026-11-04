@@ -545,7 +545,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     /// Redacted connection-attempt evidence supplied by the foreground owner.
     /// Values are restricted to transport metadata and error text; no key or
     /// packet data crosses this callback.
-    public var onDiagnostic: ((String, [String: String]) -> Void)?
+    public var onDiagnostic: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)?
     /// Foreground-owned, payload-free diagnostics for opt-in debugging.
     public var onDebugDiagnostic: ((String, [String: String]) -> Void)?
 
@@ -565,14 +565,17 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     }
 
     public func connect(sessionID: UInt64, clientNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
-        try connect(sessionID: sessionID, clientNonce: clientNonce, admission: defaultAdmission) { [configuration] host in
+        try connect(sessionID: sessionID, clientNonce: clientNonce, admission: defaultAdmission) { [weak self, configuration] host in
             let lower = try ObstacleBridgeLinuxOverlayTransportClient(
                 host: host, port: configuration.port, transport: configuration.transport,
                 wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode,
                 wsTLS: configuration.webSocketTLS, wsTrustRootsPath: configuration.webSocketTrustRootsPath,
                 wsProxy: configuration.webSocketProxy, quicALPN: configuration.quicALPN,
                 quicInsecure: configuration.quicInsecure, quicTrustRootsPath: configuration.quicTrustRootsPath,
-                receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds
+                receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds,
+                diagnosticSink: { [weak self] level, event, fields in
+                    self?.recordCoreDiagnostic(level, event: event, fields: fields)
+                }
             )
             return (lower, try lower.openSession())
         }
@@ -597,7 +600,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             let index = (admission.candidateStartIndex + offset) % configuration.peerCandidates.count
             let host = configuration.peerCandidates[index]
             let startedAt = ProcessInfo.processInfo.systemUptime
-            onDiagnostic?("overlay.connect.attempt", [
+            onDiagnostic?(.info, "overlay.connect.attempt", [
                 "transport": configuration.transport.rawValue,
                 "candidate_index": String(index), "candidate": host,
                 "port": String(configuration.port),
@@ -607,7 +610,14 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 let session: ObstacleBridgeLinuxConfiguredSession
                 if let psk = configuration.secureLinkPSK {
                     debug("secure_link.handshake.started", ["transport": configuration.transport.rawValue])
-                    let adapter = ObstacleBridgeOverlayLayerTransportAdapter(clientPSK: String(decoding: psk, as: UTF8.self))
+                    let adapter = ObstacleBridgeOverlayLayerTransportAdapter(
+                        clientPSK: String(decoding: psk, as: UTF8.self),
+                        rekeyAfterFrames: configuration.secureLinkRekeyAfterFrames,
+                        rekeyAfterSeconds: configuration.secureLinkRekeyAfterSeconds,
+                        diagnosticSink: { [weak self] level, event, fields in
+                            self?.recordCoreDiagnostic(level, event: event, fields: fields)
+                        }
+                    )
                     session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, overlayAdapter: adapter, transport: configuration.transport)
                     guard admission.installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
                     try session.completeClientHandshake(sessionID: sessionID, clientNonce: clientNonce)
@@ -626,7 +636,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 admission.connectedSinceUnixTS = Date().timeIntervalSince1970
                 admission.candidateStartIndex = index
                 admission.activeSession = session
-                onDiagnostic?("overlay.connect.authenticated", [
+                onDiagnostic?(.info, "overlay.connect.authenticated", [
                     "transport": configuration.transport.rawValue,
                     "candidate_index": String(index), "candidate": host,
                     "elapsed_ms": String(Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000)),
@@ -645,7 +655,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 admission.activeHost = nil
                 admission.secureLinkState = configuration.secureLinkPSK == nil ? "off" : "failed"
                 admission.snapshot = .init(transport: configuration.transport.rawValue, state: "failed", attempts: index + 1, failureReason: error.localizedDescription)
-                onDiagnostic?("overlay.connect.failed", [
+                onDiagnostic?(.warning, "overlay.connect.failed", [
                     "transport": configuration.transport.rawValue,
                     "candidate_index": String(index), "candidate": host,
                     "elapsed_ms": String(Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000)),
@@ -659,6 +669,22 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     private func debug(_ event: String, _ fields: @autoclosure () -> [String: String]) {
         guard configuration.debugLoggingEnabled, let onDebugDiagnostic else { return }
         onDebugDiagnostic(event, fields())
+    }
+
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests
+    func recordCoreDiagnostic(
+        _ level: ObstacleBridgeRuntimeDiagnosticLevel,
+        event: String,
+        fields: [String: Any]
+    ) {
+        let redacted = Dictionary(uniqueKeysWithValues: fields.map { key, value in
+            (key, String(describing: value))
+        })
+        if level == .debug {
+            debug(event, redacted)
+        } else {
+            onDiagnostic?(level, event, redacted)
+        }
     }
 
     /// Interrupts an in-progress lower transport or SecureLink handshake

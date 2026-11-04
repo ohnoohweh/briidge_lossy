@@ -1703,6 +1703,10 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
     assert "ObstacleBridgeOverlayBootstrapSettings" in provider
     assert "ObstacleBridgeCompressLayerRuntime" in provider
     assert "ObstacleBridgeSecureLinkPskRuntime" in provider
+    assert "diagnosticSink: { [weak self] level, event, fields in" in provider
+    assert 'fields.merging(["log_level": level.name])' in provider
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics" in provider
+    assert "ObstacleBridgePeerAddressProtocolRuntime" in provider
     assert "ObstacleBridgeWebSocketOverlayRuntime" in provider
     assert "ObstacleBridgeTcpOverlayRuntime" in provider
     assert "shared_overlay_runtime_prepared" in provider

@@ -31,15 +31,25 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private let stateLock = NSLock()
     private let receiveLock = NSLock()
     private let synchronousReceiveWaitMS: Int32
+    /// This is deliberately metadata-only.  myUDP payloads can contain
+    /// protected application traffic and must never be copied into a log.
+    private let diagnosticSink: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)?
     private let readinessQueue = DispatchQueue(label: "org.obstaclebridge.linux.myudp.readiness")
     private var readSource: DispatchSourceRead?
     private var timerSource: DispatchSourceTimer?
 
     /// `nextDataCounter` is an injectable Core seed for deterministic
     /// rollover qualification; normal runtime construction uses `1`.
-    public init(host: String, port: Int, timeoutMilliseconds: Int = 1_000, nextDataCounter: UInt16 = 1) throws {
+    public init(
+        host: String,
+        port: Int,
+        timeoutMilliseconds: Int = 1_000,
+        nextDataCounter: UInt16 = 1,
+        diagnosticSink: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)? = nil
+    ) throws {
         peerRuntime = .init(nextCounter: Int(nextDataCounter))
         synchronousReceiveWaitMS = Int32(max(1, min(Int(Int32.max), timeoutMilliseconds)))
+        self.diagnosticSink = diagnosticSink
         // Configured IPv6 literals commonly retain URI brackets. `getaddrinfo`
         // accepts the literal itself, not its URI presentation.
         let resolvedHost: String
@@ -53,7 +63,10 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         hints.ai_socktype = Int32(SOCK_DGRAM.rawValue)
         hints.ai_protocol = Int32(IPPROTO_UDP)
         var addresses: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(resolvedHost, String(port), &hints, &addresses) == 0, let first = addresses else { throw ObstacleBridgeLinuxMyUDPError.resolutionFailed }
+        guard getaddrinfo(resolvedHost, String(port), &hints, &addresses) == 0, let first = addresses else {
+            diagnosticSink?(.warning, "myudp.socket_error_detected", ["operation": "resolve", "reason": "resolution_failed"])
+            throw ObstacleBridgeLinuxMyUDPError.resolutionFailed
+        }
         defer { freeaddrinfo(first) }
         var candidate: UnsafeMutablePointer<addrinfo>? = first
         var failure: Error = ObstacleBridgeLinuxMyUDPError.resolutionFailed
@@ -72,8 +85,14 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             }
             candidate = row.pointee.ai_next
         }
-        guard opened >= 0 else { throw failure }
+        guard opened >= 0 else {
+            diagnosticSink?(.warning, "myudp.socket_error_detected", [
+                "operation": "connect", "reason": failure.localizedDescription,
+            ])
+            throw failure
+        }
         descriptor = opened
+        diagnosticSink?(.info, "myudp.session_opened", ["address_family": String(first.pointee.ai_family)])
     }
 
     public func exchange(_ payload: Data) throws -> Data {
@@ -147,10 +166,11 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                 // connection could be accepted.
                 if code == EAGAIN || code == EWOULDBLOCK {
                     if try waitForSynchronousReceive() { continue }
+                    diagnostic(.info, "myudp.receive_idle_timer_service", ["operation": "synchronous_receive"])
                     try serviceTimers()
                     continue
                 }
-                throw ObstacleBridgeLinuxMyUDPError.ioFailure(code)
+                throw socketError(code, operation: "receive")
             }
             let wire = Data(buffer.prefix(Int(received)))
             stateLock.lock()
@@ -159,11 +179,13 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             do { effect = try peerRuntime.receiveWire(wire, nowNS: now) }
             catch {
                 stateLock.unlock()
+                protocolError(error, wire: wire, operation: "receive")
                 throw ObstacleBridgeLinuxMyUDPError.invalidReply
             }
             deliveredPayloads.append(contentsOf: effect.deliveredPayloads)
             let payload = deliveredPayloads.isEmpty ? nil : deliveredPayloads.removeFirst()
             stateLock.unlock()
+            receivedWire(wire, effect: effect, operation: "receive")
             try execute(effect.emittedFrames)
             if let payload { return (0, payload) }
         }
@@ -178,7 +200,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             let result = poll(&pollDescriptor, 1, synchronousReceiveWaitMS) // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded synchronous myUDP bootstrap fallback without an event loop
             if result < 0 && errno == EINTR { continue }
             if result == 0 { return false }
-            guard result > 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
+            guard result > 0 else { throw socketError(errno, operation: "poll") }
             if pollDescriptor.revents & Int16(POLLIN) != 0 { return true }
             if pollDescriptor.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 {
                 throw ObstacleBridgeLinuxMyUDPError.ioFailure(ECONNRESET)
@@ -221,7 +243,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             if received <= 0 {
                 let code = errno
                 if code == EAGAIN || code == EWOULDBLOCK { return }
-                handler(.failure(ObstacleBridgeLinuxMyUDPError.ioFailure(code)))
+                handler(.failure(socketError(code, operation: "async_receive")))
                 return
             }
             do {
@@ -240,11 +262,16 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         let now = DispatchTime.now().uptimeNanoseconds
         let effect: ObstacleBridgeUdpOverlayPeerRuntime.InboundWireSnapshot
         do { effect = try peerRuntime.receiveWire(wire, nowNS: now) }
-        catch { stateLock.unlock(); throw ObstacleBridgeLinuxMyUDPError.invalidReply }
+        catch {
+            stateLock.unlock()
+            protocolError(error, wire: wire, operation: "async_receive")
+            throw ObstacleBridgeLinuxMyUDPError.invalidReply
+        }
         deliveredPayloads.append(contentsOf: effect.deliveredPayloads)
         let payloads = deliveredPayloads
         deliveredPayloads.removeAll(keepingCapacity: true)
         stateLock.unlock()
+        receivedWire(wire, effect: effect, operation: "async_receive")
         try execute(effect.emittedFrames)
         return payloads
     }
@@ -267,7 +294,13 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
         stateLock.lock()
         defer { stateLock.unlock() }
-        try execute(peerRuntime.tick(nowNS: DispatchTime.now().uptimeNanoseconds))
+        let effects = try peerRuntime.tick(nowNS: DispatchTime.now().uptimeNanoseconds)
+        if !effects.isEmpty {
+            diagnostic(.debug, "myudp.timer_emitted_frames", diagnosticFields([
+                "emitted_frame_count": String(effects.count),
+            ]))
+        }
+        try execute(effects)
     }
 
     public func protocolStatsSnapshot() -> [String: UInt64] {
@@ -293,12 +326,64 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         // The peer engine remains the state owner; this boundary prevents a
         // Linux-local wire interpretation from drifting from Core constants.
         guard ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(wire) != nil else {
+            diagnostic(.warning, "myudp.protocol_error_detected", diagnosticFields([
+                "operation": "send", "reason": "local_egress_frame_rejected", "wire_bytes": String(wire.count),
+            ]))
             throw ObstacleBridgeLinuxMyUDPError.invalidReply
         }
+        diagnostic(.debug, "myudp.datagram_sent", diagnosticFields(["wire_bytes": String(wire.count)]))
         let sent = wire.withUnsafeBytes { Glibc.send(descriptor, $0.baseAddress, wire.count, 0) }
-        guard sent == wire.count else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
+        guard sent == wire.count else { throw socketError(errno, operation: "send") }
     }
     private func execute(_ datagrams: [Data]) throws {
         for datagram in datagrams { try sendWire(datagram) }
+    }
+
+    private func protocolError(_ error: Error, wire: Data, operation: String) {
+        let fields = diagnosticFields([
+            "operation": operation,
+            "reason": String(describing: error),
+            "wire_bytes": String(wire.count),
+        ])
+        // The WARNING survives ordinary production logging; DEBUG preserves
+        // the same causal metadata beside the surrounding packet timeline.
+        diagnostic(.warning, "myudp.protocol_error_detected", fields)
+        diagnostic(.debug, "myudp.protocol_datagram_rejected", fields)
+    }
+
+    private func receivedWire(
+        _ wire: Data,
+        effect: ObstacleBridgeUdpOverlayPeerRuntime.InboundWireSnapshot,
+        operation: String
+    ) {
+        diagnostic(.debug, "myudp.datagram_received", diagnosticFields([
+            "operation": operation,
+            "wire_bytes": String(wire.count),
+            "delivered_payload_count": String(effect.deliveredPayloads.count),
+            "delivered_payload_bytes": String(effect.deliveredPayloads.reduce(0) { $0 + $1.count }),
+            "emitted_frame_count": String(effect.emittedFrames.count),
+        ]))
+    }
+
+    private func socketError(_ code: Int32, operation: String) -> ObstacleBridgeLinuxMyUDPError {
+        let fields = diagnosticFields([
+            "operation": operation,
+            "errno": String(code),
+        ])
+        diagnostic(.warning, "myudp.socket_error_detected", fields)
+        diagnostic(.debug, "myudp.socket_error_detail", fields)
+        return .ioFailure(code)
+    }
+
+    private func diagnosticFields(_ fields: [String: String]) -> [String: String] {
+        // Most callers hold `stateLock` while Core mutates its peer engine.
+        // Do not acquire it recursively merely to enrich a log line.  The
+        // Admin snapshot supplies the matching transport counters, while each
+        // diagnostic retains the causal operation and bounded frame metadata.
+        fields
+    }
+
+    private func diagnostic(_ level: ObstacleBridgeRuntimeDiagnosticLevel, _ event: String, _ fields: @autoclosure () -> [String: String]) {
+        diagnosticSink?(level, event, fields())
     }
 }

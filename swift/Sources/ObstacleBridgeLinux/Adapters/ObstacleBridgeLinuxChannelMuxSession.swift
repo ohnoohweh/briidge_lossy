@@ -16,6 +16,9 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     private let epoch: UInt64
     private let compressionPolicy: ObstacleBridgeMuxCompressionPolicy
     private let compressionTelemetry: ObstacleBridgeMuxCompressionTelemetry
+    /// Uses the shared Core severity contract so ChannelMux, SecureLink, and
+    /// myUDP observations reach the same foreground log pipeline.
+    private let diagnosticSink: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)?
     private let lock = NSLock()
     private let replyPolicy = ObstacleBridgeChannelMuxReplyPolicy()
     private var awaited: ObstacleBridgeChannelMuxFrame?
@@ -24,13 +27,20 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     private let controlChunkReassembler = ObstacleBridgeControlChunkReassembler()
     public var onUnsolicitedFrame: ((ObstacleBridgeChannelMuxFrame) -> Void)?
 
-    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, session: ObstacleBridgeLinuxConfiguredSession, startupFrames: [ObstacleBridgeChannelMuxFrame] = []) throws {
+    public init(
+        runtime: ObstacleBridgeLinuxConfiguredRuntime,
+        session: ObstacleBridgeLinuxConfiguredSession,
+        startupFrames: [ObstacleBridgeChannelMuxFrame] = [],
+        diagnosticSink: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)? = nil
+    ) throws {
         guard runtime.status().appReady else { throw ObstacleBridgeLinuxChannelMuxError.notReady }
         self.runtime = runtime
         self.session = session
         self.epoch = runtime.connectionEpoch
         self.compressionPolicy = runtime.configuration.compressionPolicy
         self.compressionTelemetry = runtime.compressionTelemetry
+        self.diagnosticSink = diagnosticSink
+        diagnostic(.info, "channel_mux.epoch_started", extra: ["epoch": String(epoch)])
         for frame in startupFrames {
             guard try exchange(frame) == frame else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
         }
@@ -39,10 +49,16 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     public func exchange(_ frame: ObstacleBridgeChannelMuxFrame) throws -> ObstacleBridgeChannelMuxFrame {
         let started = DispatchTime.now().uptimeNanoseconds
         defer { ObstacleBridgeRuntimeMetrics.shared.record(.channelMuxCallback, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
-        guard runtime.connectionEpoch == epoch, runtime.status().appReady else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
+        guard runtime.connectionEpoch == epoch, runtime.status().appReady else {
+            diagnostic(.warning, "channel_mux.stale_epoch", frame: frame)
+            throw ObstacleBridgeLinuxChannelMuxError.staleEpoch
+        }
         let duplex: Bool
         do { duplex = try replyPolicy.beginExchange(frame) }
-        catch { throw ObstacleBridgeLinuxChannelMuxError.tooManyInFlightFrames }
+        catch {
+            diagnostic(.warning, "channel_mux.exchange_backpressured", frame: frame)
+            throw ObstacleBridgeLinuxChannelMuxError.tooManyInFlightFrames
+        }
         let signal = duplex ? DispatchSemaphore(value: 0) : nil
         lock.lock()
         if duplex { awaited = frame; reply = nil; replySignal = signal }
@@ -52,11 +68,18 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
             lock.lock(); awaited = nil; replySignal = nil; lock.unlock()
         }
         let wire = try protectedWire(for: frame)
+        lifecycle(.info, event: "channel_mux.frame_sent", frame: frame)
         if !duplex { return try decodeInbound(session.send(wire)) }
         try session.sendOneWay(wire)
-        guard signal?.wait(timeout: .now() + 10) == .success else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
+        guard signal?.wait(timeout: .now() + 10) == .success else { // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded legacy request/reply compatibility wait; test=channelMuxFramesUseReadySessionAndRejectStaleEpoch
+            diagnostic(.warning, "channel_mux.reply_timed_out", frame: frame)
+            throw ObstacleBridgeLinuxChannelMuxError.staleEpoch
+        }
         lock.lock(); let value = reply; lock.unlock()
-        guard let value else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
+        guard let value else {
+            diagnostic(.warning, "channel_mux.reply_missing", frame: frame)
+            throw ObstacleBridgeLinuxChannelMuxError.staleEpoch
+        }
         return value
     }
 
@@ -67,8 +90,12 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     public func sendUnsolicited(_ frame: ObstacleBridgeChannelMuxFrame) throws {
         let started = DispatchTime.now().uptimeNanoseconds
         defer { ObstacleBridgeRuntimeMetrics.shared.record(.channelMuxCallback, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
-        guard runtime.connectionEpoch == epoch, runtime.status().appReady else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
+        guard runtime.connectionEpoch == epoch, runtime.status().appReady else {
+            diagnostic(.warning, "channel_mux.stale_epoch", frame: frame)
+            throw ObstacleBridgeLinuxChannelMuxError.staleEpoch
+        }
         try session.sendOneWay(protectedWire(for: frame))
+        lifecycle(.info, event: "channel_mux.frame_sent", frame: frame)
     }
 
     /// Marks this mux as driven by the one live receive owner. Once enabled,
@@ -83,16 +110,25 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     public func decodeInbound(_ wire: Data) throws -> ObstacleBridgeChannelMuxFrame {
         let started = DispatchTime.now().uptimeNanoseconds
         defer { ObstacleBridgeRuntimeMetrics.shared.record(.channelMuxCallback, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
-        let encoded = try ObstacleBridgeChannelMuxFrameCodec.decode(wire)
         do {
+            let encoded = try ObstacleBridgeChannelMuxFrameCodec.decode(wire)
             let result = try ObstacleBridgeMuxCompression.unprotect(wire)
             let decoded = try ObstacleBridgeChannelMuxCodec.decode(result.wire)
             compressionTelemetry.recordInbound(inputBodyBytes: encoded.body.count, outputBodyBytes: decoded.body.count, decompressed: result.decompressed)
+            diagnostic(.debug, "channel_mux.frame_received", frame: decoded, extra: [
+                "wire_bytes": String(wire.count),
+                "compressed": result.decompressed ? "true" : "false",
+            ])
+            lifecycle(.info, event: "channel_mux.frame_received", frame: decoded)
             return decoded
         } catch {
-            if encoded.messageType >= ObstacleBridgeMuxCompression.compressedFlag {
+            if let encoded = try? ObstacleBridgeChannelMuxFrameCodec.decode(wire),
+               encoded.messageType >= ObstacleBridgeMuxCompression.compressedFlag {
                 compressionTelemetry.recordFailedDecompression(bodyBytes: encoded.body.count)
             }
+            diagnostic(.warning, "channel_mux.protocol_error_detected", extra: [
+                "operation": "decode_inbound", "reason": String(describing: error), "wire_bytes": String(wire.count),
+            ])
             throw error
         }
     }
@@ -102,7 +138,9 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     public func receive(_ inbound: ObstacleBridgeChannelMuxFrame) {
         let started = DispatchTime.now().uptimeNanoseconds
         defer { ObstacleBridgeRuntimeMetrics.shared.record(.channelMuxCallback, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
+        diagnostic(.debug, "channel_mux.frame_received", frame: inbound)
         guard let frame = reassembledControlFrame(from: inbound) else { return }
+        lifecycle(.info, event: "channel_mux.frame_received", frame: frame)
         lock.lock()
         if replyPolicy.matchesAwaitedReply(frame) {
             reply = frame
@@ -140,10 +178,42 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     }
 
     private func protectedWire(for frame: ObstacleBridgeChannelMuxFrame) throws -> Data {
-        let wire = try ObstacleBridgeChannelMuxCodec.encode(channelID: frame.channelID, protocolType: frame.protocolType, counter: frame.counter, messageType: frame.messageType, body: frame.body)
-        let result = try ObstacleBridgeMuxCompression.protect(wire, policy: compressionPolicy)
-        let output = try ObstacleBridgeChannelMuxFrameCodec.decode(result.wire)
-        compressionTelemetry.recordOutbound(inputBodyBytes: frame.body.count, outputBodyBytes: output.body.count, attempted: result.attempted, compressed: result.compressed)
-        return result.wire
+        do {
+            let wire = try ObstacleBridgeChannelMuxCodec.encode(channelID: frame.channelID, protocolType: frame.protocolType, counter: frame.counter, messageType: frame.messageType, body: frame.body)
+            let result = try ObstacleBridgeMuxCompression.protect(wire, policy: compressionPolicy)
+            let output = try ObstacleBridgeChannelMuxFrameCodec.decode(result.wire)
+            compressionTelemetry.recordOutbound(inputBodyBytes: frame.body.count, outputBodyBytes: output.body.count, attempted: result.attempted, compressed: result.compressed)
+            diagnostic(.debug, "channel_mux.frame_prepared", frame: frame, extra: [
+                "wire_bytes": String(result.wire.count), "compressed": result.compressed ? "true" : "false",
+            ])
+            return result.wire
+        } catch {
+            diagnostic(.warning, "channel_mux.protocol_error_detected", frame: frame, extra: [
+                "operation": "encode_outbound", "reason": String(describing: error),
+            ])
+            throw error
+        }
+    }
+
+    private func lifecycle(_ level: ObstacleBridgeRuntimeDiagnosticLevel, event: String, frame: ObstacleBridgeChannelMuxFrame) {
+        guard frame.messageType == .open || frame.messageType == .close || frame.messageType == .remoteServicesSetV2 || frame.messageType == .remoteServicesSetV2Chunk else { return }
+        diagnostic(level, event, frame: frame)
+    }
+
+    private func diagnostic(
+        _ level: ObstacleBridgeRuntimeDiagnosticLevel,
+        _ event: String,
+        frame: ObstacleBridgeChannelMuxFrame? = nil,
+        extra: [String: String] = [:]
+    ) {
+        var fields = extra
+        if let frame {
+            fields["channel"] = String(frame.channelID)
+            fields["protocol"] = String(frame.protocolType.rawValue)
+            fields["message_type"] = String(frame.messageType.rawValue)
+            fields["counter"] = String(frame.counter)
+            fields["body_bytes"] = String(frame.body.count)
+        }
+        diagnosticSink?(level, event, fields)
     }
 }

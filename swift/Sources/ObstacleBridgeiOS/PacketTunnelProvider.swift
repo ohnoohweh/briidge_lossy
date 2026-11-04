@@ -1460,8 +1460,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                     ),
                     retryBackoffInitialMS: retryBackoffInitialMS,
                     retryBackoffMaxMS: retryBackoffMaxMS,
-                    diagnosticSink: { [weak self] event, fields in
-                        self?.recordNativeEvent(event, fields: fields)
+                    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
+                    diagnosticSink: { [weak self] level, event, fields in
+                        self?.recordNativeEvent(event, fields: fields.merging(["log_level": level.name]) { _, latest in latest })
                     }
                 )
                 summary["secure_link_runtime"] = "ready"
@@ -1480,7 +1481,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                     clientMode: settings.peerHost != nil
                 ),
                 transportDelayRotationThresholdMS: ObstacleBridgeRuntimeConfig.doubleValue(from: payload["channelmux_transport_delay_threshold_ms"]) ?? 5000.0,
-                transportDelayRotationGrace: (ObstacleBridgeRuntimeConfig.doubleValue(from: payload["channelmux_transport_delay_rotation_delay_ms"]) ?? 30000.0) / 1000.0
+                transportDelayRotationGrace: (ObstacleBridgeRuntimeConfig.doubleValue(from: payload["channelmux_transport_delay_rotation_delay_ms"]) ?? 30000.0) / 1000.0,
+                diagnosticSink: { [weak self] level, event, fields in
+                    self?.recordNativeEvent(event, fields: fields.merging(["log_level": level.name]) { _, latest in latest })
+                }
             )
             summary["peer_address_protocol_runtime"] = "ready"
 

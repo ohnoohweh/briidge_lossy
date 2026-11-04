@@ -248,6 +248,9 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     /// selects the platform trust store unless the explicit test bypass is set.
     public let quicTrustRootsPath: String?
     public let secureLinkPSK: Data?
+    /// Automatic PSK rekey policy. Zero disables the corresponding trigger.
+    public let secureLinkRekeyAfterFrames: Int
+    public let secureLinkRekeyAfterSeconds: TimeInterval
     public let receiveIdleTimeoutMilliseconds: Int
     /// Enables local, payload-free transport diagnostics. This is intentionally
     /// opt-in because the hot receive/send paths do not format debug fields
@@ -283,7 +286,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     /// before the remote peer authenticates.
     public let proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, debugLoggingEnabled: Bool = false, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, listenerRemoteServicePublicationEnabled: Bool = false, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil, tunHelperSessionToken: String? = nil, launchSwiftTunHelper: Bool = false, tunHelperExecutable: String? = nil, tunInterfaceName: String = "obtun0", packetTunnelEnabled: Bool = false, packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan? = nil, proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration = .init()) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, secureLinkRekeyAfterFrames: Int = 0, secureLinkRekeyAfterSeconds: TimeInterval = 0, receiveIdleTimeoutMilliseconds: Int = 5_000, debugLoggingEnabled: Bool = false, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, listenerRemoteServicePublicationEnabled: Bool = false, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil, tunHelperSessionToken: String? = nil, launchSwiftTunHelper: Bool = false, tunHelperExecutable: String? = nil, tunInterfaceName: String = "obtun0", packetTunnelEnabled: Bool = false, packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan? = nil, proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration = .init()) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = ObstacleBridgePeerAddressPort.configuredPeerCandidates(host)
@@ -300,6 +303,8 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.quicInsecure = quicInsecure
         self.quicTrustRootsPath = quicTrustRootsPath
         self.secureLinkPSK = secureLinkPSK
+        self.secureLinkRekeyAfterFrames = max(0, secureLinkRekeyAfterFrames)
+        self.secureLinkRekeyAfterSeconds = max(0, secureLinkRekeyAfterSeconds)
         self.receiveIdleTimeoutMilliseconds = max(1, receiveIdleTimeoutMilliseconds)
         self.debugLoggingEnabled = debugLoggingEnabled
         self.compressionPolicy = compressionPolicy
@@ -532,6 +537,8 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue(error.localizedDescription)
         }
         let receiveIdleTimeoutMilliseconds = max(1, integer(flat["secure_link_receive_idle_timeout_ms"]) ?? 5_000)
+        let secureLinkRekeyAfterFrames = max(0, integer(flat["secure_link_rekey_after_frames"]) ?? 0)
+        let secureLinkRekeyAfterSeconds = max(0, Double(integer(flat["secure_link_rekey_after_seconds"]) ?? 0))
         let channelMux = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("channel_mux", from: root)
         let debugLogging = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("debug_logging", from: root)
         // Keep the existing explicit debug switch, but let the Python-parity
@@ -558,6 +565,8 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             quicInsecure: boolean(session["quic_insecure"]) ?? false,
             quicTrustRootsPath: string(session["quic_ca_cert"]),
             secureLinkPSK: psk,
+            secureLinkRekeyAfterFrames: secureLinkRekeyAfterFrames,
+            secureLinkRekeyAfterSeconds: secureLinkRekeyAfterSeconds,
             receiveIdleTimeoutMilliseconds: receiveIdleTimeoutMilliseconds,
             debugLoggingEnabled: debugLoggingEnabled,
             compressionPolicy: compressionPolicy,

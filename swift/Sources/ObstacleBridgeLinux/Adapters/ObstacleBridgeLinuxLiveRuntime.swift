@@ -63,7 +63,10 @@ private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
                     wsTLS: configuration.webSocketTLS, wsTrustRootsPath: configuration.webSocketTrustRootsPath,
                     wsProxy: configuration.webSocketProxy, quicALPN: configuration.quicALPN,
                     quicInsecure: configuration.quicInsecure, quicTrustRootsPath: configuration.quicTrustRootsPath,
-                    receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds
+                    receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds,
+                    diagnosticSink: { [weak runtime] level, event, fields in
+                        runtime?.recordCoreDiagnostic(level, event: event, fields: fields)
+                    }
                 )
                 return (lower, try lower.openSession())
             }
@@ -163,7 +166,7 @@ public enum ObstacleBridgeLinuxShutdownSignal: String, Sendable {
 public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests (transport subclasses inherit this owner)
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
-    public var onDiagnostic: ((String, [String: String]) -> Void)?
+    public var onDiagnostic: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)?
     public var onDebugDiagnostic: ((String, [String: String]) -> Void)?
 
     public let configuredRuntime: ObstacleBridgeLinuxConfiguredRuntime
@@ -199,6 +202,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var runtimeHealthTimer: DispatchSourceTimer?
     private var livenessProbeTimer: DispatchSourceTimer?
     private var activeCoordinatorEpoch: UInt64?
+    private var lastFailureDiagnosticSignature: String?
     /// Listener-owned child sessions are retired by their shared listener;
     /// they must never turn a peer close into an outbound reconnect attempt.
     private var inboundOnly = false
@@ -224,8 +228,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         self.loggingWorker = loggingWorker
         var generator = SystemRandomNumberGenerator()
         self.catalogInstanceID = UInt64.random(in: 1...UInt64.max, using: &generator)
-        runtime.onDiagnostic = { [weak self] event, fields in
-            self?.emitDiagnostic(event, fields: fields)
+        runtime.onDiagnostic = { [weak self] level, event, fields in
+            // Core emits this while it owns SecureLink mutable state.  Defer
+            // the health projection because it reads that same state through
+            // the configured session; re-entering it synchronously violates
+            // Swift exclusivity during a rekey transition.
+            self?.queue.async { [weak self] in
+                self?.emitDiagnostic(event, fields: fields, level: level)
+            }
         }
         runtime.onDebugDiagnostic = { [weak self] event, fields in
             self?.emitDebugDiagnostic(event, fields)
@@ -356,7 +366,12 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 connectedSession.onSecureLinkStateChange = { [weak self] in
                     self?.queue.async { [weak self] in self?.refreshStatusProjection() }
                 }
-                let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: self.configuredRuntime, session: connectedSession)
+                let mux = try ObstacleBridgeLinuxChannelMuxSession(
+                    runtime: self.configuredRuntime, session: connectedSession,
+                    diagnosticSink: { [weak self] level, event, fields in
+                        self?.queue.async { [weak self] in self?.emitChannelMuxDiagnostic(level, event: event, fields: fields) }
+                    }
+                )
                 mux.onUnsolicitedFrame = { [weak self] frame in self?.queue.async { [weak self] in self?.routeInboundFrame(frame) } }
                 mux.activateReceiveOwner(); connectedSession.activateReceiveOwner()
                 self.channelMux = mux
@@ -691,7 +706,12 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             connectedSession.onSecureLinkStateChange = { [weak self] in
                 self?.queue.async { [weak self] in self?.refreshStatusProjection() }
             }
-            let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: configuredRuntime, session: connectedSession)
+            let mux = try ObstacleBridgeLinuxChannelMuxSession(
+                runtime: configuredRuntime, session: connectedSession,
+                diagnosticSink: { [weak self] level, event, fields in
+                    self?.queue.async { [weak self] in self?.emitChannelMuxDiagnostic(level, event: event, fields: fields) }
+                }
+            )
             mux.onUnsolicitedFrame = { [weak self] frame in
                 self?.queue.async { [weak self] in self?.routeInboundFrame(frame) }
             }
@@ -766,6 +786,23 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         // `connecting` and its attempt count instead of the stale `stopped`
         // snapshot for the whole handshake window.
         publishCoordinatorSnapshot()
+        let coreSnapshot = coordinator.snapshot
+        if let retiredEpoch = transition.effects.compactMap({ effect -> UInt64? in
+            if case .cancelTransport(let epoch) = effect { return epoch }
+            return nil
+        }).first,
+           let reason = coreSnapshot.failureReason {
+            let signature = "\(retiredEpoch):\(reason)"
+            if lastFailureDiagnosticSignature != signature {
+                lastFailureDiagnosticSignature = signature
+                emitDiagnostic("overlay.epoch.failure_reconnect_started", fields: [
+                    "epoch": String(retiredEpoch),
+                    "reason": reason,
+                    "attempts": String(coreSnapshot.attempts),
+                    "next_retry_ms": coreSnapshot.nextRetryMilliseconds.map(String.init) ?? "none",
+                ], level: .warning)
+            }
+        }
         for effect in transition.effects {
             switch effect {
             case .openTransport(let epoch, _, _):
@@ -832,10 +869,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// durable runtime-health journal.  The journal must not depend on the
     /// public callback: the foreground runner installs that callback for the
     /// Admin log view after this runtime has been constructed.
-    private func emitDiagnostic(_ event: String, fields: [String: String]) {
+    private func emitDiagnostic(
+        _ event: String,
+        fields: [String: String],
+        level: ObstacleBridgeRuntimeDiagnosticLevel = .info
+    ) {
         let detail = fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
         appendRuntimeHealth(event: detail.isEmpty ? event : "\(event) \(detail)")
-        onDiagnostic?(event, fields)
+        onDiagnostic?(level, event, fields)
     }
 
     private func startOwnServiceOwners() throws {
@@ -983,6 +1024,11 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             instanceID: catalogInstanceID, connectionSequence: sequence,
             services: configuredRuntime.configuration.remoteServices
         )
+        emitDiagnostic("channel_mux.catalog_publishing", fields: [
+            "epoch": String(configuredRuntime.connectionEpoch),
+            "service_count": String(configuredRuntime.configuration.remoteServices.count),
+            "frame_count": String(frames.count),
+        ])
         for frame in frames {
             try channelMux.sendUnsolicited(frame)
         }
@@ -1104,15 +1150,34 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         onDebugDiagnostic?(event, fields())
     }
 
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests
+    private func emitChannelMuxDiagnostic(
+        _ level: ObstacleBridgeRuntimeDiagnosticLevel,
+        event: String,
+        fields: [String: String]
+    ) {
+        if level == .debug { emitDebugDiagnostic(event, fields) }
+        else { emitDiagnostic(event, fields: fields, level: level) }
+    }
+
     private func routeInboundFrame(_ frame: ObstacleBridgeChannelMuxFrame) {
         if frame.protocolType == .tun, let tunChannelAdapter {
             tunChannelAdapter.receivedMuxFrame(frame)
             return
         }
         if frame.messageType == .remoteServicesSetV2 {
-            guard let decoded = try? ObstacleBridgeLinuxServiceCatalog.decode(frame.body),
-                  let install = try? remoteCatalogStore.install(instanceID: decoded.instanceID, connectionSequence: decoded.connectionSequence, services: decoded.services),
-                  install.accepted else { return }
+            guard let decoded = try? ObstacleBridgeLinuxServiceCatalog.decode(frame.body) else {
+                emitDiagnostic("channel_mux.catalog_rejected", fields: ["reason": "decode_failed", "body_bytes": String(frame.body.count)], level: .warning)
+                return
+            }
+            guard let install = try? remoteCatalogStore.install(instanceID: decoded.instanceID, connectionSequence: decoded.connectionSequence, services: decoded.services), install.accepted else {
+                emitDiagnostic("channel_mux.catalog_rejected", fields: ["reason": "stale_or_invalid", "service_count": String(decoded.services.count)], level: .warning)
+                return
+            }
+            emitDiagnostic("channel_mux.catalog_installed", fields: [
+                "service_count": String(install.installed.count),
+                "connection_sequence": String(decoded.connectionSequence),
+            ])
             do { try startRemoteServiceOwners(install.installed) }
             catch { publishCoordinatorSnapshot() }
             return

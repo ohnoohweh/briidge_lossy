@@ -3116,7 +3116,11 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
                         rekeyAfterSeconds: rekeyAfterSeconds
                     ),
                     retryBackoffInitialMS: retryBackoffInitialMS,
-                    retryBackoffMaxMS: retryBackoffMaxMS
+                    retryBackoffMaxMS: retryBackoffMaxMS,
+                    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue
+                    diagnosticSink: { [weak self] level, event, _ in
+                        self?.recordOperationalLog(event: event, level: level.name, levelNumber: level.rawValue)
+                    }
                 )
                 summary["secure_link_runtime"] = "ready"
                 summary["secure_link_rekey_after_frames"] = rekeyAfterFrames
@@ -3134,7 +3138,10 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
                     clientMode: settings.peerHost != nil
                 ),
                 transportDelayRotationThresholdMS: ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["channelmux_transport_delay_threshold_ms"]) ?? 5000.0,
-                transportDelayRotationGrace: (ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]) ?? 30000.0) / 1000.0
+                transportDelayRotationGrace: (ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]) ?? 30000.0) / 1000.0,
+                diagnosticSink: { [weak self] level, event, _ in
+                    self?.recordOperationalLog(event: event, level: level.name, levelNumber: level.rawValue)
+                }
             )
             summary["peer_address_protocol_runtime"] = "ready"
 

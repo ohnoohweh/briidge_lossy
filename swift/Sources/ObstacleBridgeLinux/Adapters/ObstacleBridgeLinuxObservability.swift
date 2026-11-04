@@ -89,7 +89,12 @@ public final class ObstacleBridgeLinuxObservability {
     /// Stores local runtime diagnostics without converting them to telemetry
     /// field wrappers. This keeps Admin log lines operator-readable and avoids
     /// sending connection-attempt detail through the telemetry pipeline.
-    public func recordDiagnostic(_ event: String, fields: [String: String]) {
+    public func recordDiagnostic(
+        _ event: String,
+        fields: [String: String],
+        level: ObstacleBridgeRuntimeDiagnosticLevel = .info
+    ) {
+        logWorker?.emit(name: "linux.runtime", level: level.name, levelNumber: level.rawValue, message: event)
         writeLog("\(event) \(fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " "))")
     }
 

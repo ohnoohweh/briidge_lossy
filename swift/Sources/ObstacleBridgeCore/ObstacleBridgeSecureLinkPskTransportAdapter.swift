@@ -1,9 +1,25 @@
 import Foundation
 
+/// Severity is deliberately owned by Core so every Swift host can apply the
+/// same operator contract without exposing protected payload material.
+public enum ObstacleBridgeRuntimeDiagnosticLevel: Int, Sendable {
+    case debug = 10
+    case info = 20
+    case warning = 30
+
+    public var name: String {
+        switch self {
+        case .debug: return "DEBUG"
+        case .info: return "INFO"
+        case .warning: return "WARNING"
+        }
+    }
+}
+
 public final class ObstacleBridgeSecureLinkPskTransportAdapter {
     /// Emits bounded lifecycle evidence only.  It never includes protected
     /// payload bytes, nonces, or key material.
-    typealias DiagnosticSink = (String, [String: Any]) -> Void
+    public typealias DiagnosticSink = (ObstacleBridgeRuntimeDiagnosticLevel, String, [String: Any]) -> Void
     public struct OutboundSnapshot {
         public var emittedFrames: [Data]
         var queuedPayloads: Int
@@ -51,8 +67,21 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         self.diagnosticSink = diagnosticSink
     }
 
-    public convenience init(clientPSK: String) {
-        self.init(runtime: .init(clientMode: true, psk: clientPSK))
+    public convenience init(
+        clientPSK: String,
+        rekeyAfterFrames: Int = 0,
+        rekeyAfterSeconds: TimeInterval = 0,
+        diagnosticSink: DiagnosticSink? = nil
+    ) {
+        self.init(
+            runtime: .init(
+                clientMode: true,
+                psk: clientPSK,
+                rekeyAfterFrames: rekeyAfterFrames,
+                rekeyAfterSeconds: rekeyAfterSeconds
+            ),
+            diagnosticSink: diagnosticSink
+        )
     }
 
     public var protocolState: ObstacleBridgeSecureLinkPSKState? {
@@ -71,6 +100,11 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
 
     public func requestSecureLinkRekey(sessionID: UInt64? = nil, clientNonce: Data? = nil) throws -> OutboundSnapshot {
         let snapshot = try runtime.requestClientRekey(sessionID: sessionID, clientNonce: clientNonce)
+        emitDiagnostic(.info, "secure_link_rekey_started", [
+            "trigger": "operator",
+            "session_id": diagnosticSessionID(snapshot.sessionID),
+            "frame_types": diagnosticFrameTypes(snapshot.emittedFrames),
+        ])
         return OutboundSnapshot(
             emittedFrames: snapshot.emittedFrames,
             queuedPayloads: pendingPayloads.count,
@@ -96,6 +130,13 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
             emittedFrames.append(contentsOf: handshake.emittedFrames)
             recordHandshakeStarted(reason: "retry_due", frames: handshake.emittedFrames)
         }
+        if !emittedFrames.isEmpty, runtime.statusSnapshot().rekeyInProgress {
+            emitDiagnostic(.info, "secure_link_rekey_started", [
+                "trigger": runtime.statusSnapshot().lastRekeyTrigger,
+                "session_id": diagnosticSessionID(runtime.statusSnapshot().sessionID),
+                "frame_types": diagnosticFrameTypes(emittedFrames),
+            ])
+        }
         recordControlFrames(direction: "tx", source: "due", frames: emittedFrames)
         return OutboundSnapshot(
             emittedFrames: emittedFrames,
@@ -107,7 +148,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
 
     public func handleTransportDisconnected() {
         let status = runtime.statusSnapshot()
-        emitDiagnostic("secure_link_transport_disconnected", [
+        emitDiagnostic(.warning, "secure_link_transport_disconnected", [
             "session_id": diagnosticSessionID(status.sessionID),
             "authenticated": status.authenticated,
             "last_event": status.lastEvent,
@@ -189,7 +230,6 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
                 sessionID: snapshot.sessionID
             )
         }
-
         pendingPayloads.append(payload)
         let primed = try handleTransportConnected()
 
@@ -213,6 +253,13 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
             handleClientAuthFailure(wasAuthenticated: previousStatus.authenticated)
         }
         let status = runtime.statusSnapshot()
+        if snapshot.authFailCode != nil {
+            emitDiagnostic(.warning, "secure_link_authentication_failed", [
+                "session_id": diagnosticSessionID(status.sessionID),
+                "auth_fail_code": snapshot.authFailCode ?? -1,
+                "last_event": status.lastEvent,
+            ])
+        }
         recordInboundControlFrame(
             inboundFrame,
             previousStatus: previousStatus,
@@ -228,6 +275,13 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         }
         if status.authenticated, !status.appDataSendingBlocked, !pendingPayloads.isEmpty {
             pendingPayloadWorkSink?()
+        }
+        if status.rekeysCompletedTotal > previousStatus.rekeysCompletedTotal {
+            emitDiagnostic(.info, "secure_link_rekey_completed", [
+                "session_id": diagnosticSessionID(status.sessionID),
+                "rekeys_completed_total": status.rekeysCompletedTotal,
+                "trigger": status.lastRekeyTrigger,
+            ])
         }
         return InboundSnapshot(
             emittedFrames: emittedFrames,
@@ -298,7 +352,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
     private func recordHandshakeStarted(reason: String, frames: [Data]) {
         handshakeStartedAtMono = timeProvider()
         let status = runtime.statusSnapshot()
-        emitDiagnostic("secure_link_handshake_started", [
+        emitDiagnostic(.info, "secure_link_handshake_started", [
             "reason": reason,
             "session_id": diagnosticSessionID(status.sessionID),
             "handshake_attempt": handshakeAttemptsTotal,
@@ -314,12 +368,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         emittedFrames: [Data],
         authFailCode: Int?
     ) {
-        let shouldRecord = frame?.slType != ObstacleBridgeSecureLinkPskRuntime.typeData
-            || !previousStatus.authenticated
-            || previousStatus.authenticated != status.authenticated
-            || authFailCode != nil
-        guard shouldRecord else { return }
-        emitDiagnostic("secure_link_frame_received", [
+        emitDiagnostic(.debug, "secure_link_frame_received", [
             "frame_type": frame?.slType ?? -1,
             "frame_session_id": diagnosticSessionID(frame?.sessionID ?? 0),
             "frame_counter": diagnosticSessionID(frame?.counter ?? 0),
@@ -336,11 +385,10 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
 
     private func recordControlFrames(direction: String, source: String, frames: [Data]) {
         for frame in frames {
-            guard let parsed = ObstacleBridgeSecureLinkPskCodec.parseFrame(frame),
-                  parsed.slType != ObstacleBridgeSecureLinkPskRuntime.typeData else {
+            guard let parsed = ObstacleBridgeSecureLinkPskCodec.parseFrame(frame) else {
                 continue
             }
-            emitDiagnostic("secure_link_frame_emitted", [
+            emitDiagnostic(.debug, "secure_link_frame_emitted", [
                 "direction": direction,
                 "source": source,
                 "frame_type": parsed.slType,
@@ -352,7 +400,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
     }
 
     private func recordAuthenticated(status: ObstacleBridgeSecureLinkPskRuntime.StatusSnapshot) {
-        emitDiagnostic("secure_link_authenticated", [
+        emitDiagnostic(.info, "secure_link_authenticated", [
             "session_id": diagnosticSessionID(status.sessionID),
             "handshake_attempt": handshakeAttemptsTotal,
             "handshake_duration_ms": elapsedMilliseconds(since: handshakeStartedAtMono) ?? NSNull(),
@@ -360,8 +408,8 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         ])
     }
 
-    private func emitDiagnostic(_ event: String, _ fields: [String: Any]) {
-        diagnosticSink?(event, fields)
+    private func emitDiagnostic(_ level: ObstacleBridgeRuntimeDiagnosticLevel, _ event: String, _ fields: [String: Any]) {
+        diagnosticSink?(level, event, fields)
     }
 
     private func diagnosticFrameTypes(_ frames: [Data]) -> [Int] {
