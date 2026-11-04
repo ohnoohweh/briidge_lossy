@@ -182,6 +182,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var managedTunHelper: ObstacleBridgeLinuxManagedTunHelper?
     private var tunChannelAdapter: ObstacleBridgeLinuxOverlayChannelAdapter?
     private var tunNetworkApplied = false
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests
     /// Set when optional packet-tunnel setup fails after the authenticated
     /// overlay and service listeners are already usable. Published under
     /// `statusLock` because the Admin snapshot must not enter `queue`.

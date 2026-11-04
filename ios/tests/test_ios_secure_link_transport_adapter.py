@@ -1159,7 +1159,7 @@ def test_ios_secure_link_transport_adapter_records_payload_free_handshake_diagno
                             timeProvider: { now }
                         ),
                         timeProvider: { now },
-                        diagnosticSink: { event, fields in
+                        diagnosticSink: { _, event, fields in
                             var row = fields
                             row["event"] = event
                             events.append(row)
@@ -1213,6 +1213,7 @@ def test_ios_secure_link_transport_adapter_records_payload_free_handshake_diagno
     assert payload["events"] == [
         "secure_link_handshake_started",
         "secure_link_frame_received",
+        "secure_link_frame_emitted",
         "secure_link_frame_received",
         "secure_link_authenticated",
     ]
