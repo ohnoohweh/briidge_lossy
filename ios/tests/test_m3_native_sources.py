@@ -359,6 +359,18 @@ def test_ios_native_provider_log_reads_are_bounded_and_tail_chunked() -> None:
     assert "String(contentsOf: url, encoding: .utf8)" not in provider
 
 
+def test_linux_tun_failure_keeps_authenticated_overlay_available() -> None:
+    runtime = (ROOT / "swift" / "Sources" / "ObstacleBridgeLinux" / "Adapters" / "ObstacleBridgeLinuxLiveRuntime.swift").read_text(encoding="utf-8")
+
+    assert "Packet TUN setup is a facility layered on an already authenticated" in runtime
+    assert "_ = startPacketDeviceIfNeeded()" in runtime
+    assert 'emitDiagnostic("packet_tunnel.start_failed", fields: fields, level: .warning)' in runtime
+    assert 'fields["errno_name"] = "EBUSY"' in runtime
+    assert 'fields["hint"] = "the configured interface is already owned; stop the other TUN owner or select a distinct ifname"' in runtime
+    assert '"last_error": lastTunError ?? ""' in runtime
+    assert '"degraded": configured.packetTunnelEnabled && !packetTunnelActive' in runtime
+
+
 def test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence() -> None:
     provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 

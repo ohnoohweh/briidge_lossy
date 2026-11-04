@@ -182,6 +182,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var managedTunHelper: ObstacleBridgeLinuxManagedTunHelper?
     private var tunChannelAdapter: ObstacleBridgeLinuxOverlayChannelAdapter?
     private var tunNetworkApplied = false
+    /// Set when optional packet-tunnel setup fails after the authenticated
+    /// overlay and service listeners are already usable. Published under
+    /// `statusLock` because the Admin snapshot must not enter `queue`.
+    private var tunLastError: String?
     private var serviceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var remoteServiceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var channelOwners: [String: ObstacleBridgeLinuxServiceSocketOwner] = [:]
@@ -529,7 +533,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         // immutable configuration and already-published status instead.
         let configured = configuredRuntime.configuration
         let current = status()
-        statusLock.lock(); let worker = proxyWorker; statusLock.unlock()
+        statusLock.lock()
+        let worker = proxyWorker
+        let lastTunError = tunLastError
+        statusLock.unlock()
         var proxy: [String: Any] = [
             "configured": configured.proxyProvider.enabled,
             "http_port": configured.proxyProvider.httpEnabled ? configured.proxyProvider.httpPort : 0,
@@ -545,7 +552,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         let managedHelperRunning = managedTunHelper?.isRunning ?? false
         // An auto-managed helper owns the device and policy. Do not present a
         // configured foreground as active after that child has exited.
-        let packetTunnelActive = current.appReady && configured.packetTunnelEnabled &&
+        let packetTunnelActive = current.appReady && configured.packetTunnelEnabled && tunDevice != nil && tunNetworkApplied &&
             (!configured.launchSwiftTunHelper || managedHelperRunning)
         return [
             "packet_tunnel": [
@@ -555,6 +562,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 "managed_helper_running": configured.launchSwiftTunHelper ? managedHelperRunning : false,
                 "device_open": packetTunnelActive,
                 "network_policy_applied": packetTunnelActive,
+                "last_error": lastTunError ?? "",
+                "degraded": configured.packetTunnelEnabled && !packetTunnelActive,
             ],
             "service_sockets": [
                 "configured_local": configured.ownServices.count,
@@ -577,13 +586,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         // Linux adds only its resource-owner facts and configured route plan.
         var payload = ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: connectionsForAdminLocked())
         let helperRunning = managedTunHelper?.isRunning ?? false
-        payload["ok"] = true
+        payload["ok"] = tunLastError == nil
         payload["configured"] = configured.packetTunnelEnabled
         payload["device_open"] = tunDevice != nil
         payload["network_policy_applied"] = tunNetworkApplied
         payload["helper_configured"] = configured.tunHelperSocketPath != nil
         payload["managed_helper"] = configured.launchSwiftTunHelper
         payload["managed_helper_running"] = helperRunning
+        payload["last_error"] = tunLastError ?? ""
         payload["included_routes"] = plan?.includedRoutes ?? []
         payload["excluded_routes"] = plan?.excludedRoutes ?? []
         payload["included_routes6"] = plan?.includedRoutes6 ?? []
@@ -617,22 +627,20 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             guard configured.packetTunnelEnabled, configured.packetTunnelPlan != nil else {
                 return ["ok": false, "enabled": false, "reason": "packet_tunnel_not_configured"]
             }
-            do {
-                if enabled {
-                    guard status().appReady else {
-                        return ["ok": false, "enabled": false, "reason": "overlay_not_ready"]
-                    }
-                    try startPacketDeviceIfNeeded()
-                } else {
-                    stopPacketDevice()
+            if enabled {
+                guard status().appReady else {
+                    return ["ok": false, "enabled": false, "reason": "overlay_not_ready"]
                 }
-                var result = tunRoutingForAdminLocked()
-                result["ok"] = true
-                return result
-            } catch {
-                appendRuntimeHealth(event: "tun_admin_control_failed: \(error.localizedDescription)")
-                return ["ok": false, "enabled": false, "reason": "tun_control_failed", "detail": error.localizedDescription]
+                guard startPacketDeviceIfNeeded(), tunDevice != nil, tunNetworkApplied else {
+                    return ["ok": false, "enabled": false, "reason": "tun_control_failed", "detail": tunLastError ?? "packet tunnel did not start"]
+                }
+            } else {
+                stopPacketDevice()
+                setTunLastError(nil)
             }
+            var result = tunRoutingForAdminLocked()
+            result["ok"] = enabled ? tunLastError == nil : true
+            return result
         }
     }
 
@@ -648,13 +656,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 return ["ok": false, "repaired": [], "failed": ["overlay_not_ready"]]
             }
             stopPacketDevice()
-            do {
-                try startPacketDeviceIfNeeded()
-                return ["ok": true, "repaired": ["packet_tunnel", "helper_connection"], "failed": []]
-            } catch {
-                appendRuntimeHealth(event: "tun_helper_repair_failed: \(error.localizedDescription)")
-                return ["ok": false, "repaired": [], "failed": [error.localizedDescription]]
+            guard startPacketDeviceIfNeeded(), tunDevice != nil, tunNetworkApplied else {
+                return ["ok": false, "repaired": [], "failed": [tunLastError ?? "packet tunnel did not start"]]
             }
+            return ["ok": true, "repaired": ["packet_tunnel", "helper_connection"], "failed": []]
         }
     }
 
@@ -764,7 +769,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             phase = "service_owners"
             try startOwnServiceOwners()
             phase = "packet_tunnel"
-            try startPacketDeviceIfNeeded()
+            _ = startPacketDeviceIfNeeded()
             apply(coordinator.handle(.authenticated(epoch: epoch)))
             emitDiagnostic("overlay.post_auth.ready", fields: ["epoch": String(epoch)])
         } catch ObstacleBridgeLinuxOverlayTransportError.cancelled {
@@ -926,62 +931,67 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         serviceOwners.removeAll()
     }
 
-    private func startPacketDeviceIfNeeded() throws {
+    /// Packet TUN setup is a facility layered on an already authenticated
+    /// overlay. Its failure must not withdraw usable TCP/UDP services.
+    @discardableResult
+    private func startPacketDeviceIfNeeded() -> Bool {
         guard tunDevice == nil,
               let plan = configuredRuntime.configuration.packetTunnelPlan,
               configuredRuntime.configuration.packetTunnelEnabled,
               channelMux != nil
-        else { return }
-        let runtime = self
-        if configuredRuntime.configuration.launchSwiftTunHelper, managedTunHelper == nil {
-            guard let socketPath = configuredRuntime.configuration.tunHelperSocketPath,
-                  let token = configuredRuntime.configuration.tunHelperSessionToken else {
-                throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("managed Swift TUN helper requires an explicit socket and session token")
+        else { return tunDevice != nil && tunNetworkApplied }
+        var setupStage = "helper_start"
+        do {
+            let runtime = self
+            if configuredRuntime.configuration.launchSwiftTunHelper, managedTunHelper == nil {
+                guard let socketPath = configuredRuntime.configuration.tunHelperSocketPath,
+                      let token = configuredRuntime.configuration.tunHelperSessionToken else {
+                    throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("managed Swift TUN helper requires an explicit socket and session token")
+                }
+                let owner = try ObstacleBridgeLinuxManagedTunHelper(socketPath: socketPath, sessionToken: token, executable: configuredRuntime.configuration.tunHelperExecutable)
+                try owner.start()
+                managedTunHelper = owner
             }
-            let owner = try ObstacleBridgeLinuxManagedTunHelper(socketPath: socketPath, sessionToken: token, executable: configuredRuntime.configuration.tunHelperExecutable)
-            try owner.start()
-            managedTunHelper = owner
-        }
-        guard let helper = try configuredRuntime.configuration.makeTunHelperAdapter() else {
-            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux packet-tunnel startup requires an explicit helper owner")
-        }
-        let device = ObstacleBridgeLinuxTunHelperPacketDevice(
-            adapter: helper,
-            packetSink: { packet in runtime.queue.async { runtime.tunChannelAdapter?.receivedPacketFromDevice(packet) } },
-            eventSink: { detail in runtime.appendRuntimeHealth(event: "tun_helper: \(detail)") }
-        )
-        let adapter = ObstacleBridgeLinuxOverlayChannelAdapter(
-            interfaceName: configuredRuntime.configuration.tunInterfaceName,
-            mtu: plan.mtu,
-            instanceID: catalogInstanceID,
-            connectionSequence: UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch),
-            packetDevice: device,
-            localAddress: plan.tunnelAddress,
-            localAddress6: plan.tunnelAddress6,
-            backpressureSnapshot: { .init(bufferedFrames: 0) },
-            startupFrames: { [] },
-            sendMuxFrames: { frames in
-                runtime.queue.async {
-                    for data in frames {
-                        guard let frame = try? ObstacleBridgeChannelMuxCodec.decode(data) else { continue }
-                        guard let mux = runtime.channelMux else { return }
-                        do { try mux.sendUnsolicited(frame) }
-                        catch {
-                            if let epoch = runtime.activeCoordinatorEpoch {
-                                runtime.apply(runtime.coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
+            setupStage = "helper_connect"
+            guard let helper = try configuredRuntime.configuration.makeTunHelperAdapter() else {
+                throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux packet-tunnel startup requires an explicit helper owner")
+            }
+            let device = ObstacleBridgeLinuxTunHelperPacketDevice(
+                adapter: helper,
+                packetSink: { packet in runtime.queue.async { runtime.tunChannelAdapter?.receivedPacketFromDevice(packet) } },
+                eventSink: { detail in runtime.appendRuntimeHealth(event: "tun_helper: \(detail)") }
+            )
+            let adapter = ObstacleBridgeLinuxOverlayChannelAdapter(
+                interfaceName: configuredRuntime.configuration.tunInterfaceName,
+                mtu: plan.mtu,
+                instanceID: catalogInstanceID,
+                connectionSequence: UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch),
+                packetDevice: device,
+                localAddress: plan.tunnelAddress,
+                localAddress6: plan.tunnelAddress6,
+                backpressureSnapshot: { .init(bufferedFrames: 0) },
+                startupFrames: { [] },
+                sendMuxFrames: { frames in
+                    runtime.queue.async {
+                        for data in frames {
+                            guard let frame = try? ObstacleBridgeChannelMuxCodec.decode(data) else { continue }
+                            guard let mux = runtime.channelMux else { return }
+                            do { try mux.sendUnsolicited(frame) }
+                            catch {
+                                if let epoch = runtime.activeCoordinatorEpoch {
+                                    runtime.apply(runtime.coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
+                                }
+                                return
                             }
-                            return
                         }
                     }
-                }
-            },
-            diagnosticSink: { event, _ in runtime.appendRuntimeHealth(event: event) }
-        )
-        tunDevice = device
-        tunHelperPacketDevice = device
-        tunChannelAdapter = adapter
-        var setupStage = "open_tun"
-        do {
+                },
+                diagnosticSink: { event, _ in runtime.appendRuntimeHealth(event: event) }
+            )
+            tunDevice = device
+            tunHelperPacketDevice = device
+            tunChannelAdapter = adapter
+            setupStage = "open_tun"
             _ = try helper.send(command: .openTun, payload: ["ifname": configuredRuntime.configuration.tunInterfaceName, "mtu": plan.mtu])
             setupStage = "packet_endpoint"
             try device.start()
@@ -990,12 +1000,38 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             tunNetworkApplied = true
             setupStage = "overlay_ready"
             adapter.overlayLifecycleChanged(ready: true)
-        }
-        catch {
-            appendRuntimeHealth(event: "tun_start_failed stage=\(setupStage) reason=\(error.localizedDescription)")
+            setTunLastError(nil)
+            emitDiagnostic("packet_tunnel.ready", fields: ["ifname": configuredRuntime.configuration.tunInterfaceName])
+            return true
+        } catch {
+            let reason = error.localizedDescription
+            let fields = tunFailureFields(stage: setupStage, reason: reason)
+            setTunLastError(reason)
+            appendRuntimeHealth(event: "tun_start_failed \(fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " "))")
+            emitDiagnostic("packet_tunnel.start_failed", fields: fields, level: .warning)
             stopPacketDevice()
-            throw error
+            return false
         }
+    }
+
+    private func setTunLastError(_ value: String?) {
+        statusLock.lock()
+        tunLastError = value
+        statusLock.unlock()
+    }
+
+    private func tunFailureFields(stage: String, reason: String) -> [String: String] {
+        var fields = [
+            "stage": stage,
+            "ifname": configuredRuntime.configuration.tunInterfaceName,
+            "reason": reason,
+        ]
+        if reason.contains("errno=16") {
+            fields["errno"] = "16"
+            fields["errno_name"] = "EBUSY"
+            fields["hint"] = "the configured interface is already owned; stop the other TUN owner or select a distinct ifname"
+        }
+        return fields
     }
 
     private func stopPacketDevice() {
