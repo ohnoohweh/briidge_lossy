@@ -4,7 +4,7 @@ import Foundation
 /// serialize calls (or call it from their existing file-I/O queue), which
 /// keeps rotation and session rollover atomic without putting a lock on packet
 /// or transport paths.
-public final class ObstacleBridgeManagedLogFile: @unchecked Sendable {
+public final class ObstacleBridgeManagedLogFile: Sendable {
     public struct Settings: Sendable, Equatable {
         public let maximumBytes: Int
         public let backupCount: Int
