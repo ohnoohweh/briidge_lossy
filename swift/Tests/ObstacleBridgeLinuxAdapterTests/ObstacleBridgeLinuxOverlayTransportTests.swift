@@ -433,6 +433,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         let compressedRuntime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
             transport: .tcp, host: "127.0.0.1", port: compressedPeer.port,
             secureLinkPSK: Data("linux-swift-psk".utf8),
+            debugLoggingEnabled: true, channelMuxLogLevel: .debug,
             compressionPolicy: .init(enabled: true, level: 3, minimumBodyBytes: 1, allowedMessageTypes: [0])
         ))
         let compressedSession = try compressedRuntime.connect(sessionID: 52, clientNonce: Data(repeating: 5, count: 32))
@@ -733,6 +734,27 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(throws: ObstacleBridgeLinuxChannelMuxError.staleEpoch) { try mux.exchange(frame) }
         #expect(diagnostics.contains(level: .warning, event: "channel_mux.stale_epoch"))
         runtime.disconnect()
+    }
+
+    @Test func channelMuxWarningLevelSkipsFrameDiagnosticConstruction() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-mux-reconnect")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: peer.port,
+            channelMuxLogLevel: .warning
+        ))
+        let session = try runtime.connect(sessionID: 122, clientNonce: Data(repeating: 8, count: 32))
+        let catalog = ObstacleBridgeChannelMuxFrame(channelID: 0, protocolType: .tcp, counter: 0, messageType: .remoteServicesSetV2, body: Data("RS3[]".utf8))
+        let diagnostics = RuntimeDiagnosticRecorder()
+        let mux = try ObstacleBridgeLinuxChannelMuxSession(
+            runtime: runtime, session: session, startupFrames: [catalog],
+            diagnosticSink: { level, event, fields in diagnostics.record(level, event: event, fields: fields) }
+        )
+        #expect(!diagnostics.contains(level: .info, event: "channel_mux.frame_sent"))
+        #expect(!diagnostics.contains(level: .info, event: "channel_mux.frame_received"))
+        runtime.disconnect()
+        #expect(throws: ObstacleBridgeLinuxChannelMuxError.staleEpoch) { try mux.exchange(catalog) }
+        #expect(diagnostics.contains(level: .warning, event: "channel_mux.stale_epoch"))
     }
 
     @Test func reconnectSupervisorRecoversAndStopsPendingTimers() async throws {

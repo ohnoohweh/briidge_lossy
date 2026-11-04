@@ -4035,7 +4035,7 @@ def test_macos_swift_host_runner_myudp_python_tcp_service_survives_ten_rekeys_wi
                     client.settimeout(1.0)
                     while not stop.is_set():
                         client.sendall(marker)
-                        if client.recv(len(marker)) != marker:
+                        if _recv_exact(client, len(marker)) != marker:
                             raise AssertionError("TCP echo payload mismatch")
                         exchanges[0] += 1
                         stop.wait(0.02)
@@ -4057,6 +4057,10 @@ def test_macos_swift_host_runner_myudp_python_tcp_service_survives_ten_rekeys_wi
             _wait_http_condition(f"http://127.0.0.1:{admin_port}/api/peers", lambda doc, expected=expected: int(doc["peers"][0]["secure_link"].get("rekeys_completed_total", 0)) >= expected, timeout_sec=15.0)
             if expected == 1:
                 start_client(b"two")
+            _wait_for_condition(
+                lambda: all(not errors and exchanges[0] >= expected for _stop, _thread, errors, exchanges in clients),
+                timeout=15.0,
+            )
             for _stop, _thread, errors, exchanges in clients:
                 assert not errors, errors
                 assert exchanges[0] >= expected

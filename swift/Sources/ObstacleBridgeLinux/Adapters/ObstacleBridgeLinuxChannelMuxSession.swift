@@ -206,6 +206,7 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
         frame: ObstacleBridgeChannelMuxFrame? = nil,
         extra: [String: String] = [:]
     ) {
+        guard level.rawValue >= runtime.configuration.channelMuxLogLevel.rawValue else { return }
         var fields = extra
         if let frame {
             fields["channel"] = String(frame.channelID)

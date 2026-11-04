@@ -28,6 +28,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             data: try JSONSerialization.data(withJSONObject: base)
         )
         #expect(!disabled.debugLoggingEnabled)
+        #expect(disabled.channelMuxLogLevel == .info)
 
         var enabled = base
         enabled["channel_mux"] = ["log_channel_mux": "DEBUG"]
@@ -35,12 +36,21 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             data: try JSONSerialization.data(withJSONObject: enabled)
         )
         #expect(configured.debugLoggingEnabled)
+        #expect(configured.channelMuxLogLevel == .debug)
 
         enabled["channel_mux"] = ["log_channel_mux": "INFO"]
         let channelMuxSuppressed = try ObstacleBridgeLinuxRuntimeConfiguration.parse(
             data: try JSONSerialization.data(withJSONObject: enabled)
         )
         #expect(!channelMuxSuppressed.debugLoggingEnabled)
+        #expect(channelMuxSuppressed.channelMuxLogLevel == .info)
+
+        enabled["channel_mux"] = ["log_channel_mux": "WARNING"]
+        let warningsOnly = try ObstacleBridgeLinuxRuntimeConfiguration.parse(
+            data: try JSONSerialization.data(withJSONObject: enabled)
+        )
+        #expect(!warningsOnly.debugLoggingEnabled)
+        #expect(warningsOnly.channelMuxLogLevel == .warning)
     }
 
     @Test func parsesAutomaticSecureLinkRekeyThresholdsForNativeRuntime() throws {
