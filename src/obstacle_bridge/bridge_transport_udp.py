@@ -298,27 +298,37 @@ class ProtocolRuntime:
         except Exception as e:
             self._log.debug(f"[IDLE] _send_idle_probe failed on self._send_fn %r",e)
 
+    def refresh_connection_state(self) -> bool:
+        """Publish a MyUDP liveness edge as soon as RTT is refreshed.
+
+        The periodic tick still owns probing and stale-peer detection. It must
+        not be the first place to observe a valid RTT: its disconnected probe
+        sleep can be one second long. A delayed edge can otherwise restart the
+        upper security lifecycle after application traffic has begun.
+        """
+        connected_now = self.proto.is_connected()
+        if connected_now == self._conn_state:
+            return connected_now
+        self._conn_state = connected_now
+        if connected_now:
+            last_ok = self.proto.last_rtt_ok_ns
+            base = last_ok if last_ok != 0 else now_ns()
+            self._next_probe_due_ns = base + self._rtt_timeout_ns
+            self._conn_evt.set()
+        else:
+            self._conn_evt.clear()
+            self._next_probe_due_ns = 0
+        if callable(self._on_state_change):
+            try:
+                self._on_state_change(connected_now)
+            except Exception:
+                pass
+        return connected_now
+
     async def _tick(self):
         try:
             while True:
-                connected_now = self.proto.is_connected()
-                # state transitions
-                if connected_now != self._conn_state:
-                    self._conn_state = connected_now
-                    if connected_now:
-                        # Anchor next probe to last RTT OK + 2s
-                        last_ok = self.proto.last_rtt_ok_ns
-                        base = last_ok if last_ok != 0 else now_ns()
-                        self._next_probe_due_ns = base + self._rtt_timeout_ns
-                        self._conn_evt.set()
-                    else:
-                        self._conn_evt.clear()
-                        self._next_probe_due_ns = 0
-                    if callable(self._on_state_change):
-                        try:
-                            self._on_state_change(connected_now)
-                        except Exception:
-                            pass
+                connected_now = self.refresh_connection_state()
                 if not connected_now:
                     # disconnected: periodic initial probes
                     self._send_idle_probe(initial=True)
@@ -1798,6 +1808,10 @@ class PeerProtocol(asyncio.DatagramProtocol):
                 prev_est,
             )
             self.session.update_rtt(echo_ns, from_idle=(kind == "idle"))
+            # Do not wait for the disconnected probe timer to publish the
+            # first valid RTT. In listener mode that late edge would create a
+            # new SecureLink lifecycle epoch after authentication.
+            self._proto_rt.refresh_connection_state()
             self.session.log.debug(
                 "[PEER/RX/RTT] action=updated from=%r sample_ms=%.3f est_ms=%.3f last_rtt_ok_ns=%d",
                 addr,

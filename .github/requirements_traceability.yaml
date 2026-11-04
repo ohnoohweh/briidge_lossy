@@ -23,6 +23,7 @@ REQ-OVL-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_native_python_myudp_window_pressure
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
     - tests/integration/test_overlay_e2e.py::test_linux_swift_myudp_reference_peer_waits_for_response_drain
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys
   unit_tests:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDataFrameRoundTripsAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSupervisorRotatesCandidateAfterFailedEpoch
@@ -168,6 +169,7 @@ REQ-AUT-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys
     # Full Python TCP/WS/myudp catalog publication, live withdrawal, reverse service delivery, and recovery.
     # Covers the bounded listener-publication wait after authenticated readiness,
     # including transient pre-send refusal/abort retries with fresh sockets
