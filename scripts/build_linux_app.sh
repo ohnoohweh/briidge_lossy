@@ -7,6 +7,7 @@ CONFIGURATION="${OBSTACLEBRIDGE_LINUX_BUILD_CONFIGURATION:-release}"
 OUTPUT_DIR="${OBSTACLEBRIDGE_LINUX_OUTPUT_DIR:-${REPO_ROOT}/build/linux}"
 SCRATCH_DIR="${OBSTACLEBRIDGE_LINUX_SCRATCH_DIR:-${OUTPUT_DIR}/.swift-build}"
 SWIFT_JOBS="${OBSTACLEBRIDGE_LINUX_SWIFT_JOBS:-}"
+SWIFT_WHOLE_MODULE_OPTIMIZATION="${OBSTACLEBRIDGE_LINUX_SWIFT_WHOLE_MODULE_OPTIMIZATION:-true}"
 
 usage() {
   cat <<'EOF'
@@ -19,6 +20,9 @@ Environment:
   OBSTACLEBRIDGE_LINUX_OUTPUT_DIR           artifact directory (default: build/linux)
   OBSTACLEBRIDGE_LINUX_SCRATCH_DIR          SwiftPM scratch directory
   OBSTACLEBRIDGE_LINUX_SWIFT_JOBS           optional maximum concurrent SwiftPM jobs
+  OBSTACLEBRIDGE_LINUX_SWIFT_WHOLE_MODULE_OPTIMIZATION
+                                            true (default) maximizes release optimization;
+                                            false compiles release files in parallel
 EOF
 }
 
@@ -58,6 +62,13 @@ if [[ -n "${SWIFT_JOBS}" && ! "${SWIFT_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "[build_linux_app] OBSTACLEBRIDGE_LINUX_SWIFT_JOBS must be a positive integer, got ${SWIFT_JOBS}" >&2
   exit 2
 fi
+case "${SWIFT_WHOLE_MODULE_OPTIMIZATION,,}" in
+  true|false) ;;
+  *)
+    echo "[build_linux_app] OBSTACLEBRIDGE_LINUX_SWIFT_WHOLE_MODULE_OPTIMIZATION must be true or false, got ${SWIFT_WHOLE_MODULE_OPTIMIZATION}" >&2
+    exit 2
+    ;;
+esac
 
 if ! command -v swift >/dev/null 2>&1; then
   echo "[build_linux_app] swift is required; install Swift and make it available on PATH" >&2
@@ -92,6 +103,14 @@ SWIFT_BUILD_ARGS=(
 )
 if [[ -n "${SWIFT_JOBS}" ]]; then
   SWIFT_BUILD_ARGS+=(--jobs "${SWIFT_JOBS}")
+fi
+if [[ "${SWIFT_WHOLE_MODULE_OPTIMIZATION,,}" = "false" ]]; then
+  # Release WMO creates a single frontend for a whole Swift module.  That
+  # frontend is CPU-bound on one core even when SwiftPM has many jobs.  This
+  # opt-in mode retains -O but lets the driver distribute source files across
+  # the available SwiftPM jobs, trading some whole-program optimization for a
+  # significantly faster local rebuild.
+  SWIFT_BUILD_ARGS+=(-Xswiftc -no-whole-module-optimization)
 fi
 swift build \
   "${SWIFT_BUILD_ARGS[@]}" \

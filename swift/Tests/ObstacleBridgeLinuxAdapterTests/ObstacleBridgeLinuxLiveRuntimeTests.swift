@@ -163,7 +163,7 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
             policy: .init(initialDelayMilliseconds: 250, maximumDelayMilliseconds: 250, maximumAttempts: 1)
         )
         let observed = DispatchSemaphore(value: 0)
-        runtime.onDiagnostic = { event, _ in
+        runtime.onDiagnostic = { _, event, _ in
             if event == "overlay.connect.attempt" { observed.signal() }
         }
 

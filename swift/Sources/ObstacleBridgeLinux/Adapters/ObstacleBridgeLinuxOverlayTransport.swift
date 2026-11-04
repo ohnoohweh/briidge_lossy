@@ -89,6 +89,10 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     private let quicInsecure: Bool
     private let quicTrustRootsPath: String?
     private let receiveTimeoutMilliseconds: Int
+    /// Metadata-only events emitted by the myUDP POSIX owner.  Keeping this
+    /// at the common lower-transport boundary lets every Linux Swift product
+    /// report the same protocol failure evidence.
+    private let diagnosticSink: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)?
     /// Core owns application-frame construction and early-send state. Linux
     /// owns the concrete POSIX/NIO connection below this boundary.
     private let tcpOverlayRuntime = ObstacleBridgeTcpOverlayRuntime()
@@ -126,7 +130,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         }
     }
 
-    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", wsTLS: Bool = false, wsTrustRootsPath: String? = nil, wsProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, receiveTimeoutMilliseconds: Int = 5_000) throws {
+    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", wsTLS: Bool = false, wsTrustRootsPath: String? = nil, wsProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, receiveTimeoutMilliseconds: Int = 5_000, diagnosticSink: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)? = nil) throws {
         guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (1...65535).contains(port) else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint
         }
@@ -150,6 +154,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         let normalizedTrustRoots = quicTrustRootsPath?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.quicTrustRootsPath = normalizedTrustRoots?.isEmpty == false ? normalizedTrustRoots : nil
         self.receiveTimeoutMilliseconds = max(1, receiveTimeoutMilliseconds)
+        self.diagnosticSink = diagnosticSink
         self.snapshot = .init(transport: transport.rawValue, state: "disconnected", attempts: 0, failureReason: nil)
     }
 
@@ -188,7 +193,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                         result = try readWebSocketApplicationPayload(connection)
                     }
                 case .myudp:
-                    let connection = try ObstacleBridgeLinuxMyUDPTransportSession(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
+                    let connection = try ObstacleBridgeLinuxMyUDPTransportSession(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds, diagnosticSink: diagnosticSink)
                     defer { connection.close() }
                     result = try connection.exchange(payload)
                 case .quic:
@@ -225,7 +230,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         snapshot = .init(transport: transport.rawValue, state: "connecting", attempts: 1, failureReason: nil)
         do {
             if transport == .myudp {
-                let datagram = try ObstacleBridgeLinuxMyUDPTransportSession(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
+                let datagram = try ObstacleBridgeLinuxMyUDPTransportSession(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds, diagnosticSink: diagnosticSink)
                 snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
                 return ObstacleBridgeLinuxOverlayTransportSession(
                     exchange: { payload in try datagram.exchange(payload) },

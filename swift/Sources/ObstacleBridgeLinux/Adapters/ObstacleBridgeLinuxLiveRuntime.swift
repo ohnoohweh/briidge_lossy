@@ -63,7 +63,10 @@ private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
                     wsTLS: configuration.webSocketTLS, wsTrustRootsPath: configuration.webSocketTrustRootsPath,
                     wsProxy: configuration.webSocketProxy, quicALPN: configuration.quicALPN,
                     quicInsecure: configuration.quicInsecure, quicTrustRootsPath: configuration.quicTrustRootsPath,
-                    receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds
+                    receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds,
+                    diagnosticSink: { [weak runtime] level, event, fields in
+                        runtime?.recordCoreDiagnostic(level, event: event, fields: fields)
+                    }
                 )
                 return (lower, try lower.openSession())
             }
@@ -163,7 +166,7 @@ public enum ObstacleBridgeLinuxShutdownSignal: String, Sendable {
 public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests (transport subclasses inherit this owner)
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
-    public var onDiagnostic: ((String, [String: String]) -> Void)?
+    public var onDiagnostic: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)?
     public var onDebugDiagnostic: ((String, [String: String]) -> Void)?
 
     public let configuredRuntime: ObstacleBridgeLinuxConfiguredRuntime
@@ -179,6 +182,11 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var managedTunHelper: ObstacleBridgeLinuxManagedTunHelper?
     private var tunChannelAdapter: ObstacleBridgeLinuxOverlayChannelAdapter?
     private var tunNetworkApplied = false
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests
+    /// Set when optional packet-tunnel setup fails after the authenticated
+    /// overlay and service listeners are already usable. Published under
+    /// `statusLock` because the Admin snapshot must not enter `queue`.
+    private var tunLastError: String?
     private var serviceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var remoteServiceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var channelOwners: [String: ObstacleBridgeLinuxServiceSocketOwner] = [:]
@@ -199,6 +207,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var runtimeHealthTimer: DispatchSourceTimer?
     private var livenessProbeTimer: DispatchSourceTimer?
     private var activeCoordinatorEpoch: UInt64?
+    private var lastFailureDiagnosticSignature: String?
     /// Listener-owned child sessions are retired by their shared listener;
     /// they must never turn a peer close into an outbound reconnect attempt.
     private var inboundOnly = false
@@ -224,8 +233,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         self.loggingWorker = loggingWorker
         var generator = SystemRandomNumberGenerator()
         self.catalogInstanceID = UInt64.random(in: 1...UInt64.max, using: &generator)
-        runtime.onDiagnostic = { [weak self] event, fields in
-            self?.emitDiagnostic(event, fields: fields)
+        runtime.onDiagnostic = { [weak self] level, event, fields in
+            // Core emits this while it owns SecureLink mutable state.  Defer
+            // the health projection because it reads that same state through
+            // the configured session; re-entering it synchronously violates
+            // Swift exclusivity during a rekey transition.
+            self?.queue.async { [weak self] in
+                self?.emitDiagnostic(event, fields: fields, level: level)
+            }
         }
         runtime.onDebugDiagnostic = { [weak self] event, fields in
             self?.emitDebugDiagnostic(event, fields)
@@ -356,7 +371,19 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 connectedSession.onSecureLinkStateChange = { [weak self] in
                     self?.queue.async { [weak self] in self?.refreshStatusProjection() }
                 }
-                let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: self.configuredRuntime, session: connectedSession)
+                connectedSession.onPendingSecureLinkPayloadWork = { [weak self, weak connectedSession] in
+                    guard let self, let connectedSession else { return }
+                    self.queue.async { [weak self, weak connectedSession] in
+                        guard let self, let connectedSession else { return }
+                        self.drainPendingSecureLinkPayload(from: connectedSession)
+                    }
+                }
+                let mux = try ObstacleBridgeLinuxChannelMuxSession(
+                    runtime: self.configuredRuntime, session: connectedSession,
+                    diagnosticSink: { [weak self] level, event, fields in
+                        self?.queue.async { [weak self] in self?.emitChannelMuxDiagnostic(level, event: event, fields: fields) }
+                    }
+                )
                 mux.onUnsolicitedFrame = { [weak self] frame in self?.queue.async { [weak self] in self?.routeInboundFrame(frame) } }
                 mux.activateReceiveOwner(); connectedSession.activateReceiveOwner()
                 self.channelMux = mux
@@ -507,7 +534,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         // immutable configuration and already-published status instead.
         let configured = configuredRuntime.configuration
         let current = status()
-        statusLock.lock(); let worker = proxyWorker; statusLock.unlock()
+        statusLock.lock()
+        let worker = proxyWorker
+        let lastTunError = tunLastError
+        statusLock.unlock()
         var proxy: [String: Any] = [
             "configured": configured.proxyProvider.enabled,
             "http_port": configured.proxyProvider.httpEnabled ? configured.proxyProvider.httpPort : 0,
@@ -523,7 +553,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         let managedHelperRunning = managedTunHelper?.isRunning ?? false
         // An auto-managed helper owns the device and policy. Do not present a
         // configured foreground as active after that child has exited.
-        let packetTunnelActive = current.appReady && configured.packetTunnelEnabled &&
+        let packetTunnelActive = current.appReady && configured.packetTunnelEnabled && tunDevice != nil && tunNetworkApplied &&
             (!configured.launchSwiftTunHelper || managedHelperRunning)
         return [
             "packet_tunnel": [
@@ -533,6 +563,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 "managed_helper_running": configured.launchSwiftTunHelper ? managedHelperRunning : false,
                 "device_open": packetTunnelActive,
                 "network_policy_applied": packetTunnelActive,
+                "last_error": lastTunError ?? "",
+                "degraded": configured.packetTunnelEnabled && !packetTunnelActive,
             ],
             "service_sockets": [
                 "configured_local": configured.ownServices.count,
@@ -555,13 +587,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         // Linux adds only its resource-owner facts and configured route plan.
         var payload = ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: connectionsForAdminLocked())
         let helperRunning = managedTunHelper?.isRunning ?? false
-        payload["ok"] = true
+        payload["ok"] = tunLastError == nil
         payload["configured"] = configured.packetTunnelEnabled
         payload["device_open"] = tunDevice != nil
         payload["network_policy_applied"] = tunNetworkApplied
         payload["helper_configured"] = configured.tunHelperSocketPath != nil
         payload["managed_helper"] = configured.launchSwiftTunHelper
         payload["managed_helper_running"] = helperRunning
+        payload["last_error"] = tunLastError ?? ""
         payload["included_routes"] = plan?.includedRoutes ?? []
         payload["excluded_routes"] = plan?.excludedRoutes ?? []
         payload["included_routes6"] = plan?.includedRoutes6 ?? []
@@ -595,22 +628,20 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             guard configured.packetTunnelEnabled, configured.packetTunnelPlan != nil else {
                 return ["ok": false, "enabled": false, "reason": "packet_tunnel_not_configured"]
             }
-            do {
-                if enabled {
-                    guard status().appReady else {
-                        return ["ok": false, "enabled": false, "reason": "overlay_not_ready"]
-                    }
-                    try startPacketDeviceIfNeeded()
-                } else {
-                    stopPacketDevice()
+            if enabled {
+                guard status().appReady else {
+                    return ["ok": false, "enabled": false, "reason": "overlay_not_ready"]
                 }
-                var result = tunRoutingForAdminLocked()
-                result["ok"] = true
-                return result
-            } catch {
-                appendRuntimeHealth(event: "tun_admin_control_failed: \(error.localizedDescription)")
-                return ["ok": false, "enabled": false, "reason": "tun_control_failed", "detail": error.localizedDescription]
+                guard startPacketDeviceIfNeeded(), tunDevice != nil, tunNetworkApplied else {
+                    return ["ok": false, "enabled": false, "reason": "tun_control_failed", "detail": tunLastError ?? "packet tunnel did not start"]
+                }
+            } else {
+                stopPacketDevice()
+                setTunLastError(nil)
             }
+            var result = tunRoutingForAdminLocked()
+            result["ok"] = enabled ? tunLastError == nil : true
+            return result
         }
     }
 
@@ -626,13 +657,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 return ["ok": false, "repaired": [], "failed": ["overlay_not_ready"]]
             }
             stopPacketDevice()
-            do {
-                try startPacketDeviceIfNeeded()
-                return ["ok": true, "repaired": ["packet_tunnel", "helper_connection"], "failed": []]
-            } catch {
-                appendRuntimeHealth(event: "tun_helper_repair_failed: \(error.localizedDescription)")
-                return ["ok": false, "repaired": [], "failed": [error.localizedDescription]]
+            guard startPacketDeviceIfNeeded(), tunDevice != nil, tunNetworkApplied else {
+                return ["ok": false, "repaired": [], "failed": [tunLastError ?? "packet tunnel did not start"]]
             }
+            return ["ok": true, "repaired": ["packet_tunnel", "helper_connection"], "failed": []]
         }
     }
 
@@ -691,7 +719,19 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             connectedSession.onSecureLinkStateChange = { [weak self] in
                 self?.queue.async { [weak self] in self?.refreshStatusProjection() }
             }
-            let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: configuredRuntime, session: connectedSession)
+            connectedSession.onPendingSecureLinkPayloadWork = { [weak self, weak connectedSession] in
+                guard let self, let connectedSession else { return }
+                self.queue.async { [weak self, weak connectedSession] in
+                    guard let self, let connectedSession else { return }
+                    self.drainPendingSecureLinkPayload(from: connectedSession)
+                }
+            }
+            let mux = try ObstacleBridgeLinuxChannelMuxSession(
+                runtime: configuredRuntime, session: connectedSession,
+                diagnosticSink: { [weak self] level, event, fields in
+                    self?.queue.async { [weak self] in self?.emitChannelMuxDiagnostic(level, event: event, fields: fields) }
+                }
+            )
             mux.onUnsolicitedFrame = { [weak self] frame in
                 self?.queue.async { [weak self] in self?.routeInboundFrame(frame) }
             }
@@ -730,7 +770,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             phase = "service_owners"
             try startOwnServiceOwners()
             phase = "packet_tunnel"
-            try startPacketDeviceIfNeeded()
+            _ = startPacketDeviceIfNeeded()
             apply(coordinator.handle(.authenticated(epoch: epoch)))
             emitDiagnostic("overlay.post_auth.ready", fields: ["epoch": String(epoch)])
         } catch ObstacleBridgeLinuxOverlayTransportError.cancelled {
@@ -766,6 +806,23 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         // `connecting` and its attempt count instead of the stale `stopped`
         // snapshot for the whole handshake window.
         publishCoordinatorSnapshot()
+        let coreSnapshot = coordinator.snapshot
+        if let retiredEpoch = transition.effects.compactMap({ effect -> UInt64? in
+            if case .cancelTransport(let epoch) = effect { return epoch }
+            return nil
+        }).first,
+           let reason = coreSnapshot.failureReason {
+            let signature = "\(retiredEpoch):\(reason)"
+            if lastFailureDiagnosticSignature != signature {
+                lastFailureDiagnosticSignature = signature
+                emitDiagnostic("overlay.epoch.failure_reconnect_started", fields: [
+                    "epoch": String(retiredEpoch),
+                    "reason": reason,
+                    "attempts": String(coreSnapshot.attempts),
+                    "next_retry_ms": coreSnapshot.nextRetryMilliseconds.map(String.init) ?? "none",
+                ], level: .warning)
+            }
+        }
         for effect in transition.effects {
             switch effect {
             case .openTransport(let epoch, _, _):
@@ -832,10 +889,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// durable runtime-health journal.  The journal must not depend on the
     /// public callback: the foreground runner installs that callback for the
     /// Admin log view after this runtime has been constructed.
-    private func emitDiagnostic(_ event: String, fields: [String: String]) {
+    private func emitDiagnostic(
+        _ event: String,
+        fields: [String: String],
+        level: ObstacleBridgeRuntimeDiagnosticLevel = .info
+    ) {
         let detail = fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
         appendRuntimeHealth(event: detail.isEmpty ? event : "\(event) \(detail)")
-        onDiagnostic?(event, fields)
+        onDiagnostic?(level, event, fields)
     }
 
     private func startOwnServiceOwners() throws {
@@ -871,62 +932,67 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         serviceOwners.removeAll()
     }
 
-    private func startPacketDeviceIfNeeded() throws {
+    /// Packet TUN setup is a facility layered on an already authenticated
+    /// overlay. Its failure must not withdraw usable TCP/UDP services.
+    @discardableResult
+    private func startPacketDeviceIfNeeded() -> Bool {
         guard tunDevice == nil,
               let plan = configuredRuntime.configuration.packetTunnelPlan,
               configuredRuntime.configuration.packetTunnelEnabled,
               channelMux != nil
-        else { return }
-        let runtime = self
-        if configuredRuntime.configuration.launchSwiftTunHelper, managedTunHelper == nil {
-            guard let socketPath = configuredRuntime.configuration.tunHelperSocketPath,
-                  let token = configuredRuntime.configuration.tunHelperSessionToken else {
-                throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("managed Swift TUN helper requires an explicit socket and session token")
+        else { return tunDevice != nil && tunNetworkApplied }
+        var setupStage = "helper_start"
+        do {
+            let runtime = self
+            if configuredRuntime.configuration.launchSwiftTunHelper, managedTunHelper == nil {
+                guard let socketPath = configuredRuntime.configuration.tunHelperSocketPath,
+                      let token = configuredRuntime.configuration.tunHelperSessionToken else {
+                    throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("managed Swift TUN helper requires an explicit socket and session token")
+                }
+                let owner = try ObstacleBridgeLinuxManagedTunHelper(socketPath: socketPath, sessionToken: token, executable: configuredRuntime.configuration.tunHelperExecutable)
+                try owner.start()
+                managedTunHelper = owner
             }
-            let owner = try ObstacleBridgeLinuxManagedTunHelper(socketPath: socketPath, sessionToken: token, executable: configuredRuntime.configuration.tunHelperExecutable)
-            try owner.start()
-            managedTunHelper = owner
-        }
-        guard let helper = try configuredRuntime.configuration.makeTunHelperAdapter() else {
-            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux packet-tunnel startup requires an explicit helper owner")
-        }
-        let device = ObstacleBridgeLinuxTunHelperPacketDevice(
-            adapter: helper,
-            packetSink: { packet in runtime.queue.async { runtime.tunChannelAdapter?.receivedPacketFromDevice(packet) } },
-            eventSink: { detail in runtime.appendRuntimeHealth(event: "tun_helper: \(detail)") }
-        )
-        let adapter = ObstacleBridgeLinuxOverlayChannelAdapter(
-            interfaceName: configuredRuntime.configuration.tunInterfaceName,
-            mtu: plan.mtu,
-            instanceID: catalogInstanceID,
-            connectionSequence: UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch),
-            packetDevice: device,
-            localAddress: plan.tunnelAddress,
-            localAddress6: plan.tunnelAddress6,
-            backpressureSnapshot: { .init(bufferedFrames: 0) },
-            startupFrames: { [] },
-            sendMuxFrames: { frames in
-                runtime.queue.async {
-                    for data in frames {
-                        guard let frame = try? ObstacleBridgeChannelMuxCodec.decode(data) else { continue }
-                        guard let mux = runtime.channelMux else { return }
-                        do { try mux.sendUnsolicited(frame) }
-                        catch {
-                            if let epoch = runtime.activeCoordinatorEpoch {
-                                runtime.apply(runtime.coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
+            setupStage = "helper_connect"
+            guard let helper = try configuredRuntime.configuration.makeTunHelperAdapter() else {
+                throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux packet-tunnel startup requires an explicit helper owner")
+            }
+            let device = ObstacleBridgeLinuxTunHelperPacketDevice(
+                adapter: helper,
+                packetSink: { packet in runtime.queue.async { runtime.tunChannelAdapter?.receivedPacketFromDevice(packet) } },
+                eventSink: { detail in runtime.appendRuntimeHealth(event: "tun_helper: \(detail)") }
+            )
+            let adapter = ObstacleBridgeLinuxOverlayChannelAdapter(
+                interfaceName: configuredRuntime.configuration.tunInterfaceName,
+                mtu: plan.mtu,
+                instanceID: catalogInstanceID,
+                connectionSequence: UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch),
+                packetDevice: device,
+                localAddress: plan.tunnelAddress,
+                localAddress6: plan.tunnelAddress6,
+                backpressureSnapshot: { .init(bufferedFrames: 0) },
+                startupFrames: { [] },
+                sendMuxFrames: { frames in
+                    runtime.queue.async {
+                        for data in frames {
+                            guard let frame = try? ObstacleBridgeChannelMuxCodec.decode(data) else { continue }
+                            guard let mux = runtime.channelMux else { return }
+                            do { try mux.sendUnsolicited(frame) }
+                            catch {
+                                if let epoch = runtime.activeCoordinatorEpoch {
+                                    runtime.apply(runtime.coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
+                                }
+                                return
                             }
-                            return
                         }
                     }
-                }
-            },
-            diagnosticSink: { event, _ in runtime.appendRuntimeHealth(event: event) }
-        )
-        tunDevice = device
-        tunHelperPacketDevice = device
-        tunChannelAdapter = adapter
-        var setupStage = "open_tun"
-        do {
+                },
+                diagnosticSink: { event, _ in runtime.appendRuntimeHealth(event: event) }
+            )
+            tunDevice = device
+            tunHelperPacketDevice = device
+            tunChannelAdapter = adapter
+            setupStage = "open_tun"
             _ = try helper.send(command: .openTun, payload: ["ifname": configuredRuntime.configuration.tunInterfaceName, "mtu": plan.mtu])
             setupStage = "packet_endpoint"
             try device.start()
@@ -935,12 +1001,38 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             tunNetworkApplied = true
             setupStage = "overlay_ready"
             adapter.overlayLifecycleChanged(ready: true)
-        }
-        catch {
-            appendRuntimeHealth(event: "tun_start_failed stage=\(setupStage) reason=\(error.localizedDescription)")
+            setTunLastError(nil)
+            emitDiagnostic("packet_tunnel.ready", fields: ["ifname": configuredRuntime.configuration.tunInterfaceName])
+            return true
+        } catch {
+            let reason = error.localizedDescription
+            let fields = tunFailureFields(stage: setupStage, reason: reason)
+            setTunLastError(reason)
+            appendRuntimeHealth(event: "tun_start_failed \(fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " "))")
+            emitDiagnostic("packet_tunnel.start_failed", fields: fields, level: .warning)
             stopPacketDevice()
-            throw error
+            return false
         }
+    }
+
+    private func setTunLastError(_ value: String?) {
+        statusLock.lock()
+        tunLastError = value
+        statusLock.unlock()
+    }
+
+    private func tunFailureFields(stage: String, reason: String) -> [String: String] {
+        var fields = [
+            "stage": stage,
+            "ifname": configuredRuntime.configuration.tunInterfaceName,
+            "reason": reason,
+        ]
+        if reason.contains("errno=16") {
+            fields["errno"] = "16"
+            fields["errno_name"] = "EBUSY"
+            fields["hint"] = "the configured interface is already owned; stop the other TUN owner or select a distinct ifname"
+        }
+        return fields
     }
 
     private func stopPacketDevice() {
@@ -983,6 +1075,11 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             instanceID: catalogInstanceID, connectionSequence: sequence,
             services: configuredRuntime.configuration.remoteServices
         )
+        emitDiagnostic("channel_mux.catalog_publishing", fields: [
+            "epoch": String(configuredRuntime.connectionEpoch),
+            "service_count": String(configuredRuntime.configuration.remoteServices.count),
+            "frame_count": String(frames.count),
+        ])
         for frame in frames {
             try channelMux.sendUnsolicited(frame)
         }
@@ -1031,6 +1128,32 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 }
             }
             if !self.muxEgressScheduler.isEmpty { self.scheduleMuxEgressDrain() }
+        }
+    }
+
+    /// SecureLink queues application records while its rekey commit is in
+    /// flight.  Drain one record per owner-queue turn once `REKEY_DONE`
+    /// installs the new generation, so a busy service cannot remain stalled
+    /// behind a completed rekey or monopolize lifecycle work.
+    private func drainPendingSecureLinkPayload(from session: ObstacleBridgeLinuxConfiguredSession) {
+        guard !stopped, self.session === session else { return }
+        do {
+            let remaining = try session.drainOnePendingSecureLinkPayload()
+            emitDebugDiagnostic("secure_link.pending_payload_drain", [
+                "remaining_payloads": String(remaining),
+            ])
+            if remaining > 0 {
+                queue.async { [weak self, weak session] in
+                    guard let self, let session else { return }
+                    self.drainPendingSecureLinkPayload(from: session)
+                }
+            }
+        } catch {
+            emitDebugDiagnostic("secure_link.pending_payload_drain_failed", [
+                "reason": error.localizedDescription,
+            ])
+            guard let epoch = activeCoordinatorEpoch else { return }
+            apply(coordinator.handle(.transportFailed(epoch: epoch, reason: "secure-link pending payload drain failed: \(error.localizedDescription)")))
         }
     }
 
@@ -1104,15 +1227,34 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         onDebugDiagnostic?(event, fields())
     }
 
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests
+    private func emitChannelMuxDiagnostic(
+        _ level: ObstacleBridgeRuntimeDiagnosticLevel,
+        event: String,
+        fields: [String: String]
+    ) {
+        if level == .debug { emitDebugDiagnostic(event, fields) }
+        else { emitDiagnostic(event, fields: fields, level: level) }
+    }
+
     private func routeInboundFrame(_ frame: ObstacleBridgeChannelMuxFrame) {
         if frame.protocolType == .tun, let tunChannelAdapter {
             tunChannelAdapter.receivedMuxFrame(frame)
             return
         }
         if frame.messageType == .remoteServicesSetV2 {
-            guard let decoded = try? ObstacleBridgeLinuxServiceCatalog.decode(frame.body),
-                  let install = try? remoteCatalogStore.install(instanceID: decoded.instanceID, connectionSequence: decoded.connectionSequence, services: decoded.services),
-                  install.accepted else { return }
+            guard let decoded = try? ObstacleBridgeLinuxServiceCatalog.decode(frame.body) else {
+                emitDiagnostic("channel_mux.catalog_rejected", fields: ["reason": "decode_failed", "body_bytes": String(frame.body.count)], level: .warning)
+                return
+            }
+            guard let install = try? remoteCatalogStore.install(instanceID: decoded.instanceID, connectionSequence: decoded.connectionSequence, services: decoded.services), install.accepted else {
+                emitDiagnostic("channel_mux.catalog_rejected", fields: ["reason": "stale_or_invalid", "service_count": String(decoded.services.count)], level: .warning)
+                return
+            }
+            emitDiagnostic("channel_mux.catalog_installed", fields: [
+                "service_count": String(install.installed.count),
+                "connection_sequence": String(decoded.connectionSequence),
+            ])
             do { try startRemoteServiceOwners(install.installed) }
             catch { publishCoordinatorSnapshot() }
             return

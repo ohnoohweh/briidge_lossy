@@ -6,6 +6,38 @@ is specified and evidenced elsewhere; it is not repeated here. A work package
 is removed from this ledger when its definition of done (DoD) is met and its
 evidence is traceable.
 
+## Building the Linux Swift product
+
+Build the optimized Linux artifacts from the repository root:
+
+```bash
+./scripts/build_linux_app.sh
+```
+
+The script builds `ObstacleBridgeLinux`, `ObstacleBridgeProxyWorker`, and
+`ObstacleBridgeLogCollector`, then places them in `build/linux/` with the
+matching Admin Web assets and build metadata. Use `--debug` for a debug build
+or `--output-dir <directory>` to select another artifact directory.
+
+SwiftPM uses one job per logical core by default (eight on the standard Linux
+development host). Release whole-module optimization (WMO), however, compiles
+each large Swift module in a single CPU-bound frontend. For faster local
+release rebuilds, retain `-O` while disabling WMO so Swift can compile source
+files in parallel:
+
+```bash
+OBSTACLEBRIDGE_LINUX_SWIFT_JOBS="$(nproc)" \
+OBSTACLEBRIDGE_LINUX_SWIFT_WHOLE_MODULE_OPTIMIZATION=false \
+./scripts/build_linux_app.sh
+```
+
+`OBSTACLEBRIDGE_LINUX_SWIFT_WHOLE_MODULE_OPTIMIZATION=true` is the default and
+maximizes release optimization. Set it to `false` only when shorter local
+build time is more valuable than WMO's cross-file optimization. The script
+also accepts `OBSTACLEBRIDGE_LINUX_BUILD_CONFIGURATION`,
+`OBSTACLEBRIDGE_LINUX_OUTPUT_DIR`, `OBSTACLEBRIDGE_LINUX_SCRATCH_DIR`, and
+`OBSTACLEBRIDGE_LINUX_SWIFT_JOBS` for build automation.
+
 ## Requirement deviations
 
 | Package | Requirement deviation | Definition of done |

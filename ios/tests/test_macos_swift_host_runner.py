@@ -87,6 +87,10 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert "startPeerWorker()" in runner and "stopPeerWorker()" in runner
     assert "native peer worker cannot own shared desktop services" in runner
     assert "private func recordOperationalLog(" in runner
+    assert "diagnosticSink: { [weak self] level, event, _ in" in runner
+    assert "level: level.name, levelNumber: level.rawValue" in runner
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue" in runner
+    assert "ObstacleBridgePeerAddressProtocolRuntime" in runner
     assert runner.count("NSLog(") == 1
     assert "ObstacleBridgeWorkerIPC.frameSize(header)" in worker
     assert "ObstacleBridgeWorkerIPC.encodeControl" in worker
@@ -127,13 +131,17 @@ def test_macos_logging_producer_inventory_has_no_private_mode_direct_sink() -> N
     assert "stderr=asyncio.subprocess.DEVNULL if self._log_relay is not None else None" in peer
     assert "if log_fd is not None:" in peer and "else:\n            logging.basicConfig" in peer
 
-    # Native host, proxy, and peer producers likewise use only the selected
-    # collector or inherited record descriptor. The one NSLog is the explicit
-    # no-collector fallback and must not be available in private-worker mode.
+    # Native host, proxy, and peer producers use the selected collector or an
+    # inherited record descriptor. The host additionally owns the configured
+    # bounded local diagnostic file; the one NSLog is its no-collector fallback.
     assert "worker.emit(name: \"macos.host\"" in host
     assert "if let worker = activeLoggingWorker()" in host
     assert "else {\n            NSLog(\"[ObstacleBridgeHostRunner][%@]\", event)" in host
     assert host.count("NSLog(") == 1
+    assert "private var managedDiagnosticLog: ObstacleBridgeManagedLogFile?" in host
+    assert "configureManagedDiagnosticLog()" in host
+    assert "sink.prepareForStart()" in host
+    assert "appendManagedDiagnosticLog(name:" in host
     assert "loggingWorker.makeProducerRelay()" in native_proxy
     assert "--log-fd" in native_proxy
     assert "ObstacleBridgeLogProducer(inheritedFD: $0" in native_peer
@@ -3984,6 +3992,90 @@ class _TCPEchoServer:
                     conn.sendall(data)
                 except OSError:
                     return
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS HostRunner qualification")
+def test_macos_swift_host_runner_myudp_python_tcp_service_survives_ten_rekeys_with_two_clients(tmp_path: Path) -> None:
+    """Exercise TCP client -> macOS Swift -> myUDP -> Python -> TCP echo.
+
+    The second client is deliberately opened only after the first completed
+    rekey, so a completed control exchange must also resume queued service
+    data for independently active ChannelMux channels.
+    """
+    artifact = build_macos_swift_artifact()
+    overlay_port, swift_udp_port, echo_port, service_port, admin_port = _unused_tcp_ports(5)
+    psk = "macos-myudp-python-ten-rekeys-psk"
+    echo = _TCPEchoServer("127.0.0.1", echo_port)
+    python_peer = _AsyncBridgeClientThread({
+        "overlay_transport": "myudp", "udp_bind": "127.0.0.1", "udp_own_port": overlay_port,
+        "secure_link": True, "secure_link_mode": "psk", "secure_link_psk": psk,
+        "admin_web": False, "status": False,
+    })
+    config_path = tmp_path / "macos_myudp_python_ten_rekeys.json"
+    config_path.write_text(json.dumps({
+        "overlay_transport": "myudp", "udp_bind": "127.0.0.1", "udp_own_port": swift_udp_port,
+        "udp_peer": "127.0.0.1", "udp_peer_port": overlay_port,
+        "secure_link": True, "secure_link_mode": "psk", "secure_link_psk": psk,
+        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": admin_port,
+        "admin_web_dir": str((ROOT / "admin_web").resolve()), "admin_web_auth_disable": True,
+        "own_servers": [{
+            "name": "macos-myudp-python-rekey-tcp",
+            "listen": {"protocol": "tcp", "bind": "127.0.0.1", "port": service_port},
+            "target": {"protocol": "tcp", "host": "127.0.0.1", "port": echo_port},
+        }],
+    }, sort_keys=True), encoding="utf-8")
+    process = None
+    clients: list[tuple[threading.Event, threading.Thread, list[str], list[int]]] = []
+
+    def start_client(marker: bytes) -> None:
+        stop, errors, exchanges = threading.Event(), [], [0]
+        def run() -> None:
+            try:
+                with socket.create_connection(("127.0.0.1", service_port), timeout=5.0) as client:
+                    client.settimeout(1.0)
+                    while not stop.is_set():
+                        client.sendall(marker)
+                        if _recv_exact(client, len(marker)) != marker:
+                            raise AssertionError("TCP echo payload mismatch")
+                        exchanges[0] += 1
+                        stop.wait(0.02)
+            except Exception as exc:
+                if not stop.is_set(): errors.append(repr(exc))
+        thread = threading.Thread(target=run, daemon=True)
+        clients.append((stop, thread, errors, exchanges)); thread.start()
+
+    try:
+        echo.start(); python_peer.start()
+        process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--hold-sec", "180"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        _wait_http_json(f"http://127.0.0.1:{admin_port}/api/status", timeout_sec=30.0)
+        _wait_http_condition(f"http://127.0.0.1:{admin_port}/api/peers", lambda doc: bool(doc.get("peers")) and bool(doc["peers"][0].get("secure_link", {}).get("authenticated")), timeout_sec=30.0)
+        _wait_tcp_port_ready("127.0.0.1", service_port, timeout_sec=30.0)
+        start_client(b"one")
+        for expected in range(1, 11):
+            response = _http_request_json(f"http://127.0.0.1:{admin_port}/api/secure-link/rekey", method="POST", payload={"peer_id": "configured-peer"}, timeout_sec=5.0)
+            assert response.get("ok") is True, response
+            _wait_http_condition(f"http://127.0.0.1:{admin_port}/api/peers", lambda doc, expected=expected: int(doc["peers"][0]["secure_link"].get("rekeys_completed_total", 0)) >= expected, timeout_sec=15.0)
+            if expected == 1:
+                start_client(b"two")
+            _wait_for_condition(
+                lambda: all(not errors and exchanges[0] >= expected for _stop, _thread, errors, exchanges in clients),
+                timeout=15.0,
+            )
+            for _stop, _thread, errors, exchanges in clients:
+                assert not errors, errors
+                assert exchanges[0] >= expected
+        assert len(clients) == 2
+        assert all(exchanges[0] >= 10 for _stop, _thread, _errors, exchanges in clients)
+    finally:
+        for stop, thread, _errors, _exchanges in clients:
+            stop.set(); thread.join(timeout=3.0)
+        python_peer.stop(); echo.stop()
+        if process is not None:
+            if process.poll() is None: process.terminate()
+            try: stdout, stderr = process.communicate(timeout=10.0)
+            except subprocess.TimeoutExpired: process.kill(); stdout, stderr = process.communicate(timeout=5.0)
+            if process.returncode not in (0, -15):
+                raise AssertionError(f"macOS HostRunner exited with {process.returncode}:\\n{stdout}\\n{stderr}")
 
 
 def _read_proxy_head(conn: socket.socket) -> bytes:

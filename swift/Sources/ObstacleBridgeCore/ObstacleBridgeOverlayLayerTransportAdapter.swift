@@ -37,6 +37,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     private let compressRuntime: ObstacleBridgeCompressLayerRuntime?
     private let secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter?
     private let peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime?
+    private let diagnosticSink: ObstacleBridgeSecureLinkPskTransportAdapter.DiagnosticSink?
     private let lifecycleTimeProvider: () -> TimeInterval
     private let coreCoordinator: ObstacleBridgeOverlayCoordinator
     // Shared with native queue metrics only; Core consumes the same values for
@@ -57,11 +58,13 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime? = nil,
         transportDelayRotationThresholdMS: Double = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationThresholdMS,
         transportDelayRotationGrace: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationGrace,
-        lifecycleTimeProvider: (() -> TimeInterval)? = nil
+        lifecycleTimeProvider: (() -> TimeInterval)? = nil,
+        diagnosticSink: ObstacleBridgeSecureLinkPskTransportAdapter.DiagnosticSink? = nil
     ) {
         self.compressRuntime = compressRuntime
         self.secureLinkAdapter = secureLinkAdapter
         self.peerAddressRuntime = peerAddressRuntime
+        self.diagnosticSink = diagnosticSink
         self.lifecycleTimeProvider = lifecycleTimeProvider ?? { Date().timeIntervalSince1970 }
         self.transportDelayRotationThresholdMS = max(0, transportDelayRotationThresholdMS)
         self.transportDelayRotationGrace = max(0, transportDelayRotationGrace)
@@ -86,10 +89,21 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     /// Public Linux/Apple transport boundary for a PSK-protected overlay.
     /// The resource owner supplies only lower-transport I/O; this Core object
     /// owns SecureLink framing, layered readiness, and failure gating.
-    public convenience init(clientPSK: String) {
+    public convenience init(
+        clientPSK: String,
+        rekeyAfterFrames: Int = 0,
+        rekeyAfterSeconds: TimeInterval = 0,
+        diagnosticSink: ObstacleBridgeSecureLinkPskTransportAdapter.DiagnosticSink? = nil
+    ) {
         self.init(
-            secureLinkAdapter: .init(clientPSK: clientPSK),
-            peerAddressRuntime: .init(clientMode: true)
+            secureLinkAdapter: .init(
+                clientPSK: clientPSK,
+                rekeyAfterFrames: rekeyAfterFrames,
+                rekeyAfterSeconds: rekeyAfterSeconds,
+                diagnosticSink: diagnosticSink
+            ),
+            peerAddressRuntime: .init(clientMode: true),
+            diagnosticSink: diagnosticSink
         )
     }
 
@@ -97,7 +111,11 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         coreEffectSink = sink
     }
 
-    func setPendingSecureLinkPayloadWorkSink(_ sink: @escaping () -> Void) {
+    /// Installs the owner callback used to resume application delivery after
+    /// SecureLink completes a rekey.  Platform owners must schedule the work
+    /// outside their receive callback because that callback owns protocol
+    /// state while it processes the rekey control frame.
+    public func setPendingSecureLinkPayloadWorkSink(_ sink: @escaping () -> Void) {
         secureLinkAdapter?.setPendingPayloadWorkSink(sink)
     }
 
@@ -229,6 +247,11 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         guard let epoch = coreCoordinator.snapshot.epoch else { return }
         let now = UInt64(max(0, lifecycleTimeProvider()) * 1_000)
         applyCore(.transportLivenessSample(epoch: epoch, delayMilliseconds: delayMilliseconds, nowMilliseconds: now))
+        if coreCoordinator.snapshot.failureReason == "transport_liveness_expired" {
+            diagnosticSink?(.warning, "overlay_transport_liveness_expired", [
+                "epoch": String(epoch), "delay_ms": delayMilliseconds,
+            ])
+        }
     }
 
     func secureLinkStatusSnapshot() -> ObstacleBridgeSecureLinkPskRuntime.StatusSnapshot? {
@@ -315,6 +338,10 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     }
 
     public func handleTransportDisconnected() {
+        let epoch = coreCoordinator.snapshot.epoch
+        diagnosticSink?(.warning, "overlay_epoch_failure_detected", [
+            "epoch": epoch.map(String.init) ?? "none", "reason": "transport_disconnected",
+        ])
         peerAddressRuntime?.handleTransportDisconnected()
         secureLinkAdapter?.handleTransportDisconnected()
         observeTransportState(connected: false, reason: "transport_disconnected")
@@ -341,6 +368,9 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     // state remains disconnected. Publish the new epoch so ChannelMux can
     // schedule another attempt when this one does not recover.
     func beginTransportEpoch(reason: String) {
+        diagnosticSink?(.info, "overlay_epoch_started", [
+            "next_epoch": String(transportLifecycle.epoch + 1), "reason": reason,
+        ])
         peerAddressRuntime?.handleTransportDisconnected()
         secureLinkAdapter?.handleTransportDisconnected()
         applyCore(.start)
@@ -431,7 +461,9 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     /// Runs exactly one queued SecureLink application payload.  This method is
     /// deliberately not timed as a worker: the nested `securelink` scope is
     /// the atomic encrypt/decrypt operation reported to WebAdmin.
-    func drainOnePendingSecureLinkPayload() throws -> OutboundSnapshot {
+    /// Returns one FIFO application record that was held during a pending
+    /// SecureLink rekey.  Owners call it from their serialized send path.
+    public func drainOnePendingSecureLinkPayload() throws -> OutboundSnapshot {
         guard let secureLinkAdapter else { return OutboundSnapshot(emittedFrames: []) }
         let snapshot = try secureLinkAdapter.drainOnePendingPayload()
         return OutboundSnapshot(emittedFrames: snapshot.emittedFrames, queuedPayloads: snapshot.queuedPayloads)

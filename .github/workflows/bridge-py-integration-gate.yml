@@ -452,6 +452,15 @@ jobs:
         # macOS runner's CPUs without allowing an unbounded compiler fan-out.
         run: pytest -vv --timeout=120 -n 3 -m "not slow" tests/unit/test_channel_mux_swift_parity.py ios/tests --ignore=ios/tests/test_macos_swift_host_runner.py
 
+      - name: Qualify macOS Swift-to-Python myUDP TCP service through ten rekeys
+        # This uses the packaged HostRunner built above: two independent TCP
+        # clients traverse Swift/macOS -> myUDP -> Python -> TCP echo, with
+        # the second client introduced after rekey one.
+        env:
+          PYTHONPATH: .:src:ios/src
+          OBSTACLEBRIDGE_REUSE_MACOS_BUILD: "1"
+        run: pytest -vv --timeout=180 ios/tests/test_macos_swift_host_runner.py -k 'myudp_python_tcp_service_survives_ten_rekeys_with_two_clients'
+
       - name: Qualify every SwiftPM concurrency owner with Thread Sanitizer
         # This exercises every executable/library test target that SwiftPM can
         # run on macOS. The product app build above compiles the remaining

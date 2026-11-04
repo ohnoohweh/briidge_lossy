@@ -23,6 +23,7 @@ REQ-OVL-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_native_python_myudp_window_pressure
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
     - tests/integration/test_overlay_e2e.py::test_linux_swift_myudp_reference_peer_waits_for_response_drain
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys
   unit_tests:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDataFrameRoundTripsAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSupervisorRotatesCandidateAfterFailedEpoch
@@ -77,6 +78,7 @@ REQ-OVL-004:
     - tests/integration/test_ios_e2e.py::test_ios_e2e_app_ws_overlay_udp_service_reaches_linux_peer_udp_echo
     - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_overlay_udp_service_reaches_macos_peer_udp_echo
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_tcp_ownserver_proxies_mixed_python_peer_for_ws_and_quic
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_myudp_python_tcp_service_survives_ten_rekeys_with_two_clients
   unit_tests:
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_uses_per_transport_ports
     - tests/unit/test_ws_payload_mode.py::test_connect_disables_websocket_compression
@@ -168,6 +170,7 @@ REQ-AUT-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys
     # Full Python TCP/WS/myudp catalog publication, live withdrawal, reverse service delivery, and recovery.
     # Covers the bounded listener-publication wait after authenticated readiness,
     # including transient pre-send refusal/abort retries with fresh sockets
@@ -1199,6 +1202,9 @@ REQ-LIFE-010:
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_verification_checks
     - tests/unit/test_admin_web_payloads.py::test_cached_probe_verification_returns_pending_and_schedules_background_refresh_on_admin_thread
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_ui_binds_tun_helper_fields
+    - tests/unit/test_admin_web_payloads.py::test_optional_tun_and_certificate_secure_link_tabs_follow_runtime_capability
+    - tests/unit/test_admin_web_component_parity.py::test_swift_tun_routing_snapshot_matches_python
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_tun_routing_route_matches_python
     - tests/unit/test_admin_web_payloads.py::test_tun_helper_repair_endpoint_returns_runner_payload
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk
@@ -1819,9 +1825,10 @@ REQ-ADM-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::adminStatusEnvelopeOwnsSharedDashboardFields
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::adminWebConfigurationAndLifecycleControlsMatchThePythonClientContract
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeManagedLogFileTests.swift::preservesPreviousSessionThenRotatesWithConfiguredBounds
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::metaAndOnboardingRoutesMatchTheShippedAdminWebContract
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::observabilityWritesForegroundLifecycleToConfiguredLogAndBoundedTelemetrySpool
-    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::debugLoggingIsOptInFromTheGroupedConfiguration
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::channelMuxDebugLoggingIsOptInFromTheGroupedConfiguration
     - ios/tests/test_diagnostics.py::test_diagnostic_jsonl_rotates_and_snapshot_uses_a_bounded_tail
     - tests/unit/test_admin_web_payloads.py::test_resolve_static_base_falls_back_to_packaged_admin_web
     - tests/unit/test_admin_web_payloads.py::test_setup_build_stages_admin_web_assets_from_repo_root
@@ -1832,7 +1839,7 @@ REQ-ADM-001:
     # Telemetry navigation is conditional on client or collector configured intent;
     # each card is conditional on its own enabled role.
     - tests/unit/test_admin_web_payloads.py::test_telemetry_tab_renders_client_and_collector_status
-    - tests/unit/test_admin_web_payloads.py::test_optional_tun_and_certificate_secure_link_tabs_follow_configuration
+    - tests/unit/test_admin_web_payloads.py::test_optional_tun_and_certificate_secure_link_tabs_follow_runtime_capability
     - tests/unit/test_admin_web_payloads.py::test_admin_web_does_not_embed_ios_native_tunnel_controls
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
     - tests/unit/test_runner_events.py::test_get_debug_logs_reads_only_a_bounded_file_tail

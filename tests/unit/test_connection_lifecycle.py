@@ -10,7 +10,8 @@ from obstacle_bridge.bridge_connection_lifecycle import (
     ConnectionRotationResult,
     ConnectionState,
 )
-from obstacle_bridge.bridge import UdpSession
+from obstacle_bridge.bridge import BaseFrameV2, UdpSession
+from obstacle_bridge.bridge_transport_udp import Protocol, ProtocolRuntime, now_ns
 
 
 class ConnectionLifecycleContractTests(unittest.TestCase):
@@ -77,6 +78,19 @@ class ConnectionLifecycleContractTests(unittest.TestCase):
             [(ConnectionState.CONNECTED, 1), (ConnectionState.DISCONNECTED, 1)],
         )
         self.assertEqual(session.get_connection_lifecycle_snapshot()["epoch"], 1)
+
+    def test_myudp_runtime_publishes_connected_immediately_after_valid_rtt(self) -> None:
+        """A listener must not defer its first lifecycle edge to probe polling."""
+        protocol = Protocol(BaseFrameV2)
+        events: list[bool] = []
+        runtime = ProtocolRuntime(protocol)
+        runtime._on_state_change = events.append
+
+        protocol.last_rtt_ok_ns = now_ns()
+
+        self.assertTrue(runtime.refresh_connection_state())
+        self.assertEqual(events, [True])
+        self.assertTrue(runtime._conn_evt.is_set())
 
     def test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion(self) -> None:
         session = UdpSession(argparse.Namespace(max_inflight=200))

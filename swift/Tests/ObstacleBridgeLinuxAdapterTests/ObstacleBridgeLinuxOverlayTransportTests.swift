@@ -276,9 +276,16 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
     @Test func myudpTransportRejectsMalformedPythonDatagramAndClosedSession() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-malformed")
         defer { peer.stop() }
-        let session = try ObstacleBridgeLinuxMyUDPTransportSession(host: "127.0.0.1", port: peer.port)
+        let diagnostics = RuntimeDiagnosticRecorder()
+        let session = try ObstacleBridgeLinuxMyUDPTransportSession(
+            host: "127.0.0.1", port: peer.port,
+            diagnosticSink: { level, event, fields in diagnostics.record(level, event: event, fields: fields) }
+        )
         _ = try session.send(Data("register".utf8))
         #expect(throws: ObstacleBridgeLinuxMyUDPError.invalidReply) { try session.receive() }
+        #expect(diagnostics.contains(level: .warning, event: "myudp.protocol_error_detected"))
+        #expect(diagnostics.contains(field: "operation", value: "receive"))
+        #expect(diagnostics.contains(field: "wire_bytes", value: "1"))
         session.close()
         #expect(throws: ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF)) { try session.serviceTimers() }
     }
@@ -426,11 +433,16 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         let compressedRuntime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
             transport: .tcp, host: "127.0.0.1", port: compressedPeer.port,
             secureLinkPSK: Data("linux-swift-psk".utf8),
+            debugLoggingEnabled: true, channelMuxLogLevel: .debug,
             compressionPolicy: .init(enabled: true, level: 3, minimumBodyBytes: 1, allowedMessageTypes: [0])
         ))
         let compressedSession = try compressedRuntime.connect(sessionID: 52, clientNonce: Data(repeating: 5, count: 32))
         defer { compressedRuntime.disconnect() }
-        let compressedMux = try ObstacleBridgeLinuxChannelMuxSession(runtime: compressedRuntime, session: compressedSession)
+        let diagnostics = RuntimeDiagnosticRecorder()
+        let compressedMux = try ObstacleBridgeLinuxChannelMuxSession(
+            runtime: compressedRuntime, session: compressedSession,
+            diagnosticSink: { level, event, fields in diagnostics.record(level, event: event, fields: fields) }
+        )
         let repetitive = ObstacleBridgeChannelMuxFrame(channelID: 1, protocolType: .udp, counter: 1, messageType: .data, body: Data(repeating: 0x41, count: 256))
         #expect(try compressedMux.exchange(repetitive) == repetitive)
         let malformedCompressed = try ObstacleBridgeChannelMuxFrameCodec.encode(
@@ -438,6 +450,10 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
             messageType: ObstacleBridgeMuxCompression.compressedFlag, body: Data([0xde, 0xad, 0xbe, 0xef])
         )
         #expect(throws: ObstacleBridgeCompression.Error.invalidInput) { try compressedMux.decodeInbound(malformedCompressed) }
+        #expect(diagnostics.contains(level: .warning, event: "channel_mux.protocol_error_detected"))
+        #expect(diagnostics.contains(field: "operation", value: "decode_inbound"))
+        #expect(diagnostics.contains(field: "wire_bytes", value: String(malformedCompressed.count)))
+        #expect(diagnostics.contains(level: .debug, event: "channel_mux.frame_prepared"))
         let compressed = compressedRuntime.status().peer.compression
         #expect(compressed.enabled)
         #expect(compressed.algorithm == "zlib")
@@ -705,13 +721,40 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: peer.port))
         let session = try runtime.connect(sessionID: 120, clientNonce: Data(repeating: 9, count: 32))
         let catalog = ObstacleBridgeChannelMuxFrame(channelID: 0, protocolType: .tcp, counter: 0, messageType: .remoteServicesSetV2, body: Data("RS3[]".utf8))
-        let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: runtime, session: session, startupFrames: [catalog])
+        let diagnostics = RuntimeDiagnosticRecorder()
+        let mux = try ObstacleBridgeLinuxChannelMuxSession(
+            runtime: runtime, session: session, startupFrames: [catalog],
+            diagnosticSink: { level, event, fields in diagnostics.record(level, event: event, fields: fields) }
+        )
+        #expect(diagnostics.contains(level: .info, event: "channel_mux.frame_sent"))
         let frame = ObstacleBridgeChannelMuxFrame(channelID: 7, protocolType: .tcp, counter: 1, messageType: .data, body: Data("mux".utf8))
         #expect(try mux.exchange(frame) == frame)
         let replacement = try runtime.reconnect(sessionID: 121, clientNonce: Data(repeating: 10, count: 32))
         _ = try ObstacleBridgeLinuxChannelMuxSession(runtime: runtime, session: replacement, startupFrames: [catalog])
         #expect(throws: ObstacleBridgeLinuxChannelMuxError.staleEpoch) { try mux.exchange(frame) }
+        #expect(diagnostics.contains(level: .warning, event: "channel_mux.stale_epoch"))
         runtime.disconnect()
+    }
+
+    @Test func channelMuxWarningLevelSkipsFrameDiagnosticConstruction() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-mux-reconnect")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: peer.port,
+            channelMuxLogLevel: .warning
+        ))
+        let session = try runtime.connect(sessionID: 122, clientNonce: Data(repeating: 8, count: 32))
+        let catalog = ObstacleBridgeChannelMuxFrame(channelID: 0, protocolType: .tcp, counter: 0, messageType: .remoteServicesSetV2, body: Data("RS3[]".utf8))
+        let diagnostics = RuntimeDiagnosticRecorder()
+        let mux = try ObstacleBridgeLinuxChannelMuxSession(
+            runtime: runtime, session: session, startupFrames: [catalog],
+            diagnosticSink: { level, event, fields in diagnostics.record(level, event: event, fields: fields) }
+        )
+        #expect(!diagnostics.contains(level: .info, event: "channel_mux.frame_sent"))
+        #expect(!diagnostics.contains(level: .info, event: "channel_mux.frame_received"))
+        runtime.disconnect()
+        #expect(throws: ObstacleBridgeLinuxChannelMuxError.staleEpoch) { try mux.exchange(catalog) }
+        #expect(diagnostics.contains(level: .warning, event: "channel_mux.stale_epoch"))
     }
 
     @Test func reconnectSupervisorRecoversAndStopsPendingTimers() async throws {
@@ -1566,4 +1609,20 @@ private actor DeliveredData {
     private var value: Data?
     func store(_ value: Data) { self.value = value }
     func load() -> Data? { value }
+}
+
+private final class RuntimeDiagnosticRecorder {
+    private var entries: [(ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String])] = []
+
+    func record(_ level: ObstacleBridgeRuntimeDiagnosticLevel, event: String, fields: [String: String]) {
+        entries.append((level, event, fields))
+    }
+
+    func contains(level: ObstacleBridgeRuntimeDiagnosticLevel, event: String) -> Bool {
+        entries.contains { $0.0 == level && $0.1 == event }
+    }
+
+    func contains(field: String, value: String) -> Bool {
+        entries.contains { $0.2[field] == value }
+    }
 }

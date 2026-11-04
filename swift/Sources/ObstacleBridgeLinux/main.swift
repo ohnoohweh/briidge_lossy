@@ -262,11 +262,11 @@ enum ObstacleBridgeLinuxMain {
                 .deletingLastPathComponent()
                 .appendingPathComponent(".ObstacleBridgeLinux.runtime-health-v1.json")
             let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL, loggingWorker: logWorker)
-            runtime.onDiagnostic = { event, fields in
-                observability.recordDiagnostic(event, fields: fields)
+            runtime.onDiagnostic = { level, event, fields in
+                observability.recordDiagnostic(event, fields: fields, level: level)
             }
             runtime.onDebugDiagnostic = { event, fields in
-                observability.recordDiagnostic("debug.\(event)", fields: fields)
+                observability.recordDiagnostic("debug.\(event)", fields: fields, level: .debug)
             }
             runtime.onSnapshot = { snapshot in
                 observability.recordForegroundLifecycle(state: snapshot.state, transport: configuration.transport.rawValue)

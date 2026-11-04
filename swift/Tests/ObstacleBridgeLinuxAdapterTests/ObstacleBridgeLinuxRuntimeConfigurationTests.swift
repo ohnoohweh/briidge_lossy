@@ -19,7 +19,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(policy["blocked_host_patterns"] as? [String] == ["blocked.example"])
     }
 
-    @Test func debugLoggingIsOptInFromTheGroupedConfiguration() throws {
+    @Test func channelMuxDebugLoggingIsOptInFromTheGroupedConfiguration() throws {
         let base: [String: Any] = [
             "runner": ["overlay_transport": "myudp"],
             "udp_session": ["udp_peer": "127.0.0.1", "udp_peer_port": 4444],
@@ -28,19 +28,42 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             data: try JSONSerialization.data(withJSONObject: base)
         )
         #expect(!disabled.debugLoggingEnabled)
+        #expect(disabled.channelMuxLogLevel == .info)
 
         var enabled = base
-        enabled["debug_logging"] = ["debug_enabled": true]
+        enabled["channel_mux"] = ["log_channel_mux": "DEBUG"]
         let configured = try ObstacleBridgeLinuxRuntimeConfiguration.parse(
             data: try JSONSerialization.data(withJSONObject: enabled)
         )
         #expect(configured.debugLoggingEnabled)
+        #expect(configured.channelMuxLogLevel == .debug)
 
         enabled["channel_mux"] = ["log_channel_mux": "INFO"]
         let channelMuxSuppressed = try ObstacleBridgeLinuxRuntimeConfiguration.parse(
             data: try JSONSerialization.data(withJSONObject: enabled)
         )
         #expect(!channelMuxSuppressed.debugLoggingEnabled)
+        #expect(channelMuxSuppressed.channelMuxLogLevel == .info)
+
+        enabled["channel_mux"] = ["log_channel_mux": "WARNING"]
+        let warningsOnly = try ObstacleBridgeLinuxRuntimeConfiguration.parse(
+            data: try JSONSerialization.data(withJSONObject: enabled)
+        )
+        #expect(!warningsOnly.debugLoggingEnabled)
+        #expect(warningsOnly.channelMuxLogLevel == .warning)
+    }
+
+    @Test func parsesAutomaticSecureLinkRekeyThresholdsForNativeRuntime() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: try JSONSerialization.data(withJSONObject: [
+            "runner": ["overlay_transport": "myudp"],
+            "udp_session": ["udp_peer": "127.0.0.1", "udp_peer_port": 4444],
+            "secure_link": [
+                "secure_link": true, "secure_link_mode": "psk", "secure_link_psk": "test-secret",
+                "secure_link_rekey_after_frames": 19, "secure_link_rekey_after_seconds": 60,
+            ],
+        ]))
+        #expect(config.secureLinkRekeyAfterFrames == 19)
+        #expect(config.secureLinkRekeyAfterSeconds == 60)
     }
 
     @Test func managedTunHelperElevatesOnlyTheSeparateHelperProcess() {

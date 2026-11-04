@@ -59,9 +59,18 @@ enum ObstacleBridgeNativeAdminMacOSService {
         }
         func tunRoutingPayload() -> [String: Any] {
             let status = snapshot("get_status_snapshot")
-            let tun = status["tun"] as? [Any] ?? []
+            let tun = (status["tun"] as? [[String: Any]])
+                ?? (status["tun"] as? [Any])?.compactMap { $0 as? [String: Any] }
+                ?? []
             let helper = status["tun_helper"] as? [String: Any] ?? [:]
-            return ["tun": tun, "shared_tun": status["shared_tun"] ?? [], "tun_helper": helper, "summary": ["tun_total": tun.count], "app": "udp-bidirectional-mux", "milestone": "C"]
+            var payload = ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: [
+                "tun": tun,
+                "tun_icmp_stage_counts": status["tun_icmp_stage_counts"] ?? [:],
+                "tun_probe_boundary_counts": status["tun_probe_boundary_counts"] ?? [:],
+                "tun_local_reply_stage_counts": status["tun_local_reply_stage_counts"] ?? [:],
+            ])
+            payload["tun_helper"] = helper
+            return payload
         }
         func json(_ payload: Any, statusLine: String = "HTTP/1.1 200 OK") -> ObstacleBridgeAdminAPIResponse {
             .init(statusLine: statusLine, contentType: "application/json; charset=utf-8", body: ObstacleBridgeWebAdminServer.jsonBody(payload), headers: [])

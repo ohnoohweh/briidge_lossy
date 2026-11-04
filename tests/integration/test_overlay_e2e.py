@@ -8663,6 +8663,226 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
 
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.parametrize('client_runtime', ['swift', 'python'])
+def test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys(tmp_path: Path, client_runtime: str) -> None:
+    """A persistent TCP service stream survives ten MyUDP rekeys in each runtime lane."""
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux')
+    if client_runtime == 'swift' and not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
+
+    with secure_link_test_lock():
+        binary_path = _linux_swift_runner_binary() if client_runtime == 'swift' else None
+        psk = f'linux-{client_runtime}-myudp-ten-rekeys-psk'
+        allocated_ports: set[int] = set()
+
+        def reserve_worker_port(slot: int) -> int:
+            port = alloc_admin_port(
+                allocated_ports,
+                case_index=950 + slot,
+                host_pair=('127.0.0.1', '::1'),
+            )
+            allocated_ports.add(port)
+            return port
+
+        overlay_port, service_port, target_port, python_admin, swift_admin = [
+            reserve_worker_port(slot) for slot in range(5)
+        ]
+        bounce = BounceBackServer(
+            'linux_swift_myudp_ten_rekeys_target', 'tcp', '127.0.0.1', target_port,
+            tmp_path / 'linux_swift_myudp_ten_rekeys_target.log',
+        )
+        server_proc = client_proc = None
+        try:
+            bounce.start()
+            python_config = tmp_path / 'linux_swift_myudp_ten_rekeys_server.json'
+            python_config.write_text('{}', encoding='utf-8')
+            python_server_command = bridge_entrypoint() + [
+                '--config', str(python_config),
+                '--overlay-transport', 'myudp', '--udp-bind', '127.0.0.1', '--udp-own-port', str(overlay_port),
+                '--admin-web', '--admin-web-bind', '127.0.0.1', '--admin-web-port', str(python_admin),
+                '--log', 'DEBUG', '--console-level', 'DEBUG',
+                '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', psk,
+                '--no-compress-layer', '--channel-mux-egress', '{"mode":"direct"}',
+                # Preserve the listener's MyUDP state/RTT transitions with the
+                # test artefacts; this is essential when a cross-runtime lane
+                # tears down a healthy-looking TCP stream.
+                '--log-udp-session', 'DEBUG', '--log-channel-mux', 'DEBUG',
+                '--tun-execution-mode', 'inline', '--no-tun-enabled-on-startup',
+            ]
+            server_proc = start_proc(
+                'linux_swift_myudp_ten_rekeys_python', python_server_command, tmp_path, admin_port=python_admin,
+            )
+            time.sleep(0.3)
+
+            client_service = {
+                'name': f'{client_runtime}-myudp-ten-rekeys-tcp',
+                'listen': {'protocol': 'tcp', 'bind': '127.0.0.1', 'port': service_port},
+                'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': target_port},
+            }
+            config_path = tmp_path / f'linux_{client_runtime}_myudp_ten_rekeys_client.json'
+            config_path.write_text(json.dumps({
+                'runner': {'overlay_transport': 'myudp'},
+                'udp_session': {'udp_peer': '127.0.0.1', 'udp_peer_port': overlay_port},
+                'secure_link': {
+                    'secure_link_mode': 'psk',
+                    'secure_link_psk': psk,
+                    'secure_link_rekey_after_seconds': 20.0,
+                },
+                'channel_mux': {'log_channel_mux': 'DEBUG'},
+                'debug_logging': {
+                    'log_file': str(tmp_path / 'linux_swift_myudp_ten_rekeys_swift.debug.log'),
+                    'file_level': 'DEBUG',
+                },
+                'own_servers': [client_service],
+            }), encoding='utf-8')
+            if client_runtime == 'swift':
+                client_command = [
+                    str(binary_path), '--runtime-config', str(config_path), '--run',
+                    '--admin-port', str(swift_admin), '--hold-sec', '270',
+                ]
+            else:
+                client_command = bridge_entrypoint() + [
+                    '--config', str(config_path), '--overlay-transport', 'myudp',
+                    '--udp-bind', '127.0.0.1', '--udp-peer', '127.0.0.1', '--udp-peer-port', str(overlay_port),
+                    '--admin-web', '--admin-web-bind', '127.0.0.1', '--admin-web-port', str(swift_admin),
+                    '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', psk,
+                    '--secure-link-rekey-after-seconds', '20.0', '--no-compress-layer',
+                    '--channel-mux-egress', '{"mode":"direct"}', '--own-servers', json.dumps(client_service),
+                    '--tun-execution-mode', 'inline', '--no-tun-enabled-on-startup',
+                ]
+            client_proc = start_proc(
+                f'linux_{client_runtime}_myudp_ten_rekeys_client', client_command, tmp_path, admin_port=swift_admin,
+            )
+
+            end = time.time() + 12.0
+            while time.time() < end:
+                try:
+                    _code, status = fetch_json(f'http://127.0.0.1:{swift_admin}/api/status', timeout=1.0)
+                    ready = status.get('app_ready') is True if client_runtime == 'swift' else status.get('peer_state') == 'CONNECTED'
+                    if ready:
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.1)
+            else:
+                raise AssertionError(f'Linux {client_runtime} client did not authenticate against Python MyUDP runtime')
+
+            listener_deadline = time.time() + 8.0
+            while True:
+                client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client.settimeout(3.0)
+                try:
+                    client.connect(('127.0.0.1', service_port))
+                    break
+                except (ConnectionRefusedError, ConnectionAbortedError):
+                    client.close()
+                    if time.time() >= listener_deadline:
+                        raise
+                    time.sleep(0.1)
+
+            def receive_exact(count: int) -> bytes:
+                received = bytearray()
+                while len(received) < count:
+                    chunk = client.recv(count - len(received))
+                    if not chunk:
+                        raise AssertionError(f'TCP service closed after {sequence} successful exchanges')
+                    received.extend(chunk)
+                return bytes(received)
+
+            sequence = 0
+            rekeys_completed = 0
+            deadline = time.time() + 240.0
+            next_status_poll = 0.0
+            secondary_stop = threading.Event()
+            secondary_ready = threading.Event()
+            secondary_done = threading.Event()
+            secondary_errors: list[str] = []
+            secondary_exchanges = [0]
+            secondary_thread: Optional[threading.Thread] = None
+
+            def run_second_tcp_client() -> None:
+                """Keep an independent service channel active after rekey one."""
+                secondary = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                secondary.settimeout(0.5)
+                try:
+                    secondary.connect(('127.0.0.1', service_port))
+                    secondary_ready.set()
+                    while not secondary_stop.is_set():
+                        payload = b'\x03'
+                        secondary.sendall(payload)
+                        received = bytearray()
+                        while len(received) < len(payload):
+                            chunk = secondary.recv(len(payload) - len(received))
+                            if not chunk:
+                                raise AssertionError('second TCP service channel closed')
+                            received.extend(chunk)
+                        if bytes(received) != response_payload(payload):
+                            raise AssertionError(f'second TCP service response mismatch: {bytes(received)!r}')
+                        secondary_exchanges[0] += 1
+                        secondary_stop.wait(0.025)
+                except Exception as exc:
+                    if not secondary_stop.is_set():
+                        secondary_errors.append(repr(exc))
+                    secondary_ready.set()
+                finally:
+                    secondary.close()
+                    secondary_done.set()
+
+            try:
+                while time.time() < deadline and rekeys_completed < 10:
+                    # The echo fixture transforms the first byte of every TCP
+                    # read.  A one-byte request keeps each exchange
+                    # deterministic even if TCP fragments the stream.
+                    payload = b'\x01'
+                    client.sendall(payload)
+                    assert receive_exact(len(payload)) == response_payload(payload)
+                    sequence += 1
+                    time.sleep(0.025)
+
+                    if time.monotonic() >= next_status_poll:
+                        _code, peers = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=1.0)
+                        secure = dict((first_active_secure_link_row(peers, transport='myudp').get('secure_link') or {}))
+                        rekeys_completed = int(secure.get('rekeys_completed_total') or 0)
+                        next_status_poll = time.monotonic() + 0.25
+
+                    if rekeys_completed >= 1 and secondary_thread is None:
+                        secondary_thread = threading.Thread(target=run_second_tcp_client, daemon=True)
+                        secondary_thread.start()
+                        assert secondary_ready.wait(4.0), 'second TCP service channel did not connect after first rekey'
+                    if secondary_errors:
+                        raise AssertionError(f'second TCP client failed during rekey traffic: {secondary_errors[0]}')
+            finally:
+                secondary_stop.set()
+                if secondary_thread is not None:
+                    secondary_thread.join(timeout=3.0)
+                client.close()
+
+            assert sequence >= 10, 'test did not sustain enough bidirectional TCP traffic'
+            assert secondary_thread is not None, 'test did not start the second TCP service channel after first rekey'
+            assert secondary_done.is_set(), 'second TCP service channel did not stop cleanly'
+            assert not secondary_errors, f'second TCP client failed during rekey traffic: {secondary_errors[0]}'
+            assert secondary_exchanges[0] >= 10, 'second TCP client did not sustain enough bidirectional traffic'
+            assert rekeys_completed >= 10, (
+                f'{client_runtime} MyUDP runtime completed {rekeys_completed} rekeys during {sequence} '
+                f'primary and {secondary_exchanges[0]} secondary bidirectional TCP exchanges; expected at least 10'
+            )
+            _code, peers = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=1.0)
+            secure = dict((first_active_secure_link_row(peers, transport='myudp').get('secure_link') or {}))
+            assert secure.get('last_event') == 'rekey_completed'
+            assert secure.get('last_rekey_trigger') == 'time_threshold'
+        finally:
+            if client_proc is not None and client_proc.popen.poll() is None:
+                os.killpg(client_proc.popen.pid, signal.SIGTERM)
+                assert client_proc.popen.wait(timeout=5.0) in (0, 143)
+            if server_proc is not None and server_proc.popen.poll() is None:
+                os.killpg(server_proc.popen.pid, signal.SIGTERM)
+                assert server_proc.popen.wait(timeout=5.0) in (0, 143)
+            bounce.stop()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 @pytest.mark.parametrize('overlay_transport', ['tcp', 'ws'])
 @pytest.mark.parametrize('service_protocol', ['tcp', 'udp'])
 def test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip(tmp_path: Path, service_protocol: str, overlay_transport: str) -> None:

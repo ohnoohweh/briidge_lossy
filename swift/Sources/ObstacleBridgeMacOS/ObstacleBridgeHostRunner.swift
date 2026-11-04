@@ -290,6 +290,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     private let loggingWorkerLock = NSLock()
     private var loggingWorker: ObstacleBridgeLogWorkerSupervisor?
     private var loggingWorkerConfigured = false
+    private var managedDiagnosticLog: ObstacleBridgeManagedLogFile?
     private var peerWorkerLogProducer: ObstacleBridgeLogProducer?
     private var proxyProviderLastError = ""
     private var macOSTunHelperClient: ObstacleBridgeTunHelperClienting?
@@ -636,6 +637,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     }
 
     func start() throws {
+        configureManagedDiagnosticLog()
         beginRuntimeHealthLifetime()
         try ensureControlServerStarted()
         prepareSharedOverlayBootstrap()
@@ -760,6 +762,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         } else {
             peerWorkerLogProducer?.emit(name: "macos.runtime", level: "INFO", levelNumber: 20, message: event)
         }
+        appendManagedDiagnosticLog(name: "macos.runtime", level: "INFO", message: event)
     }
 
     private func activeLoggingWorker() -> ObstacleBridgeLogWorkerSupervisor? {
@@ -777,6 +780,29 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         } else {
             NSLog("[ObstacleBridgeHostRunner][%@]", event)
         }
+        appendManagedDiagnosticLog(name: "macos.host", level: level, message: event)
+    }
+
+    /// The private collector remains an optional live Admin-log source.  The
+    /// configured file is independently owned by the native host so its
+    /// rollover policy is the same on macOS and Linux.
+    private func configureManagedDiagnosticLog() {
+        let section = runtimeConfigRaw["debug_logging"] as? [String: Any] ?? [:]
+        guard let path = Self.stringValue(from: section["log_file"] ?? runtimeConfigRaw["log_file"]), !path.isEmpty else {
+            managedDiagnosticLog = nil
+            return
+        }
+        let sink = ObstacleBridgeManagedLogFile(
+            url: URL(fileURLWithPath: path),
+            settings: .debugLogging(from: runtimeConfigRaw)
+        )
+        sink.prepareForStart()
+        managedDiagnosticLog = sink
+    }
+
+    private func appendManagedDiagnosticLog(name: String, level: String, message: String) {
+        let line = "\(ISO8601DateFormatter().string(from: Date())) [\(name)] [\(level)] \(message)\n"
+        managedDiagnosticLog?.append(Data(line.utf8))
     }
 
     private func stopLoggingWorker() {
@@ -3116,7 +3142,11 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
                         rekeyAfterSeconds: rekeyAfterSeconds
                     ),
                     retryBackoffInitialMS: retryBackoffInitialMS,
-                    retryBackoffMaxMS: retryBackoffMaxMS
+                    retryBackoffMaxMS: retryBackoffMaxMS,
+                    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue
+                    diagnosticSink: { [weak self] level, event, _ in
+                        self?.recordOperationalLog(event: event, level: level.name, levelNumber: level.rawValue)
+                    }
                 )
                 summary["secure_link_runtime"] = "ready"
                 summary["secure_link_rekey_after_frames"] = rekeyAfterFrames
@@ -3134,7 +3164,10 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
                     clientMode: settings.peerHost != nil
                 ),
                 transportDelayRotationThresholdMS: ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["channelmux_transport_delay_threshold_ms"]) ?? 5000.0,
-                transportDelayRotationGrace: (ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]) ?? 30000.0) / 1000.0
+                transportDelayRotationGrace: (ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]) ?? 30000.0) / 1000.0,
+                diagnosticSink: { [weak self] level, event, _ in
+                    self?.recordOperationalLog(event: event, level: level.name, levelNumber: level.rawValue)
+                }
             )
             summary["peer_address_protocol_runtime"] = "ready"
 

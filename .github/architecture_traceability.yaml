@@ -28,6 +28,8 @@ ARC-CMP-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_reassembles_reordered_reply
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delayed_reply
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_and_control_idle
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_myudp_python_tcp_service_survives_ten_rekeys_with_two_clients
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_worker_e2e_python_http_https_and_socks5
   unit_tests:
@@ -45,6 +47,7 @@ ARC-CMP-001:
     - tests/unit/test_connection_lifecycle.py::test_event_rejects_negative_epoch
     - tests/unit/test_connection_lifecycle.py::test_rotation_result_exposes_transport_policy_metadata
     - tests/unit/test_connection_lifecycle.py::test_myudp_emits_ordered_lifecycle_events_with_one_epoch
+    - tests/unit/test_connection_lifecycle.py::test_myudp_runtime_publishes_connected_immediately_after_valid_rtt
     - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
     - tests/unit/test_connection_lifecycle.py::test_listener_peer_without_completed_app_payload_has_bounded_deadline
     - tests/unit/test_stream_peer_rotation.py::test_stream_rotation_counts_completed_candidate_cycles_and_resets_on_outer_recovery
@@ -217,6 +220,8 @@ ARC-CMP-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_server_linux_native_client_myudp_basic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_native_python_myudp_window_pressure
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_myudp_python_tcp_service_survives_ten_rekeys_with_two_clients
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_udp_fragmentation_survives_text_mode
 
 ARC-CMP-003:
@@ -842,7 +847,7 @@ ARC-CMP-004:
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_prefers_local_ios_tun_hook_env
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_ignores_remote_tun_metadata
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
-    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::debugLoggingIsOptInFromTheGroupedConfiguration
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::channelMuxDebugLoggingIsOptInFromTheGroupedConfiguration
     # Also pins the first-eight-character build commit shown by Python, Linux, macOS, and iOS WebAdmin.
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_address_setup
@@ -934,9 +939,9 @@ ARC-CMP-005:
     # Telemetry navigation is omitted without an enabled client or collector;
     # each role's card is independently conditional.
     - tests/unit/test_admin_web_payloads.py::test_telemetry_tab_renders_client_and_collector_status
-    # TUN navigation requires enabled startup routing; certificate material
+    # TUN navigation follows the common Core API capability; certificate material
     # controls are omitted for PSK mode.
-    - tests/unit/test_admin_web_payloads.py::test_optional_tun_and_certificate_secure_link_tabs_follow_configuration
+    - tests/unit/test_admin_web_payloads.py::test_optional_tun_and_certificate_secure_link_tabs_follow_runtime_capability
     # The Proxy Worker lifecycle is available in the closed Proxy Technical details disclosure.
     - tests/unit/test_admin_web_payloads.py::test_proxy_page_renders_private_worker_lifecycle
     # Proxy observability keeps rates as plain fields and stacks listener cards.

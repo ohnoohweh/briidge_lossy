@@ -329,6 +329,7 @@ def test_native_packet_flow_bridge_source_exists() -> None:
 
 def test_ios_native_provider_log_reads_are_bounded_and_tail_chunked() -> None:
     provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    managed_log = (CORE_SWIFT_DIR / "ObstacleBridgeManagedLogFile.swift").read_text(encoding="utf-8")
 
     shared = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     assert "nativeProviderLogMaximumBytes = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogMaximumBytes" in provider
@@ -345,10 +346,29 @@ def test_ios_native_provider_log_reads_are_bounded_and_tail_chunked() -> None:
     assert "nativeProviderLogQueue.async" in provider
     assert "rotateNativeProviderLog(at: logURL" in provider
     assert "nativeProviderLogQueue.sync" in provider
+    assert "private var nativeProviderManagedLog: ObstacleBridgeManagedLogFile?" in provider
+    assert "configureNativeProviderManagedLog(providerConfiguration: providerConfiguration)" in provider
+    assert "managedLog.append(line)" in provider
+    assert "settings: .debugLogging(from: root)" in provider
+    assert "func prepareForStart()" in managed_log
+    assert 'appendingPathExtension("lastsession")' in managed_log
+    assert "func append(_ data: Data)" in managed_log
     assert "FileHandle(forReadingFrom: url)" in provider
     assert "handle.readData(ofLength: count)" in provider
     assert "older native provider diagnostic lines omitted" in provider
     assert "String(contentsOf: url, encoding: .utf8)" not in provider
+
+
+def test_linux_tun_failure_keeps_authenticated_overlay_available() -> None:
+    runtime = (ROOT / "swift" / "Sources" / "ObstacleBridgeLinux" / "Adapters" / "ObstacleBridgeLinuxLiveRuntime.swift").read_text(encoding="utf-8")
+
+    assert "Packet TUN setup is a facility layered on an already authenticated" in runtime
+    assert "_ = startPacketDeviceIfNeeded()" in runtime
+    assert 'emitDiagnostic("packet_tunnel.start_failed", fields: fields, level: .warning)' in runtime
+    assert 'fields["errno_name"] = "EBUSY"' in runtime
+    assert 'fields["hint"] = "the configured interface is already owned; stop the other TUN owner or select a distinct ifname"' in runtime
+    assert '"last_error": lastTunError ?? ""' in runtime
+    assert '"degraded": configured.packetTunnelEnabled && !packetTunnelActive' in runtime
 
 
 def test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence() -> None:
@@ -1158,6 +1178,7 @@ def test_macos_app_main_source_exists() -> None:
     assert "ObstacleBridge.app" in build_script
     assert "ObstacleBridgeMacAppMain.swift" in build_script
     assert "ObstacleBridgeMacOSTunAdapter.swift" in build_script
+    assert build_script.count("ObstacleBridgeManagedLogFile.swift") == 2
     assert "ObstacleBridgeTunHelperContract.swift" in build_script
     assert "ObstacleBridgeTunHelperProtocolV1.swift" in build_script
     assert "ObstacleBridgeMacOSTunHelperClient.swift" in build_script
@@ -1703,6 +1724,10 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
     assert "ObstacleBridgeOverlayBootstrapSettings" in provider
     assert "ObstacleBridgeCompressLayerRuntime" in provider
     assert "ObstacleBridgeSecureLinkPskRuntime" in provider
+    assert "diagnosticSink: { [weak self] level, event, fields in" in provider
+    assert 'fields.merging(["log_level": level.name])' in provider
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics" in provider
+    assert "ObstacleBridgePeerAddressProtocolRuntime" in provider
     assert "ObstacleBridgeWebSocketOverlayRuntime" in provider
     assert "ObstacleBridgeTcpOverlayRuntime" in provider
     assert "shared_overlay_runtime_prepared" in provider

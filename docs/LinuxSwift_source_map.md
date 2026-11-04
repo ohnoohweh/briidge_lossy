@@ -89,10 +89,10 @@ Python-compatible byte protocol exercised by the wire corpus. Catalog
 incompatibility is therefore not the cause of the current native/Python myUDP
 pressure failure.
 
-For investigation of native failures, `debug_logging.debug_enabled: true`
+For investigation of native failures, `channel_mux.log_channel_mux: DEBUG`
 enables bounded, payload-free Linux Swift diagnostics in the configured local
-log and `/api/debug/logs`. Disabled is the default; hot paths only construct
-debug fields after the opt-in guard. The diagnostics include transport/receive
+log and `/api/debug/logs`. Other component levels leave these high-rate traces
+disabled, so hot paths only construct debug fields after the opt-in guard. The diagnostics include transport/receive
 failure causes, ChannelMux message metadata and byte counts, and SecureLink
 protected-record/rekey state transitions. They intentionally exclude packet
 contents, PSKs, nonces, and derived key material.

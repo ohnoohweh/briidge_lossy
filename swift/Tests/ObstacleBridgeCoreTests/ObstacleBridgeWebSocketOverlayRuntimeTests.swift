@@ -34,6 +34,50 @@ struct ObstacleBridgeWebSocketOverlayRuntimeTests {
         #expect(client.protocolState?.sessionID == 91)
     }
 
+    @Test func secureLinkDiagnosticsClassifyRekeyAndTransportFailure() throws {
+        var events: [(ObstacleBridgeRuntimeDiagnosticLevel, String)] = []
+        let client = ObstacleBridgeSecureLinkPskTransportAdapter(clientPSK: "adapter-psk") { level, event, _ in
+            events.append((level, event))
+        }
+        let server = ObstacleBridgeSecureLinkPskRuntime(clientMode: false, psk: "adapter-psk")
+        let hello = try client.handleTransportConnected(sessionID: 94, clientNonce: Data(repeating: 4, count: 32))
+        let serverHello = server.handleInboundFrame(hello.emittedFrames[0])
+        let proof = client.handleInboundFrame(serverHello.emittedFrames[0])
+        let acknowledgement = server.handleInboundFrame(proof.emittedFrames[0])
+        _ = client.handleInboundFrame(acknowledgement.emittedFrames[0])
+
+        let rekey = try client.requestSecureLinkRekey(sessionID: 95, clientNonce: Data(repeating: 5, count: 32))
+        let reply = server.handleInboundFrame(rekey.emittedFrames[0])
+        let commit = client.handleInboundFrame(reply.emittedFrames[0])
+        let done = server.handleInboundFrame(commit.emittedFrames[0])
+        _ = client.handleInboundFrame(done.emittedFrames[0])
+        client.handleTransportDisconnected()
+
+        #expect(events.contains { $0.0 == .info && $0.1 == "secure_link_rekey_started" })
+        #expect(events.contains { $0.0 == .info && $0.1 == "secure_link_rekey_completed" })
+        #expect(events.contains { $0.0 == .debug && $0.1 == "secure_link_frame_received" })
+        #expect(events.contains { $0.0 == .warning && $0.1 == "secure_link_transport_disconnected" })
+    }
+
+    @Test func secureLinkTimeThresholdProducesAnAutomaticRekeyFrame() throws {
+        var now: TimeInterval = 0
+        let client = ObstacleBridgeSecureLinkPskTransportAdapter(
+            runtime: .init(clientMode: true, psk: "adapter-psk", rekeyAfterSeconds: 60, timeProvider: { now }),
+            timeProvider: { now }
+        )
+        let server = ObstacleBridgeSecureLinkPskRuntime(clientMode: false, psk: "adapter-psk", timeProvider: { now })
+        let hello = try client.handleTransportConnected(sessionID: 96, clientNonce: Data(repeating: 6, count: 32))
+        let serverHello = server.handleInboundFrame(hello.emittedFrames[0])
+        let proof = client.handleInboundFrame(serverHello.emittedFrames[0])
+        let acknowledgement = server.handleInboundFrame(proof.emittedFrames[0])
+        _ = client.handleInboundFrame(acknowledgement.emittedFrames[0])
+
+        now = 60
+        let due = try client.pollDueFrames()
+        #expect(due.emittedFrames.count == 1)
+        #expect(ObstacleBridgeSecureLinkPskCodec.parseFrame(due.emittedFrames[0])?.slType == 5)
+    }
+
     @Test func clientLayerAdapterRequestsAndProjectsObservedPublicEndpoint() throws {
         let client = ObstacleBridgeOverlayLayerTransportAdapter(clientPSK: "adapter-psk")
         let started = try client.handleTransportConnected(

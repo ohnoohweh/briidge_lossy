@@ -593,7 +593,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("syncTelemetryTabVisibility();", app_js)
         self.assertIn("telemetry.collector", app_js)
 
-    def test_optional_tun_and_certificate_secure_link_tabs_follow_configuration(self):
+    def test_optional_tun_and_certificate_secure_link_tabs_follow_runtime_capability(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
         index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
         app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
@@ -602,15 +602,16 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn('id="tab-tun-routing" class="tab-panel hidden"', index_html)
         self.assertIn('class="nav-tab hidden" data-tab="secure-link"', index_html)
         self.assertIn('id="tab-secure-link" class="tab-panel hidden"', index_html)
-        self.assertIn("function tunRoutingConfigEnabled()", app_js)
-        self.assertIn("cfg.enabled_on_startup ?? root.enabled_on_startup", app_js)
-        self.assertIn("function syncTunRoutingTabVisibility()", app_js)
+        self.assertIn("function tunRoutingAPIAvailable(payload)", app_js)
+        self.assertIn("api?.name === 'tun-routing' && api?.version === 1 && api?.available === true", app_js)
+        self.assertIn("function syncTunRoutingTabVisibility(payload)", app_js)
         self.assertIn("if (!enabled && isTabActive('tun-routing')) setActiveTab('status');", app_js)
         self.assertIn("function secureLinkCertificateModeEnabled()", app_js)
         self.assertIn("return mode === 'cert' || mode === 'certificate';", app_js)
         self.assertIn("function syncSecureLinkTabVisibility()", app_js)
         self.assertIn("if (!enabled && isTabActive('secure-link')) setActiveTab('status');", app_js)
-        self.assertIn("syncTunRoutingTabVisibility();", app_js)
+        self.assertIn("syncTunRoutingTabVisibility(j);", app_js)
+        self.assertIn("syncTunRoutingTabVisibility(null);", app_js)
         self.assertIn("syncSecureLinkTabVisibility();", app_js)
 
     @staticmethod
