@@ -612,6 +612,25 @@ route_matches_underlay_v6() {
     [[ -n "$expected_if" && "$current_if" == "$expected_if" ]]
 }
 
+# An exclusion already selected by a non-default route is more specific than
+# the /1 full-tunnel routes. Leave it under the ownership of macOS or the
+# operator; only exclusions added by this hook are eligible for teardown.
+route_has_nondefault_v4() {
+  local route_spec="$1"
+  local probe destination
+  probe="$(route_spec_probe_host "$route_spec")"
+  destination="$(route -n get "$probe" 2>/dev/null | awk '/destination:/{print $2; exit}')"
+  [[ -n "$destination" && "$destination" != "default" ]]
+}
+
+route_has_nondefault_v6() {
+  local route_spec="$1"
+  local probe destination
+  probe="$(route_spec_probe_host "$route_spec")"
+  destination="$(route -n get -inet6 "$probe" 2>/dev/null | awk '/destination:/{print $2; exit}')"
+  [[ -n "$destination" && "$destination" != "default" ]]
+}
+
 enforce_overlay_peer_underlay_v4() {
   local expected_gw="$1"
   local expected_if="${2:-}"
@@ -624,6 +643,10 @@ enforce_overlay_peer_underlay_v4() {
     return 0
   fi
   local route_spec="${normalized_ip}/32"
+  if route_has_nondefault_v4 "$route_spec"; then
+    log_debug "preserve existing overlay peer route peer=${normalized_ip}"
+    return 0
+  fi
   local attempt
   for attempt in 1 2 3; do
     route_add_or_change_v4 "$route_spec" "$expected_gw" "$expected_if"
@@ -684,7 +707,7 @@ snapshot_excluded_routes_v4() {
   local fallback_gw="${1:-}"
   local fallback_if="${2:-}"
   : > "$STATE_EXCLUDED4"
-  local route_spec probe gateway ifname
+  local route_spec probe gateway ifname had_nondefault_route
   while IFS= read -r route_spec; do
     [[ -z "$route_spec" ]] && continue
     if is_loopback_route_v4 "$route_spec"; then
@@ -694,6 +717,10 @@ snapshot_excluded_routes_v4() {
     probe="$(route_spec_probe_host "$route_spec")"
     gateway="$(route -n get "$probe" 2>/dev/null | awk '/gateway:/{print $2; exit}')"
     ifname="$(route -n get "$probe" 2>/dev/null | awk '/interface:/{print $2; exit}')"
+    had_nondefault_route=0
+    if route_has_nondefault_v4 "$route_spec"; then
+      had_nondefault_route=1
+    fi
     if is_overlay_peer_route_v4 "$route_spec" && [[ -n "$fallback_gw" || -n "$fallback_if" ]]; then
       gateway="$fallback_gw"
       ifname="$fallback_if"
@@ -701,7 +728,7 @@ snapshot_excluded_routes_v4() {
       gateway="$fallback_gw"
       ifname="$fallback_if"
     fi
-    printf '%s|%s|%s\n' "$route_spec" "$gateway" "$ifname" >> "$STATE_EXCLUDED4"
+    printf '%s|%s|%s|%s\n' "$route_spec" "$gateway" "$ifname" "$had_nondefault_route" >> "$STATE_EXCLUDED4"
   done < <(csv_to_lines "$EXCLUDED_ROUTES")
 }
 
@@ -709,7 +736,7 @@ snapshot_excluded_routes_v6() {
   local fallback_gw="${1:-}"
   local fallback_if="${2:-}"
   : > "$STATE_EXCLUDED6"
-  local route_spec probe gateway ifname
+  local route_spec probe gateway ifname had_nondefault_route
   while IFS= read -r route_spec; do
     [[ -z "$route_spec" ]] && continue
     if is_loopback_route_v6 "$route_spec"; then
@@ -719,6 +746,10 @@ snapshot_excluded_routes_v6() {
     probe="$(route_spec_probe_host "$route_spec")"
     gateway="$(route -n get -inet6 "$probe" 2>/dev/null | awk '/gateway:/{print $2; exit}')"
     ifname="$(route -n get -inet6 "$probe" 2>/dev/null | awk '/interface:/{print $2; exit}')"
+    had_nondefault_route=0
+    if route_has_nondefault_v6 "$route_spec"; then
+      had_nondefault_route=1
+    fi
     if is_overlay_peer_mapped_route_v6 "$route_spec" && [[ -n "$OVERLAY_UNDERLAY_IF" ]]; then
       gateway=""
       ifname="$OVERLAY_UNDERLAY_IF"
@@ -728,7 +759,7 @@ snapshot_excluded_routes_v6() {
     elif [[ -z "$gateway" && -z "$ifname" && -n "$OVERLAY_UNDERLAY_IF" ]] && is_ipv4_mapped_host_route_v6 "$route_spec"; then
       ifname="$OVERLAY_UNDERLAY_IF"
     fi
-    printf '%s|%s|%s\n' "$route_spec" "$gateway" "$ifname" >> "$STATE_EXCLUDED6"
+    printf '%s|%s|%s|%s\n' "$route_spec" "$gateway" "$ifname" "$had_nondefault_route" >> "$STATE_EXCLUDED6"
   done < <(csv_to_lines "$EXCLUDED_ROUTES6")
 }
 
@@ -738,9 +769,10 @@ add_excluded_routes_v4() {
   fi
   local fallback_gw="${1:-}"
   local fallback_if="${2:-}"
-  local route_spec underlay_gw underlay_if
-  while IFS='|' read -r route_spec underlay_gw underlay_if; do
+  local route_spec underlay_gw underlay_if had_nondefault_route
+  while IFS='|' read -r route_spec underlay_gw underlay_if had_nondefault_route; do
     [[ -z "$route_spec" ]] && continue
+    [[ "$had_nondefault_route" == "1" ]] && continue
     if is_overlay_peer_route_v4 "$route_spec" && [[ -n "$fallback_gw" || -n "$fallback_if" ]]; then
       underlay_gw="$fallback_gw"
       underlay_if="$fallback_if"
@@ -763,9 +795,10 @@ add_excluded_routes_v6() {
   fi
   local fallback_gw="${1:-}"
   local fallback_if="${2:-}"
-  local route_spec underlay_gw underlay_if
-  while IFS='|' read -r route_spec underlay_gw underlay_if; do
+  local route_spec underlay_gw underlay_if had_nondefault_route
+  while IFS='|' read -r route_spec underlay_gw underlay_if had_nondefault_route; do
     [[ -z "$route_spec" ]] && continue
+    [[ "$had_nondefault_route" == "1" ]] && continue
     if is_overlay_peer_mapped_route_v6 "$route_spec" && [[ -n "$OVERLAY_UNDERLAY_IF" ]]; then
       underlay_gw=""
       underlay_if="$OVERLAY_UNDERLAY_IF"
@@ -793,8 +826,11 @@ delete_included_routes_v4() {
 
 delete_excluded_routes_v4() {
   if [[ -s "$STATE_EXCLUDED4" ]]; then
-    while IFS='|' read -r route_spec _underlay_gw _underlay_if; do
+    while IFS='|' read -r route_spec _underlay_gw _underlay_if had_nondefault_route; do
       [[ -z "$route_spec" ]] && continue
+      # State written before ownership tracking has no fourth field.  Treat
+      # that as unknown rather than deleting a route that may predate us.
+      [[ "$had_nondefault_route" != "0" ]] && continue
       route_delete_v4 "$route_spec"
     done < "$STATE_EXCLUDED4"
   fi
@@ -802,8 +838,11 @@ delete_excluded_routes_v4() {
 
 delete_excluded_routes_v6() {
   if [[ -s "$STATE_EXCLUDED6" ]]; then
-    while IFS='|' read -r route_spec _underlay_gw _underlay_if; do
+    while IFS='|' read -r route_spec _underlay_gw _underlay_if had_nondefault_route; do
       [[ -z "$route_spec" ]] && continue
+      # State written before ownership tracking has no fourth field.  Treat
+      # that as unknown rather than deleting a route that may predate us.
+      [[ "$had_nondefault_route" != "0" ]] && continue
       route_delete_v6 "$route_spec"
     done < "$STATE_EXCLUDED6"
   fi
@@ -839,8 +878,11 @@ delete_included_routes_v6_from_file() {
 delete_excluded_routes_v4_from_file() {
   local file="$1"
   [[ -s "$file" ]] || return 0
-  while IFS='|' read -r route_spec _underlay_gw _underlay_if; do
+  while IFS='|' read -r route_spec _underlay_gw _underlay_if had_nondefault_route; do
     [[ -z "$route_spec" ]] && continue
+    # State written before ownership tracking has no fourth field.  Treat
+    # that as unknown rather than deleting a route that may predate us.
+    [[ "$had_nondefault_route" != "0" ]] && continue
     route_delete_v4 "$route_spec"
   done < "$file"
 }
@@ -848,8 +890,11 @@ delete_excluded_routes_v4_from_file() {
 delete_excluded_routes_v6_from_file() {
   local file="$1"
   [[ -s "$file" ]] || return 0
-  while IFS='|' read -r route_spec _underlay_gw _underlay_if; do
+  while IFS='|' read -r route_spec _underlay_gw _underlay_if had_nondefault_route; do
     [[ -z "$route_spec" ]] && continue
+    # State written before ownership tracking has no fourth field.  Treat
+    # that as unknown rather than deleting a route that may predate us.
+    [[ "$had_nondefault_route" != "0" ]] && continue
     route_delete_v6 "$route_spec"
   done < "$file"
 }
@@ -1063,12 +1108,10 @@ case "$ACTION" in
     add_excluded_routes_v6 "$local_underlay_gw6" "$local_underlay_if6"
 
     normalized_overlay_peer_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
-    if [[ "$normalized_overlay_peer_ip" == *.* && "$normalized_overlay_peer_ip" != *:* && -n "$local_underlay_gw" ]] && ! is_loopback_host_v4 "$normalized_overlay_peer_ip"; then
-      route_add_or_change_v4 "${normalized_overlay_peer_ip}/32" "$local_underlay_gw" "$local_underlay_if"
-    elif [[ "$normalized_overlay_peer_ip" == *.* && "$normalized_overlay_peer_ip" != *:* ]]; then
+    if [[ "$normalized_overlay_peer_ip" == *.* && "$normalized_overlay_peer_ip" != *:* ]]; then
       if is_loopback_host_v4 "$normalized_overlay_peer_ip"; then
         log "skip direct overlay peer route protect for loopback peer ${normalized_overlay_peer_ip}"
-      else
+      elif ! route_has_nondefault_v4 "${normalized_overlay_peer_ip}/32"; then
         log "skip direct overlay peer route protect: no IPv4 underlay route is available for peer ${normalized_overlay_peer_ip}"
       fi
     fi
@@ -1117,9 +1160,6 @@ case "$ACTION" in
     log "bringing down $IFNAME"
     log_route_snapshot "before-down"
     restore_dns_state
-    if [[ -n "$OVERLAY_PEER_IP" ]]; then
-      route -n delete -host "$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")" >/dev/null 2>&1 || true
-    fi
     cleanup_stale_managed_routes
     remove_tunnel_local_routes
     restore_default_routes

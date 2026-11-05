@@ -248,6 +248,8 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'skip direct overlay peer route protect: no IPv4 underlay route is available for peer ${normalized_overlay_peer_ip}' in script
     assert 'route_add_or_change_v4() {' in script
     assert 'route_add_or_change_v6() {' in script
+    assert 'route_has_nondefault_v4() {' in script
+    assert 'route_has_nondefault_v6() {' in script
     assert 'overlay_peer_route_matches_underlay_v4() {' in script
     assert 'enforce_overlay_peer_underlay_v4() {' in script
     assert 'unable to preserve IPv4 overlay peer route; retaining scoped included routes on $IFNAME' in script
@@ -264,9 +266,11 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'local fallback_gw="${1:-}"' in script
     assert 'if [[ -z "$gateway" && -z "$ifname" && -n "$fallback_gw" ]] && is_host_route_v4 "$route_spec"; then' in script
     assert 'if [[ -z "$underlay_gw" && -z "$underlay_if" ]] && is_host_route_v4 "$route_spec"; then' in script
-    assert "while IFS='|' read -r route_spec _underlay_gw _underlay_if; do" in script
+    assert "while IFS='|' read -r route_spec _underlay_gw _underlay_if had_nondefault_route; do" in script
     assert 'route -n get -inet6 "$probe"' in script
-    assert "while IFS='|' read -r route_spec underlay_gw underlay_if; do" in script
+    assert "while IFS='|' read -r route_spec underlay_gw underlay_if had_nondefault_route; do" in script
+    assert '[[ "$had_nondefault_route" == "1" ]] && continue' in script
+    assert '[[ "$had_nondefault_route" != "0" ]] && continue' in script
     assert 'add_excluded_routes_v4' in script
     assert 'add_excluded_routes_v6' in script
     assert 'normalize_overlay_peer_ip() {' in script
@@ -321,7 +325,8 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'enforce_overlay_peer_underlay_v4 "$local_underlay_gw" "$local_underlay_if" || true' in script
     up_block = script[script.index('  up)') : script.index('  down)')]
     assert up_block.index('add_excluded_routes_v4 "$local_underlay_gw" "$local_underlay_if"') < up_block.index('add_included_routes_v4')
-    assert 'route_add_or_change_v4 "${normalized_overlay_peer_ip}/32" "$local_underlay_gw" "$local_underlay_if"' in script
+    assert 'if route_has_nondefault_v4 "$route_spec"; then' in script
+    assert 'preserve existing overlay peer route peer=${normalized_ip}' in script
     assert 'add_excluded_routes_v4' in script
     assert 'add_excluded_routes_v6' in script
 

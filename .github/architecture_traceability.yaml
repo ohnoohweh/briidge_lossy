@@ -469,6 +469,8 @@ ARC-CMP-004:
   # The Python Linux native-helper TUN descriptor is likewise event-loop
   # readiness-owned and drains bounded FIFO packet batches between awaits; the
   # Python macOS utun helper uses the same asyncio readiness-owned FIFO model.
+  # Its shared Darwin hook tracks exclusion-route ownership so the Python
+  # helper and Swift HostRunner preserve pre-existing routes at teardown.
   # Native peer-worker evidence includes bounded private-descriptor admission;
   # Linux executable qualification remains a CI-host responsibility.
   # Desktop process evidence covers delivered component-specific worker slices.
