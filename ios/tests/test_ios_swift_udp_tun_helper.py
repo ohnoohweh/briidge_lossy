@@ -163,15 +163,13 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
                         guard frame.ptype == ObstacleBridgeUdpOverlayCodec.ptypeData else {
                             continue
                         }
-                        guard let snapshot = overlayRuntime.handleInboundDataFrame(
+                        let snapshot = try overlayRuntime.handleInboundDataFrame(
                             frame: datagram,
                             nowNS: nowNS,
                             txNS: frame.txNS,
                             echoNS: frame.echoNS,
                             sendPortPresent: true
-                        ) else {
-                            throw ProbeError.badState("failed to process inbound overlay data")
-                        }
+                        )
                         for payload in snapshot.completedPayloads {
                             guard let muxFrame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
                                 throw ProbeError.badState("failed to unpack inbound mux payload")
