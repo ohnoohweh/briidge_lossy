@@ -187,6 +187,7 @@ public final class ObstacleBridgeLinuxMyUDPListener {
             ])
             // Match the Python UDP listener: reject this datagram without
             // treating it as a transport failure for the peer endpoint.
+            // OBSTACLEBRIDGE-CONCURRENCY: lock; test=myudpListenerReportsMalformedInboundDatagramAtWarning
             return nil
         }
         try execute(effect, endpoint: endpoint, descriptor: fd)
