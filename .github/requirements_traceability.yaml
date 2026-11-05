@@ -361,6 +361,7 @@ REQ-AUT-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_rekey_is_rejected
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_psk_rekey_rotates_session_id_and_keeps_data_flowing
+    - tests/unit/test_secure_link_psk.py::test_client_accepts_one_delayed_previous_generation_frame_after_rekey
     - tests/unit/test_secure_link_psk.py::test_rekey_retries_dropped_hello_reply_and_commit_idempotently
     - tests/unit/test_secure_link_psk.py::test_data_counter_zero_is_rejected_as_lifecycle_violation
     - tests/unit/test_secure_link_psk.py::test_counter_exhaustion_fails_closed_before_nonce_wrap
@@ -371,8 +372,8 @@ REQ-AUT-006:
     - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_each_protocol_leg_without_payload_material
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerSerializesConcurrentProtectedSends
     # Covers portable hello/reply/commit/done cutover, idempotent cached
-    # commit/done retransmission, client send hold, counter reset, and
-    # old-session rejection.
+    # commit/done retransmission, client send hold, counter reset, and one
+    # session-ID-bound prior-generation frame with independent replay state.
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskCounterPolicyRejectsReservedZeroAfterExhaustion
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskTransportEpochResetDropsOldGenerationAndStartsFreshCounters

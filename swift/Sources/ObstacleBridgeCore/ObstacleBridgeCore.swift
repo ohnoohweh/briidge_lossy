@@ -443,6 +443,15 @@ public final class ObstacleBridgeSecureLinkPSKClient {
     private var pendingCommit = Data()
     private var pendingCommitSent = false
     private var pendingRekeyStartedAt: TimeInterval?
+    // Retain precisely one prior inbound generation after REKEY_DONE.  UDP
+    // can reorder an already-authenticated old-generation DATA frame behind
+    // the cutover control packet; session ID and a separate replay counter
+    // prevent this bounded grace period from becoming a key fallback.
+    private let rekeyOverlap: TimeInterval
+    private var drainingSessionID: UInt64 = 0
+    private var drainingS2CKey = Data()
+    private var drainingRxCounter: UInt64 = 0
+    private var drainingUntil: TimeInterval?
 
     public var isAuthenticated: Bool {
         stateLock.lock(); defer { stateLock.unlock() }
@@ -470,6 +479,7 @@ public final class ObstacleBridgeSecureLinkPSKClient {
     public init(
         psk: Data,
         handshakeTimeout: TimeInterval = 60.0,
+        rekeyOverlap: TimeInterval = 5.0,
         timeProvider: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         rekeyPolicy: ObstacleBridgeSecureLinkPSKRekeyPolicy = .init(),
         sessionIDProvider: @escaping () -> UInt64 = { UInt64.random(in: UInt64.min...UInt64.max) },
@@ -478,6 +488,7 @@ public final class ObstacleBridgeSecureLinkPSKClient {
         guard !psk.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidPSK }
         self.psk = psk
         self.handshakeTimeout = max(0, handshakeTimeout)
+        self.rekeyOverlap = max(0, rekeyOverlap)
         self.timeProvider = timeProvider
         self.rekeyPolicy = rekeyPolicy
         self.sessionIDProvider = sessionIDProvider
@@ -498,6 +509,7 @@ public final class ObstacleBridgeSecureLinkPSKClient {
         self.authenticatedAt = nil
         self.protectedDataFramesSent = 0
         clearPendingRekey()
+        clearDrainingGeneration()
         return ObstacleBridgeSecureLinkFrameCodec.encode(type: ObstacleBridgeSecureLinkPSKFrameType.clientHello, sessionID: sessionID, counter: 0, payload: clientNonce + Data([ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1, 0]))
     }
 
@@ -605,6 +617,10 @@ public final class ObstacleBridgeSecureLinkPSKClient {
               pendingS2CKey.count == 32 else {
             throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame
         }
+        drainingSessionID = sessionID
+        drainingS2CKey = s2cKey
+        drainingRxCounter = rxCounter
+        drainingUntil = rekeyOverlap > 0 ? timeProvider() + rekeyOverlap : nil
         sessionID = pendingSessionID
         clientNonce = pendingClientNonce
         c2sKey = pendingC2SKey
@@ -687,21 +703,36 @@ public final class ObstacleBridgeSecureLinkPSKClient {
         try expireHandshakeIfNeeded()
         guard !requireAuthenticated || authenticated else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
         let parsed = try parse(wire)
-        guard parsed.type == ObstacleBridgeSecureLinkPSKFrameType.authenticatedData, parsed.sessionID == sessionID, parsed.counter > rxCounter, s2cKey.count == 32 else {
-            throw parsed.counter <= rxCounter ? ObstacleBridgeSecureLinkPSKClientError.replayedFrame : ObstacleBridgeSecureLinkPSKClientError.invalidFrame
+        guard parsed.type == ObstacleBridgeSecureLinkPSKFrameType.authenticatedData else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
+        let inboundKey: Data
+        let priorGeneration: Bool
+        if parsed.sessionID == sessionID {
+            guard parsed.counter > rxCounter, s2cKey.count == 32 else {
+                throw parsed.counter <= rxCounter ? ObstacleBridgeSecureLinkPSKClientError.replayedFrame : ObstacleBridgeSecureLinkPSKClientError.invalidFrame
+            }
+            inboundKey = s2cKey
+            priorGeneration = false
+        } else {
+            guard parsed.sessionID == drainingSessionID,
+                  drainingUntil.map({ timeProvider() <= $0 }) ?? false,
+                  parsed.counter > drainingRxCounter, drainingS2CKey.count == 32 else {
+                throw parsed.counter <= drainingRxCounter ? ObstacleBridgeSecureLinkPSKClientError.replayedFrame : ObstacleBridgeSecureLinkPSKClientError.invalidFrame
+            }
+            inboundKey = drainingS2CKey
+            priorGeneration = true
         }
         let plaintext: Data
         do {
             plaintext = try ObstacleBridgeCrypto.chaChaPolyOpen(
                 ciphertextAndTag: parsed.payload,
-                key: s2cKey,
+                key: inboundKey,
                 nonce: nonce(counter: parsed.counter),
                 authenticatedData: parsed.header
             )
         } catch {
             throw ObstacleBridgeSecureLinkPSKClientError.authenticationFailed
         }
-        rxCounter = parsed.counter
+        if priorGeneration { drainingRxCounter = parsed.counter } else { rxCounter = parsed.counter }
         if requireAuthenticated { protectedFramesReceivedTotal &+= 1 }
         return plaintext
     }
@@ -729,6 +760,7 @@ public final class ObstacleBridgeSecureLinkPSKClient {
         s2cKey = Data()
         rxCounter = 0
         clearPendingRekey()
+        clearDrainingGeneration()
         throw ObstacleBridgeSecureLinkPSKClientError.handshakeTimedOut
     }
 
@@ -751,6 +783,7 @@ public final class ObstacleBridgeSecureLinkPSKClient {
         authenticatedGenerationsTotal = 0
         rekeysCompletedTotal = 0
         clearPendingRekey()
+        clearDrainingGeneration()
     }
 
     private func clearPendingRekey() {
@@ -762,6 +795,13 @@ public final class ObstacleBridgeSecureLinkPSKClient {
         pendingCommit = Data()
         pendingCommitSent = false
         pendingRekeyStartedAt = nil
+    }
+
+    private func clearDrainingGeneration() {
+        drainingSessionID = 0
+        drainingS2CKey = Data()
+        drainingRxCounter = 0
+        drainingUntil = nil
     }
 
     private func nextAutomaticSessionID() throws -> UInt64 {

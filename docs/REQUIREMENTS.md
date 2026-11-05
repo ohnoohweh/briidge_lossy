@@ -333,8 +333,10 @@ Current implementation note:
   Implementation note: the portable Core PSK peers own the complete explicit
   rekey hello/reply/commit/done transition. They authenticate pending key
   material before serialized cutover, reset each new directional counter to
-  `1`, reject protected frames carrying the replaced session identifier, and
-  fail closed when the injected pending-rekey deadline expires. A listener
+  `1`, retain exactly one replaced inbound generation for a bounded overlap
+  interval using its session identifier and independent replay counter, reject
+  every other or expired replaced-session frame, and fail closed when the
+  injected pending-rekey deadline expires. A listener
   retransmission of the same rekey hello retains its original deadline. A
   client holds application sends after its authenticated rekey commit until
   the matching done frame authorizes cutover, and a duplicate authenticated

@@ -215,6 +215,10 @@ class _SecureLinkPeerState:
     pending_rekey_retry_attempts: int = 0
     pending_rekey_retry_unix_ts: Optional[float] = None
     pending_rekey_reply_frame: bytes = b""
+    draining_session_id: int = 0
+    draining_inbound_key: Optional[bytes] = None
+    draining_rx_counter: int = 0
+    draining_until_unix_ts: Optional[float] = None
     completed_rekey_session_id: int = 0
     completed_rekey_done_frame: bytes = b""
     auth_fail_code: int = 0
@@ -294,6 +298,7 @@ class SecureLinkPskSession(ISession):
     _REKEY_CONTROL_RETRY_INITIAL_S = 0.5
     _REKEY_CONTROL_RETRY_MAX_S = 8.0
     _REKEY_CONTROL_RETRY_MAX_ATTEMPTS = 5
+    _REKEY_PREVIOUS_GENERATION_OVERLAP_S = 5.0
 
     def __getattr__(self, name: str):
         """Keep transport diagnostics available through this transparent wrapper."""
@@ -987,6 +992,7 @@ class SecureLinkPskSession(ISession):
         state.rx_counter = 0
         state.local_ephemeral_private = None
         self._clear_pending_rekey(state)
+        self._clear_draining_generation(state)
         self._clear_client_rekey_app_queue()
         state.auth_fail_code = int(code or 0)
         state.auth_fail_reason = str(self._auth_fail_reason(code) or "")
@@ -1601,6 +1607,13 @@ class SecureLinkPskSession(ISession):
         state.pending_rekey_retry_unix_ts = None
         state.pending_rekey_reply_frame = b""
 
+    @staticmethod
+    def _clear_draining_generation(state: _SecureLinkPeerState) -> None:
+        state.draining_session_id = 0
+        state.draining_inbound_key = None
+        state.draining_rx_counter = 0
+        state.draining_until_unix_ts = None
+
     def _track_pending_rekey_control(
         self,
         state: _SecureLinkPeerState,
@@ -1647,6 +1660,19 @@ class SecureLinkPskSession(ISession):
     def _promote_pending_rekey(self, state: _SecureLinkPeerState) -> bool:
         if int(state.pending_session_id or 0) <= 0:
             return False
+        # UDP may reorder one authenticated active-generation DATA frame
+        # behind the commit/done cutover. Keep only that inbound generation,
+        # its session ID, and an independent replay counter for a short,
+        # bounded grace period; no arbitrary historical key is ever tried.
+        if int(state.session_id or 0) > 0:
+            state.draining_session_id = int(state.session_id)
+            state.draining_inbound_key = (
+                bytes(state.s2c_key or b"") if self._client_mode else bytes(state.c2s_key or b"")
+            ) or None
+            state.draining_rx_counter = int(state.rx_counter or 0)
+            state.draining_until_unix_ts = time.time() + self._REKEY_PREVIOUS_GENERATION_OVERLAP_S
+        else:
+            self._clear_draining_generation(state)
         state.session_id = int(state.pending_session_id)
         state.client_nonce = bytes(state.pending_client_nonce or b"")
         state.server_nonce = bytes(state.pending_server_nonce or b"")
@@ -3399,16 +3425,28 @@ class SecureLinkPskSession(ISession):
     def _handle_data(self, peer_id: Optional[int], session_id: int, counter: int, body: bytes, aad: bytes) -> None:
         key = self._peer_key(peer_id)
         state = self._peer_states.get(key)
-        if state is None or int(state.session_id) != int(session_id):
+        if state is None:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         if int(session_id or 0) <= 0 or int(counter or 0) < self._SL_FIRST_DATA_COUNTER or int(counter) > self._SL_MAX_DATA_COUNTER:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
             return
-        if counter <= int(state.rx_counter):
+        active_generation = int(state.session_id or 0) == int(session_id or 0)
+        prior_generation = (
+            int(state.draining_session_id or 0) == int(session_id or 0)
+            and state.draining_until_unix_ts is not None
+            and time.time() <= float(state.draining_until_unix_ts)
+        )
+        if not active_generation and not prior_generation:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        received_counter = int(state.rx_counter if active_generation else state.draining_rx_counter)
+        if counter <= received_counter:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_REPLAY)
             return
-        inbound_key = state.s2c_key if self._client_mode else state.c2s_key
+        inbound_key = (
+            state.s2c_key if self._client_mode else state.c2s_key
+        ) if active_generation else state.draining_inbound_key
         if not inbound_key:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
             return
@@ -3417,7 +3455,10 @@ class SecureLinkPskSession(ISession):
         except Exception:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_BAD_PSK)
             return
-        state.rx_counter = counter
+        if active_generation:
+            state.rx_counter = counter
+        else:
+            state.draining_rx_counter = counter
         self._record_passed_data_frame(state, from_client=not self._client_mode)
         newly_authenticated = False
         if not state.authenticated:
