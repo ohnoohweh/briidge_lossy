@@ -125,6 +125,35 @@ struct ObstacleBridgeWebSocketOverlayRuntimeTests {
         #expect(server.handleInboundFrame(firstTurn.emittedFrames[0]).deliveredPayloads == [Data("first".utf8)])
     }
 
+    @Test func secureLinkBacklogWaitsForRekeyDoneBeforeDraining() throws {
+        let client = ObstacleBridgeSecureLinkPskTransportAdapter(clientPSK: "adapter-psk")
+        let server = ObstacleBridgeSecureLinkPskRuntime(clientMode: false, psk: "adapter-psk")
+        let hello = try client.handleTransportConnected(sessionID: 97, clientNonce: Data(repeating: 7, count: 32))
+        let serverHello = server.handleInboundFrame(hello.emittedFrames[0])
+        let proof = client.handleInboundFrame(serverHello.emittedFrames[0])
+        let acknowledgement = server.handleInboundFrame(proof.emittedFrames[0])
+        _ = client.handleInboundFrame(acknowledgement.emittedFrames[0])
+
+        let rekey = try client.requestSecureLinkRekey(sessionID: 98, clientNonce: Data(repeating: 8, count: 32))
+        let reply = server.handleInboundFrame(rekey.emittedFrames[0])
+        let commit = client.handleInboundFrame(reply.emittedFrames[0])
+        #expect(client.protocolState?.applicationSendingBlocked == true)
+
+        let queued = try client.handleOutboundPayload(Data("during-rekey".utf8))
+        #expect(queued.emittedFrames.isEmpty)
+        #expect(queued.queuedPayloads == 1)
+        let blockedDrain = try client.drainOnePendingPayload()
+        #expect(blockedDrain.emittedFrames.isEmpty)
+        #expect(blockedDrain.queuedPayloads == 1)
+
+        let done = server.handleInboundFrame(commit.emittedFrames[0])
+        _ = client.handleInboundFrame(done.emittedFrames[0])
+        #expect(client.protocolState?.applicationSendingBlocked == false)
+        let resumedDrain = try client.drainOnePendingPayload()
+        #expect(resumedDrain.queuedPayloads == 0)
+        #expect(server.handleInboundFrame(resumedDrain.emittedFrames[0]).deliveredPayloads == [Data("during-rekey".utf8)])
+    }
+
     @Test func nativeServiceSpecRetainsPortableScalarConfiguration() {
         let spec = ObstacleBridgeNativeServiceSpec(
             svcID: 7,
