@@ -356,7 +356,11 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// ChannelMux, receive-worker, service-owner, and Admin lifecycle used by
     /// an outgoing epoch.
     public func adoptInboundSession(_ connectedSession: ObstacleBridgeLinuxConfiguredSession, host: String = "listener") {
-        queue.async { [weak self] in
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests
+        // Keep the accepted session alive until this serialized adoption work
+        // installs its callbacks; nested callbacks capture it weakly to avoid
+        // retaining the session through the runtime.
+        queue.async { [weak self, connectedSession] in
             guard let self else { return }
             self.apply(self.coordinator.handle(.stop))
             self.inboundOnly = true
