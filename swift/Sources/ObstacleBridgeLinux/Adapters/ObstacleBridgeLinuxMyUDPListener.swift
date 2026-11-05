@@ -8,6 +8,7 @@ import Glibc
 /// Socket owner for a shared-datagram myUDP listener. Reliable peer state is
 /// kept exclusively by `ObstacleBridgeMyUDPPeerRegistry` in Core.
 public final class ObstacleBridgeLinuxMyUDPListener {
+    public typealias DiagnosticSink = (ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void
     private struct Endpoint {
         var address: sockaddr_storage
         let length: socklen_t
@@ -27,8 +28,15 @@ public final class ObstacleBridgeLinuxMyUDPListener {
     private let registry = ObstacleBridgeMyUDPPeerRegistry()
     private var endpoints: [ObstacleBridgeMyUDPPeerRegistry.PeerKey: Endpoint] = [:]
     public let port: Int
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests
+    public var diagnosticSink: DiagnosticSink?
 
-    public init(port: Int, bindHost: String = "0.0.0.0", receiveTimeoutMilliseconds: Int? = nil) throws {
+    public init(
+        port: Int,
+        bindHost: String = "0.0.0.0",
+        receiveTimeoutMilliseconds: Int? = nil,
+        diagnosticSink: DiagnosticSink? = nil
+    ) throws {
         guard (0...65_535).contains(port) else { throw ObstacleBridgeLinuxMyUDPError.resolutionFailed }
         let fd = socket(AF_INET, Int32(SOCK_DGRAM.rawValue), Int32(IPPROTO_UDP))
         guard fd >= 0 else { throw ObstacleBridgeLinuxMyUDPError.socketFailure(errno) }
@@ -50,6 +58,7 @@ public final class ObstacleBridgeLinuxMyUDPListener {
         }
         guard bound == 0 else { let code = errno; _ = Glibc.close(fd); throw ObstacleBridgeLinuxMyUDPError.socketFailure(code) }
         descriptor = fd
+        self.diagnosticSink = diagnosticSink
         var actual = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         guard withUnsafeMutablePointer(to: &actual, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }) == 0 else { _ = Glibc.close(fd); throw ObstacleBridgeLinuxMyUDPError.socketFailure(errno) }
         self.port = Int(UInt16(bigEndian: actual.sin_port))
@@ -167,8 +176,17 @@ public final class ObstacleBridgeLinuxMyUDPListener {
         let endpoint = Endpoint(address: address, length: length)
         endpoints[key] = endpoint
         let effect: ObstacleBridgeMyUDPPeerEngine.Effect
-        do { effect = try registry.receiveWire(Data(bytes.prefix(Int(count))), from: key, nowNanoseconds: DispatchTime.now().uptimeNanoseconds) }
-        catch { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
+        let wire = Data(bytes.prefix(Int(count)))
+        do { effect = try registry.receiveWire(wire, from: key, nowNanoseconds: DispatchTime.now().uptimeNanoseconds) }
+        catch {
+            diagnosticSink?(.warning, "myudp.protocol_error_detected", [
+                "operation": "listener_receive",
+                "reason": String(describing: error),
+                "wire_bytes": String(wire.count),
+                "peer": identity,
+            ])
+            throw ObstacleBridgeLinuxMyUDPError.invalidReply
+        }
         try execute(effect, endpoint: endpoint, descriptor: fd)
         guard let payload = registry.admit(key).takeDeliveredRecord() else { return nil }
         return .init(peerIdentity: identity, payload: payload)
@@ -256,14 +274,29 @@ public final class ObstacleBridgeLinuxMyUDPPSKListener {
     private let lock = NSLock()
     private var peers: [String: PeerBox] = [:]
     public var onAuthenticatedSession: ((String, ObstacleBridgeLinuxConfiguredSession) -> Void)?
+    public var onDiagnostic: ObstacleBridgeLinuxMyUDPListener.DiagnosticSink? {
+        didSet { listener.diagnosticSink = onDiagnostic }
+    }
 
-    public init(port: Int, bindHost: String = "0.0.0.0", psk: Data, maximumPeers: Int = 32, maximumQueuedRecordsPerPeer: Int = 64, serverNonce: @escaping () -> Data) throws {
+    public init(
+        port: Int,
+        bindHost: String = "0.0.0.0",
+        psk: Data,
+        maximumPeers: Int = 32,
+        maximumQueuedRecordsPerPeer: Int = 64,
+        serverNonce: @escaping () -> Data,
+        diagnosticSink: ObstacleBridgeLinuxMyUDPListener.DiagnosticSink? = nil
+    ) throws {
         guard !psk.isEmpty else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
-        self.listener = try .init(port: port, bindHost: bindHost, receiveTimeoutMilliseconds: 100)
+        self.listener = try .init(
+            port: port, bindHost: bindHost, receiveTimeoutMilliseconds: 100,
+            diagnosticSink: diagnosticSink
+        )
         self.psk = psk
         self.maximumPeers = max(1, maximumPeers)
         self.maximumQueuedRecordsPerPeer = max(1, maximumQueuedRecordsPerPeer)
         self.serverNonce = serverNonce
+        self.onDiagnostic = diagnosticSink
     }
 
     public var port: Int { listener.port }

@@ -3586,7 +3586,13 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     }
 
     private func handleSharedOverlayOwnerEvent(event: String, fields: [String: Any]) {
-        recordOperationalLog(event: event)
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_swift_host_runner
+        let isWarning = fields["severity"] as? String == "warning"
+        recordOperationalLog(
+            event: event,
+            level: isWarning ? "WARNING" : "INFO",
+            levelNumber: isWarning ? 30 : 20
+        )
         guard event == "ws_overlay_connected"
             || event == "tcp_overlay_connected"
             || event == "quic_overlay_connected"

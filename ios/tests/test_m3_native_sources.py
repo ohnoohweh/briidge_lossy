@@ -228,7 +228,10 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "ObstacleBridgeAdminSnapshotSupport.transportRuntimeEnvelope(" in provider
     assert "provider?.recordPacketBridgeEvent(" in provider
     assert "private func nativePacketDiagnosticsEnabled() -> Bool" in provider
-    assert "guard nativePacketDiagnosticsEnabled() else { return }" in provider
+    assert 'fields["severity"] as? String == "warning"' in provider
+    udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    assert '"udp_overlay_protocol_error_detected"' in udp_owner
+    assert "logInboundProtocolRejection" in udp_owner
     assert "if shouldRecordHeartbeat, self.nativePacketDiagnosticsEnabled()" in provider
     assert "private let peerTrafficRateLock = NSLock()" in provider
     assert "private var peerTrafficRateState:" in provider

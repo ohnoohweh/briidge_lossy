@@ -250,6 +250,9 @@ enum ObstacleBridgeLinuxMain {
             let adminConfigurationStore = ObstacleBridgeLinuxAdminConfigurationStore(configuration: adminConfiguration, path: options.configurationPath)
             if configuration.listenerMode, configuration.transport == .myudp {
                 let runtime = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: configuration)
+                runtime.onDiagnostic = { level, event, fields in
+                    observability.recordDiagnostic(event, fields: fields, level: level)
+                }
                 let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory, restartHandler: requestForegroundRestart, shutdownHandler: requestForegroundShutdown, buildInfo: buildInfo, logWorker: logWorker)
                 try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
                 runtime.start()

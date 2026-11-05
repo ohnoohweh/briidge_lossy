@@ -90,6 +90,8 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert "diagnosticSink: { [weak self] level, event, _ in" in runner
     assert "level: level.name, levelNumber: level.rawValue" in runner
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_host_runner_service_catalog_stays_on_service_queue" in runner
+    assert 'fields["severity"] as? String == "warning"' in runner
+    assert 'level: isWarning ? "WARNING" : "INFO"' in runner
     assert "ObstacleBridgePeerAddressProtocolRuntime" in runner
     assert runner.count("NSLog(") == 1
     assert "ObstacleBridgeWorkerIPC.frameSize(header)" in worker

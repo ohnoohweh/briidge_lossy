@@ -890,31 +890,38 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     /// separately measurable subtasks and does not identify the blocking action.
     private func handleOverlayDatagramOnOwnerQueue(_ datagram: Data) {
         let wasConnected = overlayConnected
-        guard let frame = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportParseDispatch, {
-            ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(datagram)
-        }) else {
+        let frame: ObstacleBridgeUdpOverlayCodec.ParsedProtocolFrame
+        do {
+            frame = try ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportParseDispatch, {
+                try ObstacleBridgeUdpOverlayCodec.decodeProtocolFrame(datagram)
+            })
+        } catch {
+            logInboundProtocolRejection(error, operation: "decode_wire", wireBytes: datagram.count)
             return
         }
         let nowNS = monotonicNowNS()
         switch frame.ptype {
         case ObstacleBridgeUdpOverlayCodec.ptypeData:
-            guard let snapshot = overlayRuntime.handleInboundDataFrame(
-                frame: datagram,
-                nowNS: nowNS,
-                txNS: frame.txNS,
-                echoNS: frame.echoNS,
-                sendPortPresent: currentPeerAddress != nil
-            ) else {
-                return
+            do {
+                let snapshot = try overlayRuntime.handleInboundDataFrame(
+                    frame: datagram,
+                    nowNS: nowNS,
+                    txNS: frame.txNS,
+                    echoNS: frame.echoNS,
+                    sendPortPresent: currentPeerAddress != nil
+                )
+                if !snapshot.controlReasons.isEmpty {
+                    snapshot.emittedFrames.forEach(sendDatagram)
+                }
+                routeOverlayPayloads(snapshot.completedPayloads)
+            } catch {
+                logInboundProtocolRejection(error, operation: "validate_data", wireBytes: datagram.count)
             }
-            if !snapshot.controlReasons.isEmpty {
-                snapshot.emittedFrames.forEach(sendDatagram)
-            }
-            routeOverlayPayloads(snapshot.completedPayloads)
         case ObstacleBridgeUdpOverlayCodec.ptypeControl:
             guard let control = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportParseDispatch, {
                 ObstacleBridgeUdpOverlayCodec.parseControlFrame(datagram)
             }) else {
+                logInboundProtocolRejection(nil, operation: "decode_control", wireBytes: datagram.count)
                 return
             }
             do {
@@ -953,7 +960,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
                 eventSink?("udp_overlay_inbound_idle_failed", ["error": error.localizedDescription])
             }
         default:
-            break
+            logInboundProtocolRejection(nil, operation: "validate_type", wireBytes: datagram.count)
         }
         if !wasConnected && overlayConnected {
             ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportLifecycle) {
@@ -968,6 +975,22 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             }
         }
         lastOverlayConnectedState = overlayConnected
+    }
+
+    /// Protocol rejection diagnostics intentionally contain only bounded
+    /// metadata; myUDP payloads may contain protected application traffic.
+    /// `packetBridgeDiagnosticEventSink` and the macOS host event sink emit
+    /// this event at their UDP-session warning level.
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue
+    private func logInboundProtocolRejection(_ error: Error?, operation: String, wireBytes: Int) {
+        var fields: [String: Any] = [
+            "operation": operation,
+            "wire_bytes": wireBytes,
+            "severity": "warning",
+        ]
+        if let error { fields["reason"] = String(describing: error) }
+        else { fields["reason"] = "invalid_myudp_frame" }
+        eventSink?("udp_overlay_protocol_error_detected", fields)
     }
 
     private func handleTransportLiveness(nowNS: UInt64) {

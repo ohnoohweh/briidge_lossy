@@ -399,7 +399,7 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
         txNS: UInt64,
         echoNS: UInt64,
         sendPortPresent: Bool
-    ) -> InboundDataSnapshot? {
+    ) throws -> InboundDataSnapshot {
         let receiveStarted = DispatchTime.now().uptimeNanoseconds
         do {
             let effect = try peerEngine.receiveWire(frame, nowNanoseconds: nowNS, transportWritable: sendPortPresent)
@@ -432,7 +432,7 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
         } catch {
             ObstacleBridgeRuntimeMetrics.shared.record(.overlayReceiveData, durationNS: DispatchTime.now().uptimeNanoseconds &- receiveStarted)
             malformedBatches += 1
-            return nil
+            throw error
         }
     }
 
