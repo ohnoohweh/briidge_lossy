@@ -184,7 +184,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
                 sharedTunDisableOutgoingNormalization: self.sharedTunDisableOutgoingNormalization,
                 sharedTunDisableInflowFilter: self.sharedTunDisableInflowFilter,
                 sharedTunDisableOutflowFilter: self.sharedTunDisableOutflowFilter,
-                sharedTunDisableScopedThrottle: self.sharedTunDisableScopedThrottle
+                sharedTunDisableScopedThrottle: self.sharedTunDisableScopedThrottle,
+                sessionMaxAppPayload: self.sessionMaxAppPayload
             )
         }
         overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in

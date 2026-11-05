@@ -172,7 +172,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
         self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
             instanceID: muxInstanceID,
-            connectionSeq: muxConnectionSeq
+            connectionSeq: muxConnectionSeq,
+            sessionMaxAppPayload: self.sessionMaxAppPayload
         )
         if let tunIfname = self.tunIfname, !tunIfname.isEmpty, self.tunMTU > 0 {
             let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname, mtu: self.tunMTU)
@@ -185,7 +186,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
                 sharedTunDisableOutgoingNormalization: self.sharedTunDisableOutgoingNormalization,
                 sharedTunDisableInflowFilter: self.sharedTunDisableInflowFilter,
                 sharedTunDisableOutflowFilter: self.sharedTunDisableOutflowFilter,
-                sharedTunDisableScopedThrottle: self.sharedTunDisableScopedThrottle
+                sharedTunDisableScopedThrottle: self.sharedTunDisableScopedThrottle,
+                sessionMaxAppPayload: self.sessionMaxAppPayload
             )
         }
         overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in

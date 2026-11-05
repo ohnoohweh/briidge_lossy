@@ -958,6 +958,15 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert 'rev-parse --short=8 HEAD' in build_script
     assert 'rev-parse --short=8 HEAD' in linux_build_script
     assert '["git", "-c", f"safe.directory={repo_root}", "rev-parse", "--short=8", "HEAD"]' in python_bridge
+    apple_owner_counts = {
+        "ObstacleBridgeUdpOverlayTransportOwner.swift": 2,
+        "ObstacleBridgeTcpOverlayTransportOwner.swift": 2,
+        "ObstacleBridgeWebSocketOverlayTransportOwner.swift": 2,
+        "ObstacleBridgeQuicOverlayTransportOwner.swift": 1,
+    }
+    for filename, expected_count in apple_owner_counts.items():
+        owner = (ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared" / filename).read_text(encoding="utf-8")
+        assert owner.count("sessionMaxAppPayload: self.sessionMaxAppPayload") >= expected_count
     assert '_git(root, "rev-parse", "--short=8", "HEAD")' in swift_tun_helper
     assert "Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)" in build_script
     assert "Set :CFBundleShortVersionString $(MARKETING_VERSION)" in build_script
