@@ -1784,9 +1784,9 @@ private func handle(_ request: [String: Any]) throws -> Any {
             return data
         }
         for frame in preFrames {
-            guard runtime.handleInboundDataFrame(frame: frame, nowNS: 0, txNS: 0, echoNS: 0, sendPortPresent: false) != nil else {
-                throw ChannelMuxCodecRunnerError.codecFailure
-            }
+            _ = try runtime.handleInboundDataFrame(
+                frame: frame, nowNS: 0, txNS: 0, echoNS: 0, sendPortPresent: false
+            )
         }
         let snapshot = try runtime.buildOutboundControl(nowNS: nowNS.uint64Value, echoNS: echoNS.uint64Value)
         return ["snapshot": outboundControlSnapshotObject(snapshot)]

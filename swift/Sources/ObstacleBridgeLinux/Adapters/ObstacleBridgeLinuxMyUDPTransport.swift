@@ -180,7 +180,10 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             catch {
                 stateLock.unlock()
                 protocolError(error, wire: wire, operation: "receive")
-                throw ObstacleBridgeLinuxMyUDPError.invalidReply
+                // A UDP peer can send a malformed or unrelated datagram at
+                // any time.  Python counts and drops it, then keeps the
+                // established myUDP session alive; do the same here.
+                continue
             }
             deliveredPayloads.append(contentsOf: effect.deliveredPayloads)
             let payload = deliveredPayloads.isEmpty ? nil : deliveredPayloads.removeFirst()
@@ -265,7 +268,9 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         catch {
             stateLock.unlock()
             protocolError(error, wire: wire, operation: "async_receive")
-            throw ObstacleBridgeLinuxMyUDPError.invalidReply
+            // Protocol-invalid datagrams are not a socket failure and must
+            // not tear down an authenticated overlay epoch.
+            return []
         }
         deliveredPayloads.append(contentsOf: effect.deliveredPayloads)
         let payloads = deliveredPayloads

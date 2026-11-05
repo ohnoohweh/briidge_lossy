@@ -273,7 +273,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try session.receive().payload == Data("python-reordered".utf8))
     }
 
-    @Test func myudpTransportRejectsMalformedPythonDatagramAndClosedSession() throws {
+    @Test func myudpTransportDropsMalformedPythonDatagramAndKeepsSessionAlive() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-malformed")
         defer { peer.stop() }
         let diagnostics = RuntimeDiagnosticRecorder()
@@ -282,7 +282,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
             diagnosticSink: { level, event, fields in diagnostics.record(level, event: event, fields: fields) }
         )
         _ = try session.send(Data("register".utf8))
-        #expect(throws: ObstacleBridgeLinuxMyUDPError.invalidReply) { try session.receive() }
+        #expect(try session.receive().payload == Data("register".utf8))
         #expect(diagnostics.contains(level: .warning, event: "myudp.protocol_error_detected"))
         #expect(diagnostics.contains(field: "operation", value: "receive"))
         #expect(diagnostics.contains(field: "wire_bytes", value: "1"))
@@ -312,7 +312,13 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(connected == 0)
         let malformed = Data([0x01])
         #expect(malformed.withUnsafeBytes { Glibc.send(client, $0.baseAddress, malformed.count, 0) } == malformed.count)
-        #expect(throws: ObstacleBridgeLinuxMyUDPError.invalidReply) { try listener.receive() }
+        let record = try ObstacleBridgeUdpOverlayCodec.encodeStreamRecord(Data("listener-valid".utf8))
+        let valid = try ObstacleBridgeUdpOverlayCodec.buildDataBatchFrame(
+            chunks: [.init(counter: 1, data: record)], txNS: 1, echoNS: 0
+        )
+        #expect(valid.withUnsafeBytes { Glibc.send(client, $0.baseAddress, valid.count, 0) } == valid.count)
+        #expect(try listener.receive() == nil)
+        #expect(try listener.receive()?.payload == Data("listener-valid".utf8))
         #expect(diagnostics.contains(level: .warning, event: "myudp.protocol_error_detected"))
         #expect(diagnostics.contains(field: "operation", value: "listener_receive"))
         #expect(diagnostics.contains(field: "wire_bytes", value: "1"))
@@ -1268,7 +1274,7 @@ final class PythonOverlayPeer {
             return """
             import socket
             s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
-            _,peer=s.recvfrom(1452); s.sendto(b'\\x01',peer); s.close()
+            frame,peer=s.recvfrom(1452); s.sendto(b'\\x01',peer); s.sendto(frame,peer); s.close()
             """
         }
         if mode == "myudp-securelink-reconnect" || mode == "myudp-securelink-reconnect-stale" {

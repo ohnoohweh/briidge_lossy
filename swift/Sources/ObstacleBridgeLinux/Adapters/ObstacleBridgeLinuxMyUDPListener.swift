@@ -185,7 +185,9 @@ public final class ObstacleBridgeLinuxMyUDPListener {
                 "wire_bytes": String(wire.count),
                 "peer": identity,
             ])
-            throw ObstacleBridgeLinuxMyUDPError.invalidReply
+            // Match the Python UDP listener: reject this datagram without
+            // treating it as a transport failure for the peer endpoint.
+            return nil
         }
         try execute(effect, endpoint: endpoint, descriptor: fd)
         guard let payload = registry.admit(key).takeDeliveredRecord() else { return nil }
