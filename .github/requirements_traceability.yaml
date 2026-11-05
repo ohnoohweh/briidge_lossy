@@ -911,6 +911,8 @@ REQ-LIFE-005:
     - tests/integration/test_reconnect_regression.py::test_reconnect_retry_uses_configured_minimum_delay
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayCoordinatorTests.swift::authenticatedReceiveProgressPreventsDelayOnlyEpochRetirement
+    - tests/unit/test_channel_mux_listener_mode.py::test_authenticated_receive_progress_prevents_delay_only_rotation
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeOwnsOneCleartextReceiveWorkerAndCancelsItOnStop
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedReceiveFailureWithdrawsEpochAndUsesBoundedReconnect
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedWebSocketReceiveFailureWithdrawsEpochAndUsesBoundedReconnect
