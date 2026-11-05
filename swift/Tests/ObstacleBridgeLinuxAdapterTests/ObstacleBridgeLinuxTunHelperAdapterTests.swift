@@ -250,6 +250,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(policyRules.contains(where: { $0.contains("192.168.179.0/24 lookup main") }))
         _ = try backend.removeNetwork([:])
         #expect(commands.contains(["ip", "-4", "route", "flush", "table", "20205"]))
+        #expect(!commands.contains(["ip", "-4", "route", "del", "192.168.179.0/24"]))
     }
 
     @Test func nativeSwiftHelperRestoresPriorExcludedRouteInsteadOfDeletingIt() throws {
@@ -257,12 +258,12 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in
             commands.append(arguments)
             if arguments == ["ip", "-j", "-4", "route", "show", "default"] { return "[{\"gateway\":\"192.0.2.1\",\"dev\":\"eth0\"}]" }
-            if arguments == ["ip", "-j", "-4", "route", "show", "203.0.113.9/32"] { return "[{\"dst\":\"203.0.113.9/32\",\"gateway\":\"192.0.2.9\",\"dev\":\"eth1\"}]" }
+            if arguments == ["ip", "-j", "-4", "route", "show", "203.0.113.9/32"] { return "[{\"dst\":\"203.0.113.9/32\",\"gateway\":\"192.0.2.9\",\"dev\":\"eth1\",\"metric\":10}]" }
             return "[]"
         })
         _ = try backend.applyNetwork(["ifname": "obtest0", "tun_routing": ["excluded_routes": ["203.0.113.9/32"]]])
         _ = try backend.removeNetwork([:])
-        #expect(commands.contains(["ip", "-4", "route", "replace", "203.0.113.9/32", "via", "192.0.2.9", "dev", "eth1"]))
+        #expect(commands.contains(["ip", "-4", "route", "replace", "203.0.113.9/32", "via", "192.0.2.9", "dev", "eth1", "metric", "10"]))
     }
 
     @Test func nativeSwiftHelperEmitsLifecycleEvents() throws {
@@ -323,7 +324,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         defer { try? FileManager.default.removeItem(at: path) }
         let writer = ObstacleBridgeLinuxNativeTunHelperBackend(stateURL: path, commandRunner: { arguments, _ in
             if arguments == ["ip", "-j", "-4", "route", "show", "default"] { return "[{\"gateway\":\"192.0.2.1\",\"dev\":\"eth0\"}]" }
-            if arguments == ["ip", "-j", "-4", "route", "show", "203.0.113.9/32"] { return "[{\"dst\":\"203.0.113.9/32\",\"gateway\":\"192.0.2.9\",\"dev\":\"eth1\"}]" }
+            if arguments == ["ip", "-j", "-4", "route", "show", "203.0.113.9/32"] { return "[{\"dst\":\"203.0.113.9/32\",\"gateway\":\"192.0.2.9\",\"dev\":\"eth1\",\"metric\":10}]" }
             return arguments.contains("-j") ? "[]" : ""
         })
         _ = try writer.applyNetwork([
@@ -339,7 +340,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         let recovery = ObstacleBridgeLinuxNativeTunHelperBackend(stateURL: path, commandRunner: { arguments, _ in commands.append(arguments); return "" })
         try recovery.recoverPersistedPolicy()
         #expect(commands.contains(["ip", "-4", "route", "del", "10.0.0.0/8", "dev", "obtest0"]))
-        #expect(commands.contains(["ip", "-4", "route", "replace", "203.0.113.9/32", "via", "192.0.2.9", "dev", "eth1"]))
+        #expect(commands.contains(["ip", "-4", "route", "replace", "203.0.113.9/32", "via", "192.0.2.9", "dev", "eth1", "metric", "10"]))
         #expect(commands.contains(["resolvectl", "revert", "obtest0"]))
         #expect(commands.contains(["iptables", "-D", "FORWARD", "-i", "obtest0", "-o", "eth0", "-j", "ACCEPT"]))
         #expect(commands.contains(["/opt/obstaclebridge/tun-hook", "down", "obtest0"]))

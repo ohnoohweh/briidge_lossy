@@ -1164,6 +1164,7 @@ REQ-LIFE-010:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxProxyProviderTests.swift::socksParserCompletesFragmentedGreetingWithoutBlockingRead
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunPingTests.swift::protocolV1FramesAndControlsRemainPythonCompatible
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::nativeSwiftHelperFullTunnelRetainsEveryKernelConnectedLocalLAN
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::nativeSwiftHelperRestoresPriorExcludedRouteInsteadOfDeletingIt
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::privilegedNativeSwiftHelperQualifiesTunRouteDNSAndHookLifecycle
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::nativeSwiftHelperRecoversPersistedPolicyBeforeNewOwnership
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::privilegedNativeSwiftHelperRecoversPolicyAfterHelperProcessLoss
@@ -1438,7 +1439,8 @@ REQ-MUX-009:
   # preventing an unchecked native collection trap from reaching devices.
   # full-tunnel installs preserve pre-existing local subnet ownership. Swift
   # epoch-resync coverage also verifies a recovered TUN OPEN advances its
-  # ChannelMux connection sequence.
+  # ChannelMux connection sequence. Darwin hook coverage records route
+  # ownership so teardown cannot delete an existing local/operator exclusion.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_remote_servers_udp_forwarding
@@ -1478,6 +1480,7 @@ REQ-MUX-009:
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_normalizes_ipv4_mapped_ipv6_peer_for_route_programming
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_supports_excluded_route_programming
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_waits_for_interface_and_uses_onlink_default_routes
+    - tests/unit/test_tun_hook_scripts.py::test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route
     - tests/unit/test_tun_hook_scripts.py::test_server_tun_hook_supports_optional_tcpdump_capture
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_server_tun_stop_skips_on_stopped_hook_when_device_is_retained

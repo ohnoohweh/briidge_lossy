@@ -123,6 +123,9 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         var firewallRules: [[String]] = []
         var savedUnderlay: [String: [String: String]] = [:]
         var previousExcluded: [String: [String: Any]] = [:]
+        // Only routes this helper changes belong to its cleanup ownership.
+        // Kernel-connected exclusions deliberately remain untouched in main.
+        var appliedExcluded: [(String, String)] = []
         var fullTunnelGateways: [String: String] = [:]
         func cidr(_ addressKey: String, _ prefixKey: String, _ family: String) throws -> String? {
             guard let address = routing[addressKey] as? String, !address.isEmpty else { return nil }
@@ -178,6 +181,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
                 command += ["dev", dev]
                 if let source = saved["src"] { command += ["src", source] }
                 _ = try commandRunner(command, false)
+                appliedExcluded.append((family, route))
             }
             if tunEnabled { for (family, route) in routes { _ = try commandRunner(["ip", family, "route", "replace", route, "dev", ifname], false) } }
             if tunEnabled {
@@ -197,13 +201,13 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
             _ = try? commandRunner(["resolvectl", "revert", ifname], true)
             for (family, route) in routes.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
             removeFullTunnelPolicy(allowFailure: true)
-            for (family, route) in excluded.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route], true) }
+            for (family, route) in appliedExcluded.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route], true) }
             for (family, cidr) in addresses.reversed() { _ = try? commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
             for rule in firewallRules.reversed() { _ = try? commandRunner(Self.removeFirewallRule(rule), true) }
             recordFailure(stage: "apply_network", error: error.localizedDescription)
             throw error
         }
-        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; excludedRoutes = excluded; underlay = savedUnderlay; appliedDNSServers = dnsServers; appliedFirewallRules = firewallRules; appliedHookPath = hookPath; previousExcludedRoutes = previousExcluded; policyGateways = fullTunnelGateways; lock.unlock()
+        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; excludedRoutes = appliedExcluded; underlay = savedUnderlay; appliedDNSServers = dnsServers; appliedFirewallRules = firewallRules; appliedHookPath = hookPath; previousExcludedRoutes = previousExcluded; policyGateways = fullTunnelGateways; lock.unlock()
         emitEvent("network applied interface=\(ifname)")
         persistState()
         return ["applied": true, "backend": "linux-swift-native", "ifname": ifname, "routes_active": tunEnabled]
@@ -416,6 +420,8 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         if let gateway = record["gateway"] as? String { command += ["via", gateway] }
         if let dev = record["dev"] as? String { command += ["dev", dev] }
         if let source = record["prefsrc"] as? String { command += ["src", source] }
+        if let metric = record["metric"] as? NSNumber { command += ["metric", metric.stringValue] }
+        else if let metric = record["metric"] as? String, !metric.isEmpty { command += ["metric", metric] }
         return command
     }
 }
