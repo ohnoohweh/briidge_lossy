@@ -95,11 +95,12 @@ jobs:
             echo "macos_host_runner_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-  bridge-py-integration-linux:
-    name: Integration Gate (Linux shared)
-    # Cold Swift builds can consume most of the original 15-minute budget;
-    # leave room for the worker-supervision and mixed-process probes as well.
-    timeout-minutes: 25
+  bridge-py-integration-linux-build:
+    name: Integration Gate (Linux build artifact)
+    # Isolate the cold Swift product build from the test lane.  This gives a
+    # failed build an immediate, inspectable result and gives test execution a
+    # fresh runner/time budget rather than competing with compilation.
+    timeout-minutes: 15
     needs: detect-bridge-change
     if: needs.detect-bridge-change.outputs.changed == 'true'
     runs-on: ubuntu-latest
@@ -108,16 +109,6 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .[test]
 
       # The Linux/Swift scenarios share one runner binary. Build it before
       # xdist starts so workers never wait on the test helper's global lock.
@@ -136,6 +127,47 @@ jobs:
           echo "SwiftPM crashed with SIGSEGV; retrying with one planning job."
           rm -rf "$GITHUB_WORKSPACE/build/linux/.swift-build"
           OBSTACLEBRIDGE_LINUX_SWIFT_JOBS=1 ./scripts/build_linux_app.sh
+
+      - name: Upload Linux Swift runner artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-swift-runner
+          path: |
+            build/linux/**
+            !build/linux/.swift-build/**
+          if-no-files-found: error
+          retention-days: 1
+
+  bridge-py-integration-linux:
+    name: Integration Gate (Linux shared)
+    # The packaged runner arrives from the dependent build job.  Swift test
+    # compilation still occurs here, but no longer consumes the same runner
+    # budget as the release artifact build.
+    timeout-minutes: 25
+    needs: [detect-bridge-change, bridge-py-integration-linux-build]
+    if: needs.detect-bridge-change.outputs.changed == 'true' && needs.bridge-py-integration-linux-build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[test]
+
+      - name: Download Linux Swift runner artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-swift-runner
+          path: build/linux
 
       - name: Qualify Linux common-IPC lifecycle matrix
         run: |

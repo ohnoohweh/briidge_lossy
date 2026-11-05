@@ -4,6 +4,7 @@ import asyncio
 import unittest
 
 from obstacle_bridge.bridge import ChaCha20Poly1305, SecureLinkPskSession
+from obstacle_bridge.bridge_securelink import _SecureLinkPeerState
 from obstacle_bridge.bridge_connection_lifecycle import ConnectionLifecycleEvent, ConnectionRotationResult, ConnectionState
 
 
@@ -1545,6 +1546,33 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(server._server_chan_to_peer)
         self.assertFalse(server._server_peer_chan_to_mux)
+
+    async def test_client_accepts_one_delayed_previous_generation_frame_after_rekey(self):
+        client = SecureLinkPskSession(FakeInnerSession(), _args(tcp_peer='127.0.0.1'), 'tcp')
+        delivered = []
+        client.set_on_app_payload(lambda payload, peer_id=None: delivered.append((payload, peer_id)))
+        old_key = b"o" * 32
+        new_key = b"n" * 32
+        state = _SecureLinkPeerState(
+            session_id=71, client_nonce=b"c" * 32, server_nonce=b"s" * 32,
+            c2s_key=old_key, s2c_key=old_key, authenticated=True,
+            peer_confirmed_authenticated=True, rx_counter=0,
+            pending_session_id=72, pending_client_nonce=b"d" * 32,
+            pending_server_nonce=b"t" * 32, pending_c2s_key=new_key, pending_s2c_key=new_key,
+        )
+        client._peer_states[0] = state
+        self.assertTrue(client._promote_pending_rekey(state))
+        aad = client._hdr_bytes(client._SL_TYPE_DATA, 71, 1)
+        delayed = aad + ChaCha20Poly1305(old_key).encrypt(client._nonce(1), b"late-old-generation", aad)
+        client._on_inner_payload(delayed)
+        self.assertEqual(delivered, [(b"late-old-generation", None)])
+        expired_aad = client._hdr_bytes(client._SL_TYPE_DATA, 71, 2)
+        expired = expired_aad + ChaCha20Poly1305(old_key).encrypt(
+            client._nonce(2), b"expired-old-generation", expired_aad,
+        )
+        state.draining_until_unix_ts = 0.0
+        client._on_inner_payload(expired)
+        self.assertEqual(len(delivered), 1)
 
 
 if __name__ == '__main__':

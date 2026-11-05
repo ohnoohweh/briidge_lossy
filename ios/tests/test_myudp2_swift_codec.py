@@ -112,10 +112,14 @@ def test_swift_myudp2_batch_codec_and_stream_receive_state(tmp_path: Path) -> No
                         txNS: 40,
                         echoNS: 0
                     )
-                    guard receiverRuntime.handleInboundDataFrame(
-                        frame: malformed, nowNS: 40, txNS: 40, echoNS: 0, sendPortPresent: true
-                    ) == nil,
-                    (receiverRuntime.protocolStatsSnapshot()["malformed_batches"] as? Int) == 1 else {
+                    do {
+                        _ = try receiverRuntime.handleInboundDataFrame(
+                            frame: malformed, nowNS: 40, txNS: 40, echoNS: 0, sendPortPresent: true
+                        )
+                    } catch {
+                        // Malformed batches are rejected through the runtime's throwing API.
+                    }
+                    guard (receiverRuntime.protocolStatsSnapshot()["malformed_batches"] as? Int) == 1 else {
                         throw ProbeError.failed("malformed batch was accepted")
                     }
 
@@ -123,16 +127,16 @@ def test_swift_myudp2_batch_codec_and_stream_receive_state(tmp_path: Path) -> No
                     let firstHalf = try ObstacleBridgeUdpOverlayCodec.buildDataBatchFrame(
                         chunks: [.init(counter: 1, data: resetRecord.prefix(3))], txNS: 50, echoNS: 0
                     )
-                    _ = receiverRuntime.handleInboundDataFrame(
+                    _ = try receiverRuntime.handleInboundDataFrame(
                         frame: firstHalf, nowNS: 50, txNS: 50, echoNS: 0, sendPortPresent: true
                     )
                     receiverRuntime.resetTransportEpoch()
                     let fresh = try ObstacleBridgeUdpOverlayCodec.buildDataBatchFrame(
                         chunks: [.init(counter: 1, data: resetRecord)], txNS: 51, echoNS: 0
                     )
-                    guard receiverRuntime.handleInboundDataFrame(
+                    guard try receiverRuntime.handleInboundDataFrame(
                         frame: fresh, nowNS: 51, txNS: 51, echoNS: 0, sendPortPresent: true
-                    )?.completedPayloads == [Data("reset".utf8)] else {
+                    ).completedPayloads == [Data("reset".utf8)] else {
                         throw ProbeError.failed("transport epoch reset retained stream bytes")
                     }
 

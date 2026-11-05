@@ -775,7 +775,9 @@ This section describes hardening that is already delivered plus the remaining ga
 Acceptance criteria:
 
 - long-lived sessions can rotate traffic keys without disconnecting healthy peers
-- once rekey completes, frames under superseded keys are rejected
+- once rekey completes, frames under superseded keys are rejected except for
+  one authenticated in-flight frame from the immediately prior inbound
+  generation during its bounded overlap interval
 - failed or abandoned rekey attempts do not silently fall back to ambiguous mixed-key operation
 
 Current status:
@@ -784,6 +786,13 @@ Current status:
 - fulfilled for time-based rekey on authenticated client-side sessions after the first protected client-data frame
 - fulfilled for operator-forced rekey through the admin API on authenticated client-side sessions after the first protected client-data frame
 - fulfilled for the previously exposed client/server cutover race where the server could switch on `REKEY_COMMIT` before the client received `REKEY_DONE`; the current runtime now holds only client outbound application payloads in that commit-to-done window and flushes them immediately under the new session once `REKEY_DONE` arrives, so healthy overlay traffic does not depend on an overlap period where both old and new secure-link sessions are accepted simultaneously
+- fulfilled for UDP reordering at completed rekey cutover: Python and shared
+  Swift retain exactly one immediately prior inbound generation for five
+  seconds. The protected frame's session identifier selects either the active
+  generation or that single prior generation; the prior generation has its own
+  monotonic receive counter. The implementation never tries arbitrary former
+  keys or accepts a former session after the deadline, a reset, or an
+  authentication failure.
 
 Evidence:
 
@@ -800,6 +809,10 @@ Evidence:
     `test_time_based_rekey_rotates_session_without_extra_data_frames`
   - [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_operator_forced_rekey_rotates_session_and_reports_trigger`
+  - [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
+    `test_client_accepts_one_delayed_previous_generation_frame_after_rekey`
+  - [ObstacleBridgeCryptoTests.swift](../swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift)
+    `secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters`
 - integration evidence:
   - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`

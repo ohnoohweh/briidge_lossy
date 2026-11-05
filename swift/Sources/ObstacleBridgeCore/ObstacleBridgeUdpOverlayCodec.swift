@@ -133,12 +133,20 @@ public struct ObstacleBridgeUdpOverlayCodec {
         }
     }
 
-    public static func parseProtocolFrame(_ data: Data) -> ParsedProtocolFrame? {
-        guard let frame = try? ObstacleBridgeMyUDPCodec.decodeWire(data) else { return nil }
+    /// Decodes an inbound myUDP frame while retaining the underlying rejection
+    /// reason for platform transport owners to report at warning level.
+    public static func decodeProtocolFrame(_ data: Data) throws -> ParsedProtocolFrame {
+        let frame = try ObstacleBridgeMyUDPCodec.decodeWire(data)
         return ParsedProtocolFrame(
             ptype: Int(frame.type), payload: frame.payload,
             txNS: frame.transmittedNanoseconds, echoNS: frame.echoedNanoseconds
         )
+    }
+
+    /// Compatibility convenience for callers that intentionally discard an
+    /// invalid-frame reason.
+    public static func parseProtocolFrame(_ data: Data) -> ParsedProtocolFrame? {
+        try? decodeProtocolFrame(data)
     }
 
     public static func buildControlFrame(

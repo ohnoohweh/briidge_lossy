@@ -89,6 +89,10 @@ public enum ObstacleBridgeOverlayCoordinatorInput: Equatable, Sendable {
     case authenticated(epoch: UInt64)
     case transportFailed(epoch: UInt64, reason: String)
     case receiveFinished(epoch: UInt64, reason: String)
+    /// Authenticated lower-layer traffic was received for this epoch. A high
+    /// transmit-delay estimate alone must not retire a peer that is still
+    /// making verified receive progress.
+    case authenticatedReceiveProgress(epoch: UInt64, nowMilliseconds: UInt64)
     case transportLivenessSample(epoch: UInt64, delayMilliseconds: Double, nowMilliseconds: UInt64)
     case retryTimerFired(token: UInt64)
     case stop
@@ -188,6 +192,13 @@ public final class ObstacleBridgeOverlayCoordinator {
         case .transportFailed(let epoch, let reason), .receiveFinished(let epoch, let reason):
             guard epoch == activeEpoch, state != .stopped else { return transition([]) }
             return failActiveEpoch(reason: reason)
+
+        case .authenticatedReceiveProgress(let epoch, _):
+            guard epoch == activeEpoch, state == .connected else { return transition([]) }
+            // Continuous authenticated receive progress proves the transport
+            // remains live even when acknowledgement delay is elevated.
+            transportDelayHighSinceMilliseconds = nil
+            return transition([])
 
         case .transportLivenessSample(let epoch, let delayMilliseconds, let nowMilliseconds):
             guard epoch == activeEpoch, state == .connected else { return transition([]) }

@@ -146,4 +146,22 @@ struct ObstacleBridgeOverlayCoordinatorTests {
         #expect(expired.effects == [.cancelReceive(epoch: 1), .cancelTransport(epoch: 1), .scheduleRetry(token: 1, afterMilliseconds: 10)])
         #expect(expired.snapshot.candidateIndex == 1)
     }
+
+    @Test func authenticatedReceiveProgressPreventsDelayOnlyEpochRetirement() {
+        let coordinator = ObstacleBridgeOverlayCoordinator(
+            candidateCount: 2,
+            policy: .init(initialDelayMilliseconds: 10, maximumDelayMilliseconds: 10, maximumAttempts: 3),
+            livenessPolicy: .init(transportDelayThresholdMilliseconds: 50, transportDelayGraceMilliseconds: 100)
+        )
+        _ = coordinator.handle(.start)
+        _ = coordinator.handle(.transportConnected(epoch: 1))
+        _ = coordinator.handle(.authenticated(epoch: 1))
+
+        #expect(coordinator.handle(.transportLivenessSample(epoch: 1, delayMilliseconds: 50, nowMilliseconds: 1_000)).effects.isEmpty)
+        #expect(coordinator.handle(.authenticatedReceiveProgress(epoch: 1, nowMilliseconds: 1_050)).effects.isEmpty)
+        #expect(coordinator.handle(.transportLivenessSample(epoch: 1, delayMilliseconds: 50, nowMilliseconds: 1_150)).effects.isEmpty)
+
+        let expired = coordinator.handle(.transportLivenessSample(epoch: 1, delayMilliseconds: 50, nowMilliseconds: 1_251))
+        #expect(expired.effects == [.cancelReceive(epoch: 1), .cancelTransport(epoch: 1), .scheduleRetry(token: 1, afterMilliseconds: 10)])
+    }
 }

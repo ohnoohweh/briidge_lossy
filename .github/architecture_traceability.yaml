@@ -158,7 +158,8 @@ ARC-CMP-002:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCorePeerRegistryIsolatesEpochsAndWithdrawals
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportExchangeRecoversDroppedDataThroughCoreTimerEffect
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportReassemblesDuplicatedOutOfOrderPythonChunks
-    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportRejectsMalformedPythonDatagramAndClosedSession
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportDropsMalformedPythonDatagramAndKeepsSessionAlive
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportReportsOversizedLocalPayloadBeforeInvalidReply
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_udp_peer_runtime_control_sequence_matches_python
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_udp_peer_runtime_retransmit_timer_matches_python
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_large_payload_is_chunked_and_backpressured_by_inflight_window
@@ -258,6 +259,7 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_high_overlay_rtt_throttles_local_ingress
     - tests/unit/test_channel_mux_listener_mode.py::test_transport_delay_controls_default_and_configure_channelmux
     - tests/unit/test_channel_mux_listener_mode.py::test_sustained_transport_delay_requests_one_connection_rotation
+    - tests/unit/test_channel_mux_listener_mode.py::test_authenticated_receive_progress_prevents_delay_only_rotation
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_sustained_transport_delay_rotation_matches_python_channelmux_policy
     - tests/unit/test_connection_lifecycle.py::test_channelmux_outer_readiness_rotation_uses_shared_grace_window
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_same_channel_id_routes_to_its_destination_peer
@@ -1152,6 +1154,7 @@ ARC-CMP-006:
   # lifecycle, epoch/session, retry, and protected-frame counter state; it
   # must not reconstruct or serialize PSK material.
   unit_tests:
+    - tests/unit/test_secure_link_psk.py::test_client_accepts_one_delayed_previous_generation_frame_after_rekey
     - tests/unit/test_secure_link_psk.py::test_lifecycle_forwards_transport_epoch_and_rotation_request
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session

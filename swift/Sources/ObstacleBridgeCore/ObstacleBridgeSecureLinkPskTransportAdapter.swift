@@ -211,7 +211,11 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         let status = runtime.statusSnapshot()
         if status.appDataSendingBlocked || !pendingPayloads.isEmpty {
             pendingPayloads.append(payload)
-            if status.authenticated {
+            // A REKEY_COMMIT keeps the active keys installed, but Core
+            // deliberately blocks application encryption until REKEY_DONE.
+            // Match Python's post-commit hold: only ask the owner to drain
+            // after that barrier has lifted.
+            if status.authenticated, !status.appDataSendingBlocked {
                 pendingPayloadWorkSink?()
             }
             return OutboundSnapshot(
@@ -297,8 +301,10 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
     /// continuation.  A reconnect cannot turn a backlog into one large,
     /// non-interruptible worker turn.
     func drainOnePendingPayload() throws -> OutboundSnapshot {
-        guard runtime.statusSnapshot().authenticated, !pendingPayloads.isEmpty else {
-            let status = runtime.statusSnapshot()
+        let status = runtime.statusSnapshot()
+        // Keep FIFO application data behind the rekey commit/done cutover.
+        // Python uses _client_rekey_hold_after_commit for the same behavior.
+        guard status.authenticated, !status.appDataSendingBlocked, !pendingPayloads.isEmpty else {
             return OutboundSnapshot(emittedFrames: [], queuedPayloads: pendingPayloads.count, authenticated: status.authenticated, sessionID: status.sessionID)
         }
         let payload = pendingPayloads.removeFirst()

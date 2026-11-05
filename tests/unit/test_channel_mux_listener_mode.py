@@ -421,6 +421,33 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             self.assertIsNone(mux._poll_transport_delay_rotation(now_mono=161.0))
         finally:
             loop.close()
+
+    def test_authenticated_receive_progress_prevents_delay_only_rotation(self):
+        loop = asyncio.new_event_loop()
+        try:
+            session = _FakeSession(
+                connected=True,
+                transmit_delay_est_ms=5_000.0,
+                last_rx_ns=100_000_000_000,
+                secure_link_status={"authenticated": True},
+            )
+            mux = ChannelMux(session, loop)
+            mux._transport_delay_rotation_delay_s = 30.0
+
+            # Fresh authenticated receive progress is sufficient to suppress
+            # a delay-only rotation, matching the Apple lifecycle owner.
+            self.assertIsNone(mux._poll_transport_delay_rotation(now_mono=100.0))
+            self.assertIsNone(mux._poll_transport_delay_rotation(now_mono=129.9))
+            self.assertEqual(session.rotation_requests, [])
+
+            # When progress stops for the grace interval, the existing
+            # sustained-delay recovery path remains active.
+            self.assertIsNone(mux._poll_transport_delay_rotation(now_mono=130.0))
+            result = mux._poll_transport_delay_rotation(now_mono=160.0)
+            self.assertTrue(result["accepted"])
+            self.assertEqual(session.rotation_requests, ["channelmux_transport_delay"])
+        finally:
+            loop.close()
     def test_disconnected_overlay_requests_one_rotation_after_delay(self):
         asyncio.run(self._test_disconnected_overlay_requests_one_rotation_after_delay())
 

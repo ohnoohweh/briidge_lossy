@@ -30,6 +30,13 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private var deliveredPayloads: [Data] = []
     private let stateLock = NSLock()
     private let receiveLock = NSLock()
+    /// POSIX sends share the descriptor between the Core-effect producer and
+    /// the readiness timer.  Keep would-block datagrams ordered until the
+    /// timer can retry them instead of converting local UDP congestion into a
+    /// transport reconnect.
+    private let outboundLock = NSLock()
+    private var pendingOutboundWires: [Data] = []
+    private let maximumPendingOutboundWires = 512
     private let synchronousReceiveWaitMS: Int32
     /// This is deliberately metadata-only.  myUDP payloads can contain
     /// protected application traffic and must never be copied into a log.
@@ -117,7 +124,19 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     /// may receive peer batches independently through `receive()`.
     @discardableResult public func send(_ payload: Data) throws -> UInt16 {
         guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
-        guard payload.count <= 65_535 else { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
+        // This owner is deliberately the final myUDP boundary.  ChannelMux
+        // and SecureLink must supply a record that fits Core's 65,535-byte
+        // entry limit; Linux configuration reserves SecureLink's overhead
+        // before the record reaches this point.
+        guard payload.count <= 65_535 else {
+            diagnostic(.warning, "myudp.local_payload_rejected", diagnosticFields([
+                "operation": "send_application",
+                "reason": "payload_exceeds_transport_entry_limit",
+                "payload_bytes": String(payload.count),
+                "payload_limit_bytes": "65535",
+            ]))
+            throw ObstacleBridgeLinuxMyUDPError.invalidReply
+        }
         stateLock.lock()
         defer { stateLock.unlock() }
         let now = DispatchTime.now().uptimeNanoseconds
@@ -170,6 +189,18 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                     try serviceTimers()
                     continue
                 }
+                // Connected UDP reports an asynchronous ICMP port-unreachable
+                // from `recv` as ECONNREFUSED.  It can occur during startup
+                // while the configured peer is still binding its socket; it
+                // does not invalidate this local transport epoch.  Let Core's
+                // bounded handshake/retransmission policy retry instead.
+                if code == ECONNREFUSED {
+                    diagnostic(.warning, "myudp.receive_transient_error", diagnosticFields([
+                        "operation": "receive", "errno": String(code), "reason": "peer_not_ready",
+                    ]))
+                    try serviceTimers()
+                    continue
+                }
                 throw socketError(code, operation: "receive")
             }
             let wire = Data(buffer.prefix(Int(received)))
@@ -180,7 +211,10 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             catch {
                 stateLock.unlock()
                 protocolError(error, wire: wire, operation: "receive")
-                throw ObstacleBridgeLinuxMyUDPError.invalidReply
+                // A UDP peer can send a malformed or unrelated datagram at
+                // any time.  Python counts and drops it, then keeps the
+                // established myUDP session alive; do the same here.
+                continue
             }
             deliveredPayloads.append(contentsOf: effect.deliveredPayloads)
             let payload = deliveredPayloads.isEmpty ? nil : deliveredPayloads.removeFirst()
@@ -243,6 +277,15 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             if received <= 0 {
                 let code = errno
                 if code == EAGAIN || code == EWOULDBLOCK { return }
+                if code == ECONNREFUSED {
+                    // See the synchronous receive path: this is the UDP
+                    // error-queue indication for a peer that was not yet
+                    // listening, not a reason to retire the Core epoch.
+                    diagnostic(.warning, "myudp.receive_transient_error", diagnosticFields([
+                        "operation": "async_receive", "errno": String(code), "reason": "peer_not_ready",
+                    ]))
+                    return
+                }
                 handler(.failure(socketError(code, operation: "async_receive")))
                 return
             }
@@ -265,7 +308,9 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         catch {
             stateLock.unlock()
             protocolError(error, wire: wire, operation: "async_receive")
-            throw ObstacleBridgeLinuxMyUDPError.invalidReply
+            // Protocol-invalid datagrams are not a socket failure and must
+            // not tear down an authenticated overlay epoch.
+            return []
         }
         deliveredPayloads.append(contentsOf: effect.deliveredPayloads)
         let payloads = deliveredPayloads
@@ -279,6 +324,9 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     public func close() {
         readSource?.cancel(); readSource = nil
         timerSource?.cancel(); timerSource = nil
+        outboundLock.lock()
+        pendingOutboundWires.removeAll(keepingCapacity: false)
+        outboundLock.unlock()
         if descriptor >= 0 {
             let active = descriptor
             descriptor = -1
@@ -292,6 +340,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     /// with its own event loop may call this at its selected timer cadence.
     public func serviceTimers() throws {
         guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
+        try drainPendingOutboundWires()
         stateLock.lock()
         defer { stateLock.unlock() }
         let effects = try peerRuntime.tick(nowNS: DispatchTime.now().uptimeNanoseconds)
@@ -331,9 +380,71 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             ]))
             throw ObstacleBridgeLinuxMyUDPError.invalidReply
         }
-        diagnostic(.debug, "myudp.datagram_sent", diagnosticFields(["wire_bytes": String(wire.count)]))
+        outboundLock.lock()
+        defer { outboundLock.unlock() }
+        // Datagram ordering matters to the Core retransmission window.  Once
+        // a nonblocking write is deferred, append later frames behind it.
+        guard pendingOutboundWires.isEmpty else {
+            enqueueDeferredWireLocked(wire, reason: "prior_would_block")
+            return
+        }
+        if try sendWireLocked(wire) { return }
+        enqueueDeferredWireLocked(wire, reason: "would_block")
+    }
+
+    private func drainPendingOutboundWires() throws {
+        outboundLock.lock()
+        defer { outboundLock.unlock() }
+        while let wire = pendingOutboundWires.first {
+            guard try sendWireLocked(wire) else { return }
+            pendingOutboundWires.removeFirst()
+        }
+    }
+
+    /// Returns false only for nonblocking UDP back-pressure.  That condition
+    /// is recoverable: Core retains its reliability state and the readiness
+    /// timer retries the same wire datagram in FIFO order.
+    private func sendWireLocked(_ wire: Data) throws -> Bool {
         let sent = wire.withUnsafeBytes { Glibc.send(descriptor, $0.baseAddress, wire.count, 0) }
-        guard sent == wire.count else { throw socketError(errno, operation: "send") }
+        if sent == wire.count {
+            diagnostic(.debug, "myudp.datagram_sent", diagnosticFields(["wire_bytes": String(wire.count)]))
+            return true
+        }
+        let code = errno
+        if sent < 0 && (code == EAGAIN || code == EWOULDBLOCK) {
+            let fields = diagnosticFields([
+                "errno": String(code),
+                "wire_bytes": String(wire.count),
+                "pending_wire_count": String(pendingOutboundWires.count),
+            ])
+            // Warn on the transition into congestion.  Timer retries remain
+            // visible at debug without turning sustained local pressure into
+            // a warning flood.
+            diagnostic(pendingOutboundWires.isEmpty ? .warning : .debug, "myudp.send_deferred", fields)
+            return false
+        }
+        throw socketError(code, operation: "send", wireBytes: wire.count, sentBytes: max(0, sent))
+    }
+
+    private func enqueueDeferredWireLocked(_ wire: Data, reason: String) {
+        guard pendingOutboundWires.count < maximumPendingOutboundWires else {
+            // Core's reliable retransmission timer will regenerate a dropped
+            // frame.  Do not retire the authenticated epoch merely because
+            // the local UDP socket remains congested.
+            diagnostic(.warning, "myudp.send_deferred_drop", diagnosticFields([
+                "reason": "deferred_queue_full",
+                "wire_bytes": String(wire.count),
+                "pending_wire_count": String(pendingOutboundWires.count),
+                "pending_wire_limit": String(maximumPendingOutboundWires),
+            ]))
+            return
+        }
+        pendingOutboundWires.append(wire)
+        diagnostic(.debug, "myudp.send_deferred_queued", diagnosticFields([
+            "reason": reason,
+            "wire_bytes": String(wire.count),
+            "pending_wire_count": String(pendingOutboundWires.count),
+        ]))
     }
     private func execute(_ datagrams: [Data]) throws {
         for datagram in datagrams { try sendWire(datagram) }
@@ -365,13 +476,33 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         ]))
     }
 
-    private func socketError(_ code: Int32, operation: String) -> ObstacleBridgeLinuxMyUDPError {
-        let fields = diagnosticFields([
+    private func socketError(
+        _ code: Int32,
+        operation: String,
+        wireBytes: Int? = nil,
+        sentBytes: Int? = nil
+    ) -> ObstacleBridgeLinuxMyUDPError {
+        var fields = [
             "operation": operation,
             "errno": String(code),
-        ])
-        diagnostic(.warning, "myudp.socket_error_detected", fields)
-        diagnostic(.debug, "myudp.socket_error_detail", fields)
+        ]
+        if let wireBytes { fields["wire_bytes"] = String(wireBytes) }
+        if let sentBytes { fields["sent_bytes"] = String(sentBytes) }
+        if operation == "send", code == EAGAIN || code == EWOULDBLOCK {
+            // `startAsyncReceive` sets O_NONBLOCK on this same connected UDP
+            // descriptor. Record only socket metadata so the next incident
+            // can distinguish send-buffer pressure from protocol rejection.
+            let flags = fcntl(descriptor, F_GETFL)
+            var sendBufferBytes: Int32 = 0
+            var length = socklen_t(MemoryLayout<Int32>.size)
+            let gotSendBuffer = getsockopt(descriptor, SOL_SOCKET, SO_SNDBUF, &sendBufferBytes, &length) == 0
+            fields["would_block"] = "true"
+            fields["socket_nonblocking"] = flags >= 0 && (flags & O_NONBLOCK) != 0 ? "true" : "false"
+            if gotSendBuffer { fields["socket_send_buffer_bytes"] = String(sendBufferBytes) }
+        }
+        let safeFields = diagnosticFields(fields)
+        diagnostic(.warning, "myudp.socket_error_detected", safeFields)
+        diagnostic(.debug, "myudp.socket_error_detail", safeFields)
         return .ioFailure(code)
     }
 

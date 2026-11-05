@@ -17,6 +17,9 @@ public final class ObstacleBridgeLinuxMyUDPListenerRuntime {
     private let lock = NSLock()
     private var children: [String: ObstacleBridgeLinuxLiveRuntime] = [:]
     private var stopped = true
+    public var onDiagnostic: ObstacleBridgeLinuxMyUDPListener.DiagnosticSink? {
+        didSet { listener.onDiagnostic = onDiagnostic }
+    }
 
     public init(
         configuration: ObstacleBridgeLinuxRuntimeConfiguration,

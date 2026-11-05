@@ -152,8 +152,8 @@ set -e
 
 # App Intents metadata extraction emits this informational tool message when a
 # target has no AppIntents dependency. It is not a compiler diagnostic.
-WARNING_COUNT="$(rg 'warning:' "${BUILD_LOG}" | rg -v 'Metadata extraction skipped\. No AppIntents\.framework dependency found\.' | wc -l | tr -d ' ' || true)"
-ERROR_COUNT="$(rg -c 'error:' "${BUILD_LOG}" || true)"
+WARNING_COUNT="$(/usr/bin/grep -F 'warning:' "${BUILD_LOG}" | /usr/bin/grep -Fv 'Metadata extraction skipped. No AppIntents.framework dependency found.' | /usr/bin/wc -l | /usr/bin/tr -d ' ' || true)"
+ERROR_COUNT="$(/usr/bin/grep -cF 'error:' "${BUILD_LOG}" || true)"
 WARNING_COUNT="${WARNING_COUNT:-0}"
 ERROR_COUNT="${ERROR_COUNT:-0}"
 echo "[build_ios_app] compiler diagnostics: warnings=${WARNING_COUNT} errors=${ERROR_COUNT}"

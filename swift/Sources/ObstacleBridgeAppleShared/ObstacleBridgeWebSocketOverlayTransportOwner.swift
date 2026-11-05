@@ -182,9 +182,12 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         self.eventSink = eventSink
         self.serviceCatalogSink = serviceCatalogSink
         self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_websocket_overlay_owner_serializes_public_and_delegate_callbacks
+        // Runtime construction occurs before publication; later access stays on `queue`.
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
             instanceID: muxInstanceID,
-            connectionSeq: muxConnectionSeq
+            connectionSeq: muxConnectionSeq,
+            sessionMaxAppPayload: self.sessionMaxAppPayload
         )
         if let tunIfname = self.tunIfname, !tunIfname.isEmpty, self.tunMTU > 0 {
             let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname, mtu: self.tunMTU)
@@ -197,7 +200,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 sharedTunDisableOutgoingNormalization: self.sharedTunDisableOutgoingNormalization,
                 sharedTunDisableInflowFilter: self.sharedTunDisableInflowFilter,
                 sharedTunDisableOutflowFilter: self.sharedTunDisableOutflowFilter,
-                sharedTunDisableScopedThrottle: self.sharedTunDisableScopedThrottle
+                sharedTunDisableScopedThrottle: self.sharedTunDisableScopedThrottle,
+                sessionMaxAppPayload: self.sessionMaxAppPayload
             )
         }
         super.init()

@@ -2457,9 +2457,31 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if not self._overlay_connected:
             self._transport_delay_high_since_mono = None
             return None
-        snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
+        now_ns = time.monotonic_ns() if now_mono is None else int(now * 1_000_000_000)
+        snapshot = self._session_overlay_backpressure_snapshot(now_ns=now_ns)
         delay_ms = float(snapshot.get("transmit_delay_est_ms", 0.0) or 0.0)
         if delay_ms < self._transport_delay_threshold_ms:
+            self._transport_delay_high_since_mono = None
+            return None
+        secure_status_getter = getattr(self.session, "get_secure_link_status_snapshot", None)
+        secure_status: Mapping[str, Any] = {}
+        if callable(secure_status_getter):
+            with contextlib.suppress(Exception):
+                candidate = secure_status_getter()
+                if isinstance(candidate, Mapping):
+                    secure_status = candidate
+        try:
+            last_rx_ns = max(0, int(snapshot.get("last_rx_ns", 0) or 0))
+        except (TypeError, ValueError):
+            last_rx_ns = 0
+        # An authenticated packet proves the active epoch is making receive
+        # progress. Do not rotate solely for delayed acknowledgements while
+        # that proof remains within the same liveness grace window.
+        if (
+            bool(secure_status.get("authenticated"))
+            and last_rx_ns > 0
+            and 0 <= now_ns - last_rx_ns < int(self._transport_delay_rotation_delay_s * 1_000_000_000)
+        ):
             self._transport_delay_high_since_mono = None
             return None
         if self._transport_delay_high_since_mono is None:
@@ -4790,6 +4812,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "rtt_est_ms": 0.0,
                 "prev_window_bytes": 0,
                 "curr_window_bytes": 0,
+                "last_rx_ns": 0,
                 "stalled": False,
             }
         try:
@@ -4803,6 +4826,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "rtt_est_ms": 0.0,
                 "prev_window_bytes": 0,
                 "curr_window_bytes": 0,
+                "last_rx_ns": 0,
                 "stalled": False,
             }
         waiting_count = 0
@@ -4860,6 +4884,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "rtt_est_ms": rtt_ms,
                 "prev_window_bytes": prev_window_bytes,
                 "curr_window_bytes": curr_window_bytes,
+                "last_rx_ns": last_rx,
                 "stalled": False,
             }
         idle_budget_ns = int(self.TUN_STREAM_OVERLAY_STALL_NS)
@@ -4885,6 +4910,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             "rtt_est_ms": rtt_ms,
             "prev_window_bytes": prev_window_bytes,
             "curr_window_bytes": curr_window_bytes,
+            "last_rx_ns": last_rx,
             "stalled": stalled,
         }
 

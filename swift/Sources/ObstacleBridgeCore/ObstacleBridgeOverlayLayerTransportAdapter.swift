@@ -448,7 +448,13 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
             }
         }
 
-        refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter?.statusSnapshot())
+        let secureLinkStatus = secureLinkAdapter?.statusSnapshot()
+        refreshOuterLifecycle(secureLinkStatus: secureLinkStatus)
+        if secureLinkStatus?.authenticated == true,
+           let epoch = coreCoordinator.snapshot.epoch {
+            let now = UInt64(max(0, lifecycleTimeProvider()) * 1_000)
+            applyCore(.authenticatedReceiveProgress(epoch: epoch, nowMilliseconds: now))
+        }
         // The peer-address protocol lives beneath SecureLink.  Emit its
         // client request only after the protected handshake is authenticated;
         // otherwise a strict peer waiting for CLIENT_HELLO would block.

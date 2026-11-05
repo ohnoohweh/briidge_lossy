@@ -333,8 +333,10 @@ Current implementation note:
   Implementation note: the portable Core PSK peers own the complete explicit
   rekey hello/reply/commit/done transition. They authenticate pending key
   material before serialized cutover, reset each new directional counter to
-  `1`, reject protected frames carrying the replaced session identifier, and
-  fail closed when the injected pending-rekey deadline expires. A listener
+  `1`, retain exactly one replaced inbound generation for a bounded overlap
+  interval using its session identifier and independent replay counter, reject
+  every other or expired replaced-session frame, and fail closed when the
+  injected pending-rekey deadline expires. A listener
   retransmission of the same rekey hello retains its original deadline. A
   client holds application sends after its authenticated rekey commit until
   the matching done frame authorizes cutover, and a duplicate authenticated
@@ -440,7 +442,7 @@ Lifecycle ownership: transports, SecureLink, and Compression publish typed lifec
 
 Layered lifecycle invariant: a typed lower-transport `disconnected` event is authoritative even if an immediately inspected raw transport object still appears connected. SecureLink clears authenticated peer state on that event, and Compression consequently reports disconnected; WebAdmin shall never display an inner disconnected layer beneath connected SecureLink or Compression layers.
 
-Ingress throttling: ChannelMux uses the transport RTT estimator common to myUDP, TCP, WebSocket, and QUIC. `channelmux_transport_delay_threshold_ms` defaults to 5000 ms. At or above that value it pauses local TCP reads before data enters the overlay output queue and rejects local UDP packets; TUN reads continue draining and completed TUN ChannelMux DATA/DATA_FRAG frames are rejected at the immediate ChannelMux-to-SecureLink handoff. `channelmux_transport_delay_rotation_delay_ms` defaults to 30000 ms; if estimated transport delay remains at or above the threshold for that duration, ChannelMux requests one normal lower-layer connection rotation for the current lifecycle epoch. Admission resumes automatically below the threshold. SecureLink authentication remains a separate outer-lifecycle gate.
+Ingress throttling: ChannelMux uses the transport RTT estimator common to myUDP, TCP, WebSocket, and QUIC. `channelmux_transport_delay_threshold_ms` defaults to 5000 ms. At or above that value it pauses local TCP reads before data enters the overlay output queue and rejects local UDP packets; TUN reads continue draining and completed TUN ChannelMux DATA/DATA_FRAG frames are rejected at the immediate ChannelMux-to-SecureLink handoff. `channelmux_transport_delay_rotation_delay_ms` defaults to 30000 ms; a normal lower-layer connection rotation for the current lifecycle epoch requires delay at or above the threshold and no authenticated receive progress throughout that same grace interval. Fresh authenticated receive progress clears a pending delay-only rotation. Admission resumes automatically below the threshold. SecureLink authentication remains a separate outer-lifecycle gate.
 
 ChannelMux admits TUN packets, TUN reader registration, and internal connectivity probes only while the current lifecycle epoch is connected. A disconnected lifecycle event withdraws admission before local packet forwarding or probe injection can enter the mux path. Runner consumes an exhausted transport candidate-cycle result and requests one process restart with the transport and cycle diagnostic reason; its watchdog is reserved for sessions that have emitted no lifecycle state.
 
@@ -547,7 +549,7 @@ Implementation note: the live-config derivation for `REQ-MUX-010` now also inclu
 - `REQ-MYU-003`: The myudp transport shall recover from selected CONTROL frame loss.
 - `REQ-MYU-004`: The myudp transport shall correctly transfer large payloads under delayed and lossy conditions.
 - `REQ-MYU-005`: Bidirectional myudp traffic shall remain functional when both directions are active concurrently.
-- `REQ-MYU-006`: The myudp transport shall tolerate heavy early loss patterns without silently corrupting delivered payloads, while rejecting an out-of-window peer counter without materializing unreportable missing state.
+- `REQ-MYU-006`: The myudp transport shall tolerate heavy early loss patterns without silently corrupting delivered payloads, reject an out-of-window peer counter without materializing unreportable missing state, and log-and-drop malformed inbound datagrams without reconnecting an otherwise viable peer session. Local outbound rejection and nonblocking-send backpressure diagnostics shall identify the operation and bounded size/socket metadata without logging protected payload bytes.
 
 Implementation and verification note: the shared Core wire corpus derives a
 myUDP DATA_BATCH envelope from the Python reference `Protocol` and

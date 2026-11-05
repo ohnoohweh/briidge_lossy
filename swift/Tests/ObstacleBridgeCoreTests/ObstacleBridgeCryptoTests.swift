@@ -578,7 +578,7 @@ struct ObstacleBridgeCryptoTests {
     @Test func secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters() throws {
         let psk = Data("portable-rekey-psk".utf8)
         var monotonicTime: TimeInterval = 0
-        let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
+        let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk, timeProvider: { monotonicTime })
         let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk, timeProvider: { monotonicTime })
         let proof = try client.handleServerHello(server.handleClientHello(
             try client.begin(sessionID: 7, clientNonce: Data(repeating: 1, count: 32)),
@@ -612,6 +612,8 @@ struct ObstacleBridgeCryptoTests {
         // admits it instead of turning a healthy in-flight packet into loss.
         let inFlightOldGenerationFrame = try client.protect(Data("in-flight-old-generation".utf8))
         let expiredInFlightOldGenerationFrame = try client.protect(Data("expired-in-flight-old-generation".utf8))
+        let delayedOldGenerationReply = try server.protect(Data("delayed-old-generation-reply".utf8))
+        let expiredDelayedOldGenerationReply = try server.protect(Data("expired-delayed-old-generation-reply".utf8))
         let rekeyCommit = try client.handleRekeyReply(rekeyReply)
         #expect(client.state.pendingRekeySessionID == 8)
         #expect(client.state.applicationSendingBlocked)
@@ -640,6 +642,11 @@ struct ObstacleBridgeCryptoTests {
             try server.unprotect(expiredInFlightOldGenerationFrame)
         }
         try client.handleRekeyDone(rekeyDone)
+        #expect(try client.unprotect(delayedOldGenerationReply) == Data("delayed-old-generation-reply".utf8))
+        monotonicTime = 10.002
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidFrame) {
+            try client.unprotect(expiredDelayedOldGenerationReply)
+        }
         #expect(client.state.authenticatedGenerationsTotal == 2)
         #expect(server.state.authenticatedGenerationsTotal == 2)
         #expect(client.state.rekeysCompletedTotal == 1)
@@ -652,7 +659,7 @@ struct ObstacleBridgeCryptoTests {
             pendingRekeySessionID: 0,
             applicationSendingBlocked: false,
             protectedFramesSentTotal: 1,
-            protectedFramesReceivedTotal: 0,
+            protectedFramesReceivedTotal: 1,
             authenticatedGenerationsTotal: 2,
             rekeysCompletedTotal: 1
         ))
@@ -663,7 +670,9 @@ struct ObstacleBridgeCryptoTests {
             authenticated: true,
             pendingRekeySessionID: 0,
             applicationSendingBlocked: false,
-            protectedFramesSentTotal: 0,
+            // The server's rekey completion is protected under the new
+            // generation, so it contributes to the protected-send metric.
+            protectedFramesSentTotal: 2,
             protectedFramesReceivedTotal: 2,
             authenticatedGenerationsTotal: 2,
             rekeysCompletedTotal: 1

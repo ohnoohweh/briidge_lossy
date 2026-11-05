@@ -273,7 +273,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try session.receive().payload == Data("python-reordered".utf8))
     }
 
-    @Test func myudpTransportRejectsMalformedPythonDatagramAndClosedSession() throws {
+    @Test func myudpTransportDropsMalformedPythonDatagramAndKeepsSessionAlive() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-malformed")
         defer { peer.stop() }
         let diagnostics = RuntimeDiagnosticRecorder()
@@ -282,12 +282,62 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
             diagnosticSink: { level, event, fields in diagnostics.record(level, event: event, fields: fields) }
         )
         _ = try session.send(Data("register".utf8))
-        #expect(throws: ObstacleBridgeLinuxMyUDPError.invalidReply) { try session.receive() }
+        #expect(try session.receive().payload == Data("register".utf8))
         #expect(diagnostics.contains(level: .warning, event: "myudp.protocol_error_detected"))
         #expect(diagnostics.contains(field: "operation", value: "receive"))
         #expect(diagnostics.contains(field: "wire_bytes", value: "1"))
         session.close()
         #expect(throws: ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF)) { try session.serviceTimers() }
+    }
+
+    @Test func myudpTransportReportsOversizedLocalPayloadBeforeInvalidReply() throws {
+        let diagnostics = RuntimeDiagnosticRecorder()
+        let session = try ObstacleBridgeLinuxMyUDPTransportSession(
+            host: "127.0.0.1", port: 9,
+            diagnosticSink: { level, event, fields in diagnostics.record(level, event: event, fields: fields) }
+        )
+        defer { session.close() }
+        #expect(throws: ObstacleBridgeLinuxMyUDPError.invalidReply) {
+            _ = try session.send(Data(repeating: 0, count: 65_536))
+        }
+        #expect(diagnostics.contains(level: .warning, event: "myudp.local_payload_rejected"))
+        #expect(diagnostics.contains(field: "operation", value: "send_application"))
+        #expect(diagnostics.contains(field: "payload_bytes", value: "65536"))
+        #expect(diagnostics.contains(field: "payload_limit_bytes", value: "65535"))
+    }
+
+    @Test func myudpListenerReportsMalformedInboundDatagramAtWarning() throws {
+        let diagnostics = RuntimeDiagnosticRecorder()
+        let listener = try ObstacleBridgeLinuxMyUDPListener(
+            port: 0,
+            diagnosticSink: { level, event, fields in diagnostics.record(level, event: event, fields: fields) }
+        )
+        defer { listener.close() }
+        let client = socket(AF_INET, Int32(SOCK_DGRAM.rawValue), Int32(IPPROTO_UDP))
+        guard client >= 0 else { throw POSIXError(.ENFILE) }
+        defer { _ = close(client) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(UInt16(listener.port).bigEndian)
+        address.sin_addr = in_addr(s_addr: INADDR_LOOPBACK.bigEndian)
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Glibc.connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        #expect(connected == 0)
+        let malformed = Data([0x01])
+        #expect(malformed.withUnsafeBytes { Glibc.send(client, $0.baseAddress, malformed.count, 0) } == malformed.count)
+        let record = try ObstacleBridgeUdpOverlayCodec.encodeStreamRecord(Data("listener-valid".utf8))
+        let valid = try ObstacleBridgeUdpOverlayCodec.buildDataBatchFrame(
+            chunks: [.init(counter: 1, data: record)], txNS: 1, echoNS: 0
+        )
+        #expect(valid.withUnsafeBytes { Glibc.send(client, $0.baseAddress, valid.count, 0) } == valid.count)
+        #expect(try listener.receive() == nil)
+        #expect(try listener.receive()?.payload == Data("listener-valid".utf8))
+        #expect(diagnostics.contains(level: .warning, event: "myudp.protocol_error_detected"))
+        #expect(diagnostics.contains(field: "operation", value: "listener_receive"))
+        #expect(diagnostics.contains(field: "wire_bytes", value: "1"))
     }
 
     @Test func configuredMyudpSecureLinkSessionCarriesProtectedDataAgainstPythonPeer() throws {
@@ -1240,7 +1290,7 @@ final class PythonOverlayPeer {
             return """
             import socket
             s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
-            _,peer=s.recvfrom(1452); s.sendto(b'\\x01',peer); s.close()
+            frame,peer=s.recvfrom(1452); s.sendto(b'\\x01',peer); s.sendto(frame,peer); s.close()
             """
         }
         if mode == "myudp-securelink-reconnect" || mode == "myudp-securelink-reconnect-stale" {

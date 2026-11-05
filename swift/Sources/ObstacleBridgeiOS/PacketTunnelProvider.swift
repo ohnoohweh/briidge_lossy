@@ -345,7 +345,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     }
 
     func recordPacketBridgeEvent(_ event: String, fields: [String: Any] = [:]) {
-        guard nativePacketDiagnosticsEnabled() else { return }
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_m3_native_sources
+        // Warning-level transport failures remain visible with ordinary UDP
+        // session logging. Packet/ChannelMux tracing is still opt-in.
+        guard nativePacketDiagnosticsEnabled() || fields["severity"] as? String == "warning" else { return }
         recordNativeEvent(event, fields: fields)
     }
 
@@ -3481,10 +3484,14 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
     /// High-rate native transport events are opt-in. Returning `nil` means
     /// the transport owner never constructs per-frame diagnostic fields.
     private func packetBridgeDiagnosticEventSink() -> ((String, [String: Any]) -> Void)? {
-        guard ObstacleBridgeRuntimeConfig.nativeChannelMuxDiagnosticsEnabled(
+        let highRateDiagnosticsEnabled = ObstacleBridgeRuntimeConfig.nativeChannelMuxDiagnosticsEnabled(
             runtimeConfig: settings.runtimeConfig
-        ) else { return nil }
+        )
         return { [weak self] event, fields in
+            // Parser/protocol rejections are warning-level operational
+            // diagnostics, not high-rate packet tracing.  Preserve them even
+            // when native ChannelMux diagnostics are disabled.
+            guard highRateDiagnosticsEnabled || fields["severity"] as? String == "warning" else { return }
             self?.provider?.recordPacketBridgeEvent(event, fields: fields)
         }
     }
