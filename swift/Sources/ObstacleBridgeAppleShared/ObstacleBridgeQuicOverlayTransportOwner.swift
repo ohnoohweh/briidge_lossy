@@ -174,6 +174,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
         self.muxConnectionSeq = muxConnectionSeq
         self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
         if let tunIfname = self.tunIfname, !tunIfname.isEmpty, self.tunMTU > 0 {
+            // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue
+            // Runtime construction occurs before publication; later access stays on `queue`.
             let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname, mtu: self.tunMTU)
             self.tunRuntime = ObstacleBridgeChannelMuxTunRuntime(
                 instanceID: muxInstanceID,

@@ -170,6 +170,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
         self.eventSink = eventSink
         self.serviceCatalogSink = serviceCatalogSink
         self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks
+        // Runtime construction occurs before publication; later access stays on `queue`.
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
             instanceID: muxInstanceID,
             connectionSeq: muxConnectionSeq,

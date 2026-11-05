@@ -182,6 +182,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         self.eventSink = eventSink
         self.serviceCatalogSink = serviceCatalogSink
         self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_websocket_overlay_owner_serializes_public_and_delegate_callbacks
+        // Runtime construction occurs before publication; later access stays on `queue`.
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
             instanceID: muxInstanceID,
             connectionSeq: muxConnectionSeq,
