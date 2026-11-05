@@ -117,7 +117,19 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     /// may receive peer batches independently through `receive()`.
     @discardableResult public func send(_ payload: Data) throws -> UInt16 {
         guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
-        guard payload.count <= 65_535 else { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
+        guard payload.count <= 65_535 else {
+            // This guard is outside Core's record chunking path.  Preserve the
+            // legacy error for now, but make the local rejection observable so
+            // a reconnect cannot be mistaken for an inbound parser or rekey
+            // failure.  Payload bytes are deliberately never logged.
+            diagnostic(.warning, "myudp.local_payload_rejected", diagnosticFields([
+                "operation": "send_application",
+                "reason": "payload_exceeds_transport_entry_limit",
+                "payload_bytes": String(payload.count),
+                "payload_limit_bytes": "65535",
+            ]))
+            throw ObstacleBridgeLinuxMyUDPError.invalidReply
+        }
         stateLock.lock()
         defer { stateLock.unlock() }
         let now = DispatchTime.now().uptimeNanoseconds
@@ -338,7 +350,9 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         }
         diagnostic(.debug, "myudp.datagram_sent", diagnosticFields(["wire_bytes": String(wire.count)]))
         let sent = wire.withUnsafeBytes { Glibc.send(descriptor, $0.baseAddress, wire.count, 0) }
-        guard sent == wire.count else { throw socketError(errno, operation: "send") }
+        guard sent == wire.count else {
+            throw socketError(errno, operation: "send", wireBytes: wire.count, sentBytes: max(0, sent))
+        }
     }
     private func execute(_ datagrams: [Data]) throws {
         for datagram in datagrams { try sendWire(datagram) }
@@ -370,13 +384,33 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         ]))
     }
 
-    private func socketError(_ code: Int32, operation: String) -> ObstacleBridgeLinuxMyUDPError {
-        let fields = diagnosticFields([
+    private func socketError(
+        _ code: Int32,
+        operation: String,
+        wireBytes: Int? = nil,
+        sentBytes: Int? = nil
+    ) -> ObstacleBridgeLinuxMyUDPError {
+        var fields = [
             "operation": operation,
             "errno": String(code),
-        ])
-        diagnostic(.warning, "myudp.socket_error_detected", fields)
-        diagnostic(.debug, "myudp.socket_error_detail", fields)
+        ]
+        if let wireBytes { fields["wire_bytes"] = String(wireBytes) }
+        if let sentBytes { fields["sent_bytes"] = String(sentBytes) }
+        if operation == "send", code == EAGAIN || code == EWOULDBLOCK {
+            // `startAsyncReceive` sets O_NONBLOCK on this same connected UDP
+            // descriptor. Record only socket metadata so the next incident
+            // can distinguish send-buffer pressure from protocol rejection.
+            let flags = fcntl(descriptor, F_GETFL)
+            var sendBufferBytes: Int32 = 0
+            var length = socklen_t(MemoryLayout<Int32>.size)
+            let gotSendBuffer = getsockopt(descriptor, SOL_SOCKET, SO_SNDBUF, &sendBufferBytes, &length) == 0
+            fields["would_block"] = "true"
+            fields["socket_nonblocking"] = flags >= 0 && (flags & O_NONBLOCK) != 0 ? "true" : "false"
+            if gotSendBuffer { fields["socket_send_buffer_bytes"] = String(sendBufferBytes) }
+        }
+        let safeFields = diagnosticFields(fields)
+        diagnostic(.warning, "myudp.socket_error_detected", safeFields)
+        diagnostic(.debug, "myudp.socket_error_detail", safeFields)
         return .ioFailure(code)
     }
 

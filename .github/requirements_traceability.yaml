@@ -1666,6 +1666,7 @@ REQ-MYU-006:
   unit_tests:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportReassemblesDuplicatedOutOfOrderPythonChunks
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportDropsMalformedPythonDatagramAndKeepsSessionAlive
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportReportsOversizedLocalPayloadBeforeInvalidReply
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_out_of_order_delivery_tracks_missing_and_reassembles_without_corruption
     - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_out_of_window_counter_does_not_materialize_missing_state
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_gap_state_reproduces_stall_shape_until_missing_frame_arrives

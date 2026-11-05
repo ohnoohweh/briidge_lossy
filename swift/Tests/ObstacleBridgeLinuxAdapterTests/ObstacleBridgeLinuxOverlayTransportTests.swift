@@ -290,6 +290,22 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(throws: ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF)) { try session.serviceTimers() }
     }
 
+    @Test func myudpTransportReportsOversizedLocalPayloadBeforeInvalidReply() throws {
+        let diagnostics = RuntimeDiagnosticRecorder()
+        let session = try ObstacleBridgeLinuxMyUDPTransportSession(
+            host: "127.0.0.1", port: 9,
+            diagnosticSink: { level, event, fields in diagnostics.record(level, event: event, fields: fields) }
+        )
+        defer { session.close() }
+        #expect(throws: ObstacleBridgeLinuxMyUDPError.invalidReply) {
+            _ = try session.send(Data(repeating: 0, count: 65_536))
+        }
+        #expect(diagnostics.contains(level: .warning, event: "myudp.local_payload_rejected"))
+        #expect(diagnostics.contains(field: "operation", value: "send_application"))
+        #expect(diagnostics.contains(field: "payload_bytes", value: "65536"))
+        #expect(diagnostics.contains(field: "payload_limit_bytes", value: "65535"))
+    }
+
     @Test func myudpListenerReportsMalformedInboundDatagramAtWarning() throws {
         let diagnostics = RuntimeDiagnosticRecorder()
         let listener = try ObstacleBridgeLinuxMyUDPListener(
