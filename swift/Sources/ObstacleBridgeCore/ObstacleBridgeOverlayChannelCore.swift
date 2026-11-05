@@ -700,7 +700,11 @@ public final class ObstacleBridgeOverlayChannelRuntime {
         connectionSequence: UInt32,
         localAddress: String? = nil,
         localAddress6: String? = nil,
-        sharedTunPeers: [SharedTunPeer] = []
+        sharedTunPeers: [SharedTunPeer] = [],
+        /// Maximum complete ChannelMux record accepted by the immediately
+        /// lower transport layer.  Callers with SecureLink must pass the
+        /// transport limit after its 20-byte header and 16-byte AEAD tag.
+        sessionMaxAppPayload: Int = 65_535
     ) {
         self.tunIfname = interfaceName
         self.tunMTU = max(0, mtu)
@@ -714,7 +718,8 @@ public final class ObstacleBridgeOverlayChannelRuntime {
             connectionSeq: connectionSequence,
             localSpec: self.serviceSpec,
             localTunnelAddress: localAddress,
-            localTunnelAddress6: localAddress6
+            localTunnelAddress6: localAddress6,
+            sessionMaxAppPayload: sessionMaxAppPayload
         )
     }
 

@@ -313,7 +313,14 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.debugLoggingEnabled = debugLoggingEnabled
         self.channelMuxLogLevel = channelMuxLogLevel
         self.compressionPolicy = compressionPolicy
-        self.channelMuxMaximumApplicationPayload = max(32, min(channelMuxMaximumApplicationPayload, 65_535))
+        // ChannelMux's limit applies to the record handed to its next layer.
+        // SecureLink adds its fixed 20-byte header and 16-byte AEAD tag after
+        // ChannelMux has framed that record.  Preserve room for those bytes
+        // here, as Python does in SecureLink.get_stream_record_limit(), so a
+        // legal maximum-size ChannelMux frame never becomes an invalid myUDP
+        // application record downstream.
+        let secureLinkOverhead = secureLinkPSK?.isEmpty == false ? 20 + 16 : 0
+        self.channelMuxMaximumApplicationPayload = max(32, min(channelMuxMaximumApplicationPayload, 65_535 - secureLinkOverhead))
         self.listenerRemoteServicePublicationEnabled = listenerRemoteServicePublicationEnabled
         self.ownServices = ownServices
         self.remoteServices = remoteServices

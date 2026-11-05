@@ -670,7 +670,9 @@ struct ObstacleBridgeCryptoTests {
             authenticated: true,
             pendingRekeySessionID: 0,
             applicationSendingBlocked: false,
-            protectedFramesSentTotal: 1,
+            // The server's rekey completion is protected under the new
+            // generation, so it contributes to the protected-send metric.
+            protectedFramesSentTotal: 2,
             protectedFramesReceivedTotal: 2,
             authenticatedGenerationsTotal: 2,
             rekeysCompletedTotal: 1

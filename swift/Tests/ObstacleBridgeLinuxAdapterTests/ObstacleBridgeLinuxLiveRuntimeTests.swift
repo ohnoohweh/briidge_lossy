@@ -12,6 +12,25 @@ import ObstacleBridgeCore
 
 @Suite(.serialized)
 struct ObstacleBridgeLinuxLiveRuntimeTests {
+    @Test func secureLinkReservesItsEncapsulationOverheadFromChannelMuxBudget() {
+        let plain = ObstacleBridgeLinuxRuntimeConfiguration(
+            transport: .myudp, host: "127.0.0.1", port: 9
+        )
+        let protected = ObstacleBridgeLinuxRuntimeConfiguration(
+            transport: .myudp, host: "127.0.0.1", port: 9,
+            secureLinkPSK: Data("linux-swift-psk".utf8)
+        )
+        let protectedSmall = ObstacleBridgeLinuxRuntimeConfiguration(
+            transport: .myudp, host: "127.0.0.1", port: 9,
+            secureLinkPSK: Data("linux-swift-psk".utf8),
+            channelMuxMaximumApplicationPayload: 160
+        )
+
+        #expect(plain.channelMuxMaximumApplicationPayload == 65_535)
+        #expect(protected.channelMuxMaximumApplicationPayload == 65_499)
+        #expect(protectedSmall.channelMuxMaximumApplicationPayload == 160)
+    }
+
     @Test func nativeRuntimeOwnsEitherProxyWorkerAndReportsLoss() throws {
         let environment = ProcessInfo.processInfo.environment
         guard let python = environment["OBSTACLEBRIDGE_TEST_PYTHON"], let native = environment["OBSTACLEBRIDGE_TEST_PROXY_WORKER"] else { return }
