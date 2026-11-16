@@ -352,6 +352,8 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_blocks_disconnected_non_securelink_transport
     - tests/unit/test_channel_mux_listener_mode.py::test_overlay_ready_proactively_opens_configured_tun_listener
     - tests/unit/test_channel_mux_listener_mode.py::test_reconnect_reannounces_tun_open_when_first_epoch_open_is_lost
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayChannelAdapterTests.swift::lostReconnectTunOpenIsReannouncedWithoutAllocatingAnotherChannel
+    - ios/tests/test_m3_native_sources.py::test_swift_tun_reconnect_open_replay_is_owned_by_udp_and_linux_runtime
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_tun_close_removes_closed_channel_from_interface_aliases
     - tests/unit/test_channel_mux_listener_mode.py::test_local_udp_datagram_emits_debug_level_direction_diagnostic
     - tests/unit/test_channel_mux_listener_mode.py::test_overlay_udp_to_target_emits_debug_level_direction_diagnostic

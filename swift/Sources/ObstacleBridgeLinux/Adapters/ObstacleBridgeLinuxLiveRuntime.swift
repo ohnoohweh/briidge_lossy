@@ -206,6 +206,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var previousRuntimeLifetimeEndedCleanly: Bool?
     private var runtimeHealthTimer: DispatchSourceTimer?
     private var livenessProbeTimer: DispatchSourceTimer?
+    private var tunOpenReplayTimer: DispatchSourceTimer?
     private var activeCoordinatorEpoch: UInt64?
     private var lastFailureDiagnosticSignature: String?
     /// Listener-owned child sessions are retired by their shared listener;
@@ -348,6 +349,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             self.apply(self.coordinator.handle(.start))
             self.startRuntimeHealthHeartbeat()
             self.startLivenessProbes()
+            self.startTunOpenReplayTimer()
         }
     }
 
@@ -1326,6 +1328,18 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         timer.resume()
     }
 
+    private func startTunOpenReplayTimer() {
+        stopTunOpenReplayTimer()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + .seconds(5), repeating: .seconds(5))
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.stopped else { return }
+            _ = self.tunChannelAdapter?.reannounceStalledTunOpen()
+        }
+        tunOpenReplayTimer = timer
+        timer.resume()
+    }
+
     private func stopLivenessProbes() {
         livenessProbeTimer?.setEventHandler {}
         livenessProbeTimer?.cancel()
@@ -1336,7 +1350,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         runtimeHealthTimer?.setEventHandler {}
         runtimeHealthTimer?.cancel()
         runtimeHealthTimer = nil
+        stopTunOpenReplayTimer()
         stopLivenessProbes()
+    }
+
+    private func stopTunOpenReplayTimer() {
+        tunOpenReplayTimer?.setEventHandler {}
+        tunOpenReplayTimer?.cancel()
+        tunOpenReplayTimer = nil
     }
 
     private func appendRuntimeHealth(event: String, controlledStop: Bool = false) {
@@ -1372,6 +1393,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     deinit {
         runtimeHealthTimer?.cancel()
         livenessProbeTimer?.cancel()
+        tunOpenReplayTimer?.cancel()
         transportLifecycleOwner.cancelRetry()
         transportLifecycleOwner.replaceReceiveWorker(with: nil)
         stopServiceOwners()
