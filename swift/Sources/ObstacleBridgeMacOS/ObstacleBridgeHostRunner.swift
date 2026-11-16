@@ -1688,7 +1688,8 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     }
 
     private func snapshotUncached() -> [String: Any] {
-        ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessCPU()
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=projectsPythonCompatibleBoundedMemoryMetrics
+        ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics()
         let uptimeMS = Int(Date().timeIntervalSince(startedAt) * 1000)
         let uptimeSec = Int(Date().timeIntervalSince(startedAt))
         let health = runtimeHealthMetadata()

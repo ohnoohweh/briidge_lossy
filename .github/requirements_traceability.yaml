@@ -1803,6 +1803,13 @@ REQ-ADM-001:
     - tests/unit/test_runtime_metrics.py::test_accumulator_rejects_unbounded_category_definitions
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate
+    - tests/unit/test_runtime_metrics.py::test_linux_memory_sampler_reads_current_rss_in_bytes
+    - tests/unit/test_runtime_metrics.py::test_memory_metrics_are_bounded_and_report_warning_state
+    - tests/unit/test_runtime_metrics.py::test_runner_memory_sampler_projects_rss_and_unavailable_state
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::projectsPythonCompatibleBoundedMemoryMetrics
+    - tests/unit/test_runtime_metrics.py::test_memory_metrics_report_unavailable_before_a_successful_sample
+    - tests/unit/test_config_bootstrap_cli.py::test_runner_memory_warning_limit_is_configurable_in_bytes
+    - tests/unit/test_admin_web_component_parity.py::test_runtime_analysis_renders_optional_memory_metrics_without_affecting_older_hosts
     - tests/unit/test_runtime_metrics.py::test_runner_monitor_is_one_owned_task_and_cancels_cleanly
     # Covers Python/Swift transport and status peak sources, including Swift compression frame/encode/decode, SecureLink-worker, Apple parse/per-payload SecureLink/ChannelMux, and TUN data-guard/fragment/relay/system-write stages plus TCP server/client/write/close and client-open Core/publication/connection/receive stages and egress/lifecycle. Inclusive owner-queue, payload-batch, payload-delivery, TCP-message-dispatch, and TUN-payload wrappers are prohibited; disabled-collector no-I/O and bounded projection remain covered.
     - tests/unit/test_runtime_metrics.py::test_runner_runtime_metrics_status_is_bounded_and_redacted

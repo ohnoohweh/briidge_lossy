@@ -105,6 +105,19 @@ function fmtBytes(value) {
   return `${(bytes / GB).toFixed(1)} GB`;
 }
 
+function fmtMemoryBytes(value) {
+  if (value == null || Number.isNaN(value)) return 'Unavailable';
+  const bytes = Math.max(0, Number(value));
+  const KiB = 1024;
+  const MiB = KiB * 1024;
+  const GiB = MiB * 1024;
+
+  if (bytes < KiB) return `${Math.floor(bytes)} B`;
+  if (bytes < MiB) return `${(bytes / KiB).toFixed(1)} KiB`;
+  if (bytes < GiB) return `${(bytes / MiB).toFixed(1)} MiB`;
+  return `${(bytes / GiB).toFixed(1)} GiB`;
+}
+
 function fmtBytesPerSecond(value) {
   if (value == null || Number.isNaN(value)) return 'n/a';
   return `${fmtBytes(value)}/s`;
@@ -2092,15 +2105,30 @@ function renderRuntimeMetrics(status) {
   const metrics = status?.runtime_metrics || {};
   const renderMeter = (id, values, ceiling) => {
     const el = document.getElementById(id); if (!el) return;
+    const container = el.closest('.runtime-meter');
+    if (container) container.hidden = !values;
     const overall = Number(values?.overall); const recent = Number(values?.last_2_seconds);
     if (!Number.isFinite(overall) && !Number.isFinite(recent)) { el.style.setProperty('--overall', '0%'); el.style.setProperty('--recent', '0%'); return; }
-    const outer = Math.min(100, (overall / ceiling) * 100); const inner = Math.min(100, (recent / ceiling) * 100);
+    const limit = Number(ceiling);
+    const percentage = (value) => limit > 0 ? Math.min(100, (value / limit) * 100) : (value > 0 ? 100 : 0);
+    const outer = percentage(overall); const inner = percentage(recent);
     el.style.setProperty('--overall', `${outer}%`); el.style.setProperty('--recent', `${inner}%`);
   };
   renderMeter('cpuMeter', metrics.cpu_cores_max, 1); renderMeter('sliceMeter', metrics.work_slice_ms_max, 100);
+  const memory = metrics.memory_bytes;
+  renderMeter('memoryMeter', memory?.warning_limit == null ? null : {
+    overall: memory.overall_peak,
+    last_2_seconds: memory.last_2_seconds_peak,
+  }, memory?.warning_limit);
   const summary = document.getElementById('runtimeAnalysisSummary'); const rows = document.getElementById('runtimeAnalysisRows');
   if (!summary || !rows) return;
   const cpu = metrics.cpu_cores_max || {}; const slice = metrics.work_slice_ms_max || {};
+  const memoryRows = memory ? [
+    [`Memory — current ${String(memory.measurement_kind || 'unavailable').replaceAll('_', ' ')}`, fmtMemoryBytes(memory.current)],
+    ['Memory — peak since start', fmtMemoryBytes(memory.overall_peak)],
+    ['Memory — peak — last 2 s', fmtMemoryBytes(memory.last_2_seconds_peak)],
+    ['Memory warning limit', memory.warning_limit == null ? 'Disabled' : `${fmtMemoryBytes(memory.warning_limit)} · ${memory.warning_active ? 'Warning active' : 'Normal'}`],
+  ] : [];
   const fifos = status?.runtime_fifos || {};
   const fifoRows = Object.entries(fifos).map(([name, level]) => {
     const queued = fmtInteger(level?.queued_messages ?? 0);
@@ -2123,6 +2151,7 @@ function renderRuntimeMetrics(status) {
     ['Longest uninterrupted — last 2 s', slice.last_2_seconds == null ? '—' : `${Number(slice.last_2_seconds).toFixed(1)} ms · ${metrics.longest_uninterrupted_last_2_seconds_category || 'unknown source'}`],
     ['Max CPU load — since start', cpu.overall == null ? '—' : `${(Number(cpu.overall) * 100).toFixed(1)}% of one core${cpuContributor(cpu.overall_contributor)}`],
     ['Max CPU load — last 2 s', cpu.last_2_seconds == null ? '—' : `${(Number(cpu.last_2_seconds) * 100).toFixed(1)}% of one core${cpuContributor(cpu.last_2_seconds_contributor)}`],
+    ...memoryRows,
     ...categoryRows,
     ...fifoRows
   ].map(([label, value]) => `<div class="kv-row"><span>${label}</span><strong>${value}</strong></div>`).join('');

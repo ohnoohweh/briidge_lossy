@@ -1,5 +1,6 @@
 import unittest
 import asyncio
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from obstacle_bridge.runtime_metrics import (
     RollingDurationHistogram,
     RuntimeMetricAccumulator,
 )
+from obstacle_bridge.memory_monitoring import RuntimeMemoryMetrics, sample_process_resident_memory_bytes
 
 
 class FakeClock:
@@ -61,6 +63,7 @@ def _runner_for_metrics_tests():
     runner._runtime_metrics_cpu_peak_overall = None
     runner._runtime_metrics_cpu_peak_overall_contributor = None
     runner._runtime_metrics_cpu_interval_by_category = {}
+    runner._runtime_memory_metrics = RuntimeMemoryMetrics()
     runner._async_diag_lock = threading.Lock()
     runner._sync_diag = {"last_started_name": "", "last_started_kind": "", "last_started_monotonic": None,
                         "last_finished_name": "", "last_finished_kind": "", "last_finished_monotonic": None,
@@ -146,6 +149,54 @@ def test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta():
     assert runner._runtime_metrics_max_loop_lag_ns == 43
 
 
+def test_linux_memory_sampler_reads_current_rss_in_bytes(monkeypatch):
+    monkeypatch.setattr("obstacle_bridge.memory_monitoring.sys.platform", "linux")
+    assert sample_process_resident_memory_bytes(
+        status_reader=lambda: "Name:\tpython\nVmRSS:\t  123 kB\n"
+    ) == 123 * 1024
+    assert sample_process_resident_memory_bytes(status_reader=lambda: "VmRSS:\tbad kB\n") is None
+
+
+def test_memory_metrics_are_bounded_and_report_warning_state():
+    metrics = RuntimeMemoryMetrics(warning_limit_bytes=200)
+    assert metrics.record(100, timestamp_ns=0)
+    assert metrics.record(250, timestamp_ns=NANOSECONDS_PER_SECOND)
+    assert metrics.as_payload(now_ns=NANOSECONDS_PER_SECOND)["warning_active"] is True
+    assert metrics.record(150, timestamp_ns=2 * NANOSECONDS_PER_SECOND)
+    payload = metrics.as_payload(now_ns=2 * NANOSECONDS_PER_SECOND)
+    assert payload == {
+        "current": 150,
+        "overall_peak": 250,
+        "last_2_seconds_peak": 250,
+        "warning_limit": 200,
+        "warning_active": False,
+        "measurement_kind": "resident",
+    }
+    assert metrics.as_payload(now_ns=5 * NANOSECONDS_PER_SECOND)["last_2_seconds_peak"] is None
+
+
+def test_memory_metrics_report_unavailable_before_a_successful_sample():
+    assert RuntimeMemoryMetrics().as_payload(now_ns=0) == {
+        "current": None,
+        "overall_peak": None,
+        "last_2_seconds_peak": None,
+        "warning_limit": None,
+        "warning_active": False,
+        "measurement_kind": "unavailable",
+    }
+
+
+def test_runner_memory_sampler_projects_rss_and_unavailable_state(monkeypatch):
+    runner = _runner_for_metrics_tests()
+    assert runner._sample_runtime_memory(monotonic_ns=100, memory_bytes=512)
+    memory = runner._runtime_metrics_status_fields()["memory_bytes"]
+    assert memory["current"] == 512
+    assert memory["measurement_kind"] == "resident"
+    monkeypatch.setattr("obstacle_bridge.bridge_runner.sample_process_resident_memory_bytes", lambda: None)
+    assert not runner._sample_runtime_memory(monotonic_ns=200)
+    assert runner._runtime_metrics_status_fields()["memory_bytes"]["current"] == 512
+
+
 def test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate():
     runner = _runner_for_metrics_tests()
     assert runner._sample_runtime_cpu(monotonic_ns=0, process_cpu_ns=0) is None
@@ -177,7 +228,7 @@ def test_runner_runtime_metrics_status_is_bounded_and_redacted():
     runner.record_sync_activity("channelmux.dispatch", phase="started")
     runner.record_sync_activity("channelmux.dispatch", phase="finished")
     payload = runner._runtime_metrics_status_fields()
-    assert set(payload) == {"cpu_cores_max", "work_slice_ms_max", "event_loop_lag_ms", "categories", "longest_uninterrupted_category", "longest_uninterrupted_last_2_seconds_category"}
+    assert set(payload) == {"cpu_cores_max", "work_slice_ms_max", "event_loop_lag_ms", "categories", "memory_bytes", "longest_uninterrupted_category", "longest_uninterrupted_last_2_seconds_category"}
     assert payload["longest_uninterrupted_category"] == "channelmux_callback"
     assert payload["longest_uninterrupted_last_2_seconds_category"] == "channelmux_callback"
     assert all("payload" not in row and "address" not in row for row in payload["categories"])
@@ -288,6 +339,12 @@ def test_linux_local_runtime_metrics_smoke_lifecycle():
         payload = runner._runtime_metrics_status_fields()
         assert payload["event_loop_lag_ms"]["last"] == 0.00001
         assert isinstance(payload["categories"], list)
+        memory = payload["memory_bytes"]
+        if sys.platform.startswith("linux"):
+            assert memory["measurement_kind"] == "resident"
+            assert isinstance(memory["current"], int) and memory["current"] > 0
+        else:
+            assert memory["measurement_kind"] == "unavailable"
         await runner._stop_runtime_metrics_monitor()
         assert runner._runtime_metrics_task is None
 

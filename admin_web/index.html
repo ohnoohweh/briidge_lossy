@@ -74,7 +74,7 @@
       </div>
       <div class="topbar-right">
         <button id="logoutBtn" class="btn btn-secondary hidden" type="button">Logout</button>
-        <div id="runtimeMeters" class="runtime-meters" aria-label="Runtime pressure meters"><div class="runtime-meter" title="CPU load: dark bar is lifetime peak; bright bar is last 2 seconds"><span>CPU</span><i id="cpuMeter"></i></div><div class="runtime-meter" title="Uninterrupted computation: dark bar is lifetime peak; bright bar is last 2 seconds"><span>Slice</span><i id="sliceMeter"></i></div></div>
+        <div id="runtimeMeters" class="runtime-meters" aria-label="Runtime pressure meters"><div class="runtime-meter" title="CPU load: dark bar is lifetime peak; bright bar is last 2 seconds"><span>CPU</span><i id="cpuMeter"></i></div><div class="runtime-meter" title="Uninterrupted computation: dark bar is lifetime peak; bright bar is last 2 seconds"><span>Slice</span><i id="sliceMeter"></i></div><div class="runtime-meter" title="Process memory against its configured warning limit" hidden><span>Mem</span><i id="memoryMeter"></i></div></div>
         <button id="restartBtn" class="btn btn-danger" type="button">Restart</button>
       </div>
     </header>
@@ -957,6 +957,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=20260829b"></script>
+  <script src="app.js?v=20261116a"></script>
 </body>
 </html>

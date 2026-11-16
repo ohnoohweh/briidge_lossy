@@ -1929,7 +1929,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     }
 
     private func adminStatusSnapshotUncached(bridgeSnapshot: [String: Any]? = nil) -> [String: Any] {
-        ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessCPU()
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=projectsPythonCompatibleBoundedMemoryMetrics
+        ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics()
         let bridgeSnapshot = bridgeSnapshot ?? adminBridgeSnapshot()
         let packetProcessingActive = adminPacketProcessingActive(bridgeSnapshot: bridgeSnapshot)
         let runtimeHealth = runtimeHealthAdminFields()
