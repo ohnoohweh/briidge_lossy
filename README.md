@@ -1637,7 +1637,7 @@ The native Python and compiled Swift TUN helpers share Linux lifecycle hardening
 
 Oversized protected WebSocket UDP coverage verifies exact payload bytes and peer counters across the fragmentation boundary; diagnostic log routing remains an operator aid rather than a wire-contract dependency.
 
-Configured server-owned shared TUN interfaces stay open while overlay peers reconnect: the runtime clears peer channels and pauses admission without removing the helper-managed interface or its host-network state. A listener return packet is admitted only through an active peer binding that resolves to that shared device; iOS retains its local TUN channel and makes bounded OPEN reannouncements only while outbound traffic lacks inbound delivery.
+Configured server-owned shared TUN interfaces stay open while overlay peers reconnect: the runtime clears peer channels and pauses admission without removing the helper-managed interface or its host-network state. A listener return packet is admitted only through an active peer binding that resolves to that shared device. Python ChannelMux and iOS retain their local TUN channel and make bounded current-epoch OPEN reannouncements only while outbound traffic lacks inbound delivery, recovering from a lost reconnect control frame without an Admin API or WebAdmin change.
 
 The shared Python/Swift ChannelMux fixture passes explicit inbound DATA and
 CLOSE counters for server and client paths to preserve the portable Core replay

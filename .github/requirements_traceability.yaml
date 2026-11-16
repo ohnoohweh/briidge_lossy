@@ -865,6 +865,7 @@ REQ-LIFE-002:
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
     - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
+    - tests/unit/test_channel_mux_listener_mode.py::test_reconnect_reannounces_tun_open_when_first_epoch_open_is_lost
     - tests/unit/test_peer_resolution.py::test_udp_session_rotation_rebuilds_client_socket
     - ios/tests/test_m3_native_sources.py::test_udp_overlay_peer_rotation_rebuilds_the_native_socket
     - tests/unit/test_stream_peer_rotation.py::test_tcp_reconnect_cleanup_survives_stopped_event_loop

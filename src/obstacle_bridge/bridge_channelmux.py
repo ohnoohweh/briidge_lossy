@@ -296,6 +296,10 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
     TUN_MIN_ID = 1
     TUN_MAX_ID = 65535
     UDP_IDLE_S = 20.0
+    # TUN OPEN is control-plane state over an overlay that may use unreliable
+    # datagrams.  Reannounce a retained local TUN only after local packet
+    # traffic has made progress without any inbound TUN delivery.
+    TUN_OPEN_REANNOUNCE_INTERVAL_S = 5.0
     TUN_READ_SIZE_MAX = 65535
     TUN_DEFAULT_MTU = 1500
     TUNSETIFF = 0x400454CA
@@ -808,6 +812,10 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._tun_by_peer_chan: dict[tuple[int, int], ChannelMux.TunDevice] = {}
         self._tun_chan_by_service: dict[ChannelMux.ServiceKey, int] = {}
         self._tun_frag_rx: dict[tuple[int, int, int], dict[str, Any]] = {}
+        # id(TunDevice) -> last successful OPEN, local DATA transmit, and
+        # peer DATA receive times. This is intentionally device-scoped: peers
+        # can use distinct inbound/outbound channel ids for the same TUN.
+        self._tun_open_reannounce_state: dict[int, dict[str, float | int]] = {}
         self._shared_tun_ownership_by_service: dict[ChannelMux.ServiceKey, dict[str, Any]] = {}
         self._shared_tun_runtime_by_peer: dict[tuple[ChannelMux.ServiceKey, int], dict[str, Any]] = {}
         self._shared_tun_peer_ref_by_peer: dict[tuple[ChannelMux.ServiceKey, int], str] = {}
@@ -2787,6 +2795,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._tun_open_key_by_chan.clear()
         self._tun_chan_by_open_key.clear()
         self._tun_frag_rx.clear()
+        self._tun_open_reannounce_state.clear()
         self._ctrl_chunk_rx.clear()
         # Backpressure tasks
         for chan in list(self._tcp_backpressure_tasks):
@@ -3030,6 +3039,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 self._prune_udp_fragment_reassembly()
                 self._prune_tun_fragment_reassembly()
                 self._prune_control_chunk_reassembly()
+                self._reannounce_stalled_tun_opens()
         except asyncio.CancelledError:
             return
 
@@ -3280,6 +3290,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             )
         if ChannelMux.MUX_HDR.size + len(payload) <= self._session_max_app_payload:
             self._send_mux(chan_id, proto, ChannelMux.MType.OPEN, payload)
+            self._record_local_tun_open_announcement(chan_id, proto)
             return
         self._send_chunked_control_payload(
             chan_id=chan_id,
@@ -3287,6 +3298,71 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             chunk_mtype=ChannelMux.MType.OPEN_CHUNK,
             payload=payload,
         )
+        self._record_local_tun_open_announcement(chan_id, proto)
+
+    def _configured_local_tun_for_channel(self, chan_id: int) -> Optional["ChannelMux.TunDevice"]:
+        dev = self._tun_by_chan.get(int(chan_id))
+        if dev is None or dev.service_key is None:
+            return None
+        if self._svc_tun_devices.get(dev.service_key) is not dev:
+            return None
+        return dev
+
+    def _record_local_tun_open_announcement(self, chan_id: int, proto: "ChannelMux.Proto") -> None:
+        if int(proto) != int(ChannelMux.Proto.TUN):
+            return
+        dev = self._configured_local_tun_for_channel(chan_id)
+        if dev is None:
+            return
+        state = self._tun_open_reannounce_state.setdefault(id(dev), {})
+        state["last_open"] = time.monotonic()
+
+    def _record_local_tun_traffic(self, chan_id: int, *, inbound: bool) -> None:
+        dev = self._configured_local_tun_for_channel(chan_id)
+        if dev is None:
+            return
+        state = self._tun_open_reannounce_state.setdefault(id(dev), {})
+        state["last_rx" if inbound else "last_tx"] = time.monotonic()
+
+    def _reannounce_stalled_tun_opens(self, *, now_mono: Optional[float] = None) -> int:
+        """Replay retained local TUN OPENs after a reconnect loss window.
+
+        The peer treats an OPEN for its current mux epoch as idempotent.  This
+        makes the replay safe for both stream and datagram overlays while
+        avoiding steady control traffic once the peer has delivered TUN data.
+        """
+        if not (self._overlay_connected and self._accepting_enabled and self._session_app_ready()):
+            return 0
+        now = time.monotonic() if now_mono is None else float(now_mono)
+        reannounced = 0
+        for svc_key, dev in list(self._svc_tun_devices.items()):
+            chan = dev.chan_id
+            spec = self._effective_services_by_id().get(svc_key)
+            if chan is None or spec is None or str(spec.l_proto) != "tun":
+                continue
+            state = self._tun_open_reannounce_state.get(id(dev))
+            if not state:
+                continue
+            last_open = float(state.get("last_open", 0.0) or 0.0)
+            last_tx = float(state.get("last_tx", 0.0) or 0.0)
+            last_rx = float(state.get("last_rx", 0.0) or 0.0)
+            if (
+                last_open <= 0.0
+                or last_tx <= last_rx
+                or now < last_open
+                or (now - last_open) < self.TUN_OPEN_REANNOUNCE_INTERVAL_S
+            ):
+                continue
+            self._send_open_for_service(int(chan), ChannelMux.Proto.TUN, spec)
+            state["replay_count"] = int(state.get("replay_count", 0) or 0) + 1
+            reannounced += 1
+            self.log.info(
+                "[TUN/OPEN] reannounced chan=%s service_key=%s after %.1fs outbound-without-inbound",
+                chan,
+                svc_key,
+                now - last_open,
+            )
+        return reannounced
 
     def replace_remote_services_catalog(self, services: list["ChannelMux.ServiceSpec"]) -> None:
         """Install and publish a new remote-service catalog for this epoch.
@@ -3788,6 +3864,9 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             except Exception as e:
                 self._record_sync_diag("ChannelMux._send_mux:session.send_app", phase="failed", error=type(e).__name__)
                 self.log.debug("[MUX] send_app error: %r", e)
+            else:
+                if proto == ChannelMux.Proto.TUN and mtype in (ChannelMux.MType.DATA, ChannelMux.MType.DATA_FRAG):
+                    self._record_local_tun_traffic(chan_id, inbound=False)
             try:
                 self._record_sync_diag("ChannelMux._send_mux:log_app_msg", phase="started")
                 self._log_app_msg("->", wire)
@@ -6150,6 +6229,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 self._record_tun_receive(peer_id, "data_no_device")
                 self.log.warning("[TUN] chan=%s DATA not routed yet (no device)", chan)
                 return
+            self._record_local_tun_traffic(chan, inbound=True)
             owner_peer_id = int(peer_id) if peer_id is not None else self._chan_owner_peer_id.get(int(chan))
             shared_owner_peer_id = self._shared_tun_peer_id_for_device(dev, owner_peer_id)
             allowed, parsed, drop_reason = self._shared_tun_guard_inbound_packet(dev=dev, chan=chan, packet=data, peer_id=shared_owner_peer_id)
