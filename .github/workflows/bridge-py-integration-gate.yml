@@ -100,7 +100,7 @@ jobs:
     # Isolate the cold Swift product build from the test lane.  This gives a
     # failed build an immediate, inspectable result and gives test execution a
     # fresh runner/time budget rather than competing with compilation.
-    timeout-minutes: 15
+    timeout-minutes: 30
     needs: detect-bridge-change
     if: needs.detect-bridge-change.outputs.changed == 'true'
     runs-on: ubuntu-latest
@@ -110,6 +110,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Identify SwiftPM build cache
+        id: swiftpm-cache-key
+        run: echo "value=$(swift --version | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # The test lane uses this release scratch directory with `swift test
+      # --configuration release`. Retaining it here avoids recompiling the
+      # Swift/C dependency graph on a fresh hosted runner after the packaged
+      # Linux build has already completed it.
+      - name: Restore Linux SwiftPM release build cache
+        uses: actions/cache@v4
+        with:
+          path: build/linux/.swift-build
+          key: linux-swiftpm-release-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftpm-cache-key.outputs.value }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
+
       # The Linux/Swift scenarios share one runner binary. Build it before
       # xdist starts so workers never wait on the test helper's global lock.
       # Swift 6.3's parallel planning has intermittently crashed with SIGSEGV
@@ -118,7 +132,7 @@ jobs:
       - name: Build Linux Swift runner once
         run: |
           set +e
-          ./scripts/build_linux_app.sh
+          OBSTACLEBRIDGE_LINUX_BUILD_TESTS=true ./scripts/build_linux_app.sh
           status=$?
           set -e
           if [[ "$status" -ne 139 ]]; then
@@ -126,7 +140,7 @@ jobs:
           fi
           echo "SwiftPM crashed with SIGSEGV; retrying with one planning job."
           rm -rf "$GITHUB_WORKSPACE/build/linux/.swift-build"
-          OBSTACLEBRIDGE_LINUX_SWIFT_JOBS=1 ./scripts/build_linux_app.sh
+          OBSTACLEBRIDGE_LINUX_BUILD_TESTS=true OBSTACLEBRIDGE_LINUX_SWIFT_JOBS=1 ./scripts/build_linux_app.sh
 
       - name: Upload Linux Swift runner artifact
         uses: actions/upload-artifact@v4
@@ -140,9 +154,10 @@ jobs:
 
   bridge-py-integration-linux:
     name: Integration Gate (Linux shared)
-    # The packaged runner arrives from the dependent build job.  Swift test
-    # compilation still occurs here, but no longer consumes the same runner
-    # budget as the release artifact build.
+    # The packaged runner and release SwiftPM scratch directory arrive from
+    # the dependent build job. Running tests against that scratch directory
+    # prevents a second cold dependency compilation from exhausting hosted
+    # runner budget before Python/Linux integration begins.
     timeout-minutes: 25
     needs: [detect-bridge-change, bridge-py-integration-linux-build]
     if: needs.detect-bridge-change.outputs.changed == 'true' && needs.bridge-py-integration-linux-build.result == 'success'
@@ -152,6 +167,17 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: Identify SwiftPM build cache
+        id: swiftpm-cache-key
+        run: echo "value=$(swift --version | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Linux SwiftPM release build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux/.swift-build
+          key: linux-swiftpm-release-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftpm-cache-key.outputs.value }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          fail-on-cache-miss: true
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -171,18 +197,19 @@ jobs:
 
       - name: Qualify Linux common-IPC lifecycle matrix
         run: |
-          OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
-          swift test --filter ObstacleBridgeLinuxRuntimeConfigurationTests
+          swift_test=(swift test --skip-build --configuration release --scratch-path "$GITHUB_WORKSPACE/build/linux/.swift-build")
+          OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" "${swift_test[@]}" --filter ObstacleBridgeLinuxLiveRuntimeTests
+          "${swift_test[@]}" --filter ObstacleBridgeLinuxRuntimeConfigurationTests
           # An unchecked Swift Set/Dictionary race traps at runtime. Exercise
           # the compiled Core concurrent enqueue/drain regression before any
           # device build is tested.
-          swift test --filter ObstacleBridgeChannelMuxEgressSequencerTests
+          "${swift_test[@]}" --filter ObstacleBridgeChannelMuxEgressSequencerTests
           # The shared Desktop target carries the stale-reply retirement rule
           # used by the native Admin child.  Keep it in the Linux host-local
           # qualification lane with the packaged Admin and helper probes.
-          swift test --filter ObstacleBridgeWorkerIPCTests
-          swift test --filter ObstacleBridgeLinuxTunHelperAdapterTests
-          swift test --filter ObstacleBridgeLinuxTunDeviceTests
+          "${swift_test[@]}" --filter ObstacleBridgeWorkerIPCTests
+          "${swift_test[@]}" --filter ObstacleBridgeLinuxTunHelperAdapterTests
+          "${swift_test[@]}" --filter ObstacleBridgeLinuxTunDeviceTests
 
       - name: Qualify PXY-3C proxy collector matrix (Linux)
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py

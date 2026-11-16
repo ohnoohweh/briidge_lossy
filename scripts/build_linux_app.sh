@@ -8,6 +8,7 @@ OUTPUT_DIR="${OBSTACLEBRIDGE_LINUX_OUTPUT_DIR:-${REPO_ROOT}/build/linux}"
 SCRATCH_DIR="${OBSTACLEBRIDGE_LINUX_SCRATCH_DIR:-${OUTPUT_DIR}/.swift-build}"
 SWIFT_JOBS="${OBSTACLEBRIDGE_LINUX_SWIFT_JOBS:-}"
 SWIFT_WHOLE_MODULE_OPTIMIZATION="${OBSTACLEBRIDGE_LINUX_SWIFT_WHOLE_MODULE_OPTIMIZATION:-true}"
+SWIFT_BUILD_TESTS="${OBSTACLEBRIDGE_LINUX_BUILD_TESTS:-false}"
 
 usage() {
   cat <<'EOF'
@@ -23,6 +24,8 @@ Environment:
   OBSTACLEBRIDGE_LINUX_SWIFT_WHOLE_MODULE_OPTIMIZATION
                                             true (default) maximizes release optimization;
                                             false compiles release files in parallel
+  OBSTACLEBRIDGE_LINUX_BUILD_TESTS         true compiles the Swift test graph into
+                                            the same scratch directory for CI reuse
 EOF
 }
 
@@ -69,6 +72,13 @@ case "${SWIFT_WHOLE_MODULE_OPTIMIZATION,,}" in
     exit 2
     ;;
 esac
+case "${SWIFT_BUILD_TESTS,,}" in
+  true|false) ;;
+  *)
+    echo "[build_linux_app] OBSTACLEBRIDGE_LINUX_BUILD_TESTS must be true or false, got ${SWIFT_BUILD_TESTS}" >&2
+    exit 2
+    ;;
+esac
 
 if ! command -v swift >/dev/null 2>&1; then
   echo "[build_linux_app] swift is required; install Swift and make it available on PATH" >&2
@@ -112,11 +122,18 @@ if [[ "${SWIFT_WHOLE_MODULE_OPTIMIZATION,,}" = "false" ]]; then
   # significantly faster local rebuild.
   SWIFT_BUILD_ARGS+=(-Xswiftc -no-whole-module-optimization)
 fi
-swift build \
-  "${SWIFT_BUILD_ARGS[@]}" \
-  --product ObstacleBridgeLinux
-swift build "${SWIFT_BUILD_ARGS[@]}" --product ObstacleBridgeProxyWorker
-swift build "${SWIFT_BUILD_ARGS[@]}" --product ObstacleBridgeLogCollector
+if [[ "${SWIFT_BUILD_TESTS,,}" = "true" ]]; then
+  # Compile products and test targets in one graph. A later `swift test`
+  # invocation with `--skip-build` can then execute the selected tests without
+  # rebuilding every dependency with the test-only `-enable-testing` flag.
+  swift build "${SWIFT_BUILD_ARGS[@]}" --build-tests
+else
+  swift build \
+    "${SWIFT_BUILD_ARGS[@]}" \
+    --product ObstacleBridgeLinux
+  swift build "${SWIFT_BUILD_ARGS[@]}" --product ObstacleBridgeProxyWorker
+  swift build "${SWIFT_BUILD_ARGS[@]}" --product ObstacleBridgeLogCollector
+fi
 
 BINARY_SOURCE="${SCRATCH_DIR}/${CONFIGURATION}/ObstacleBridgeLinux"
 if [ ! -x "${BINARY_SOURCE}" ]; then
