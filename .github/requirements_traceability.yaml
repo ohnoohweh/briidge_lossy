@@ -1155,6 +1155,7 @@ REQ-LIFE-010:
     - tests/unit/test_swift_concurrency_guard.py::test_rejects_new_unchecked_sendable_conformance
     - tests/unit/test_swift_concurrency_guard.py::test_rejects_new_synchronous_primitive_in_legacy_owner
     - tests/unit/test_swift_concurrency_guard.py::test_accepts_lock_marker_with_named_test
+    - tests/unit/test_swift_concurrency_guard.py::test_zero_before_sha_uses_the_branch_merge_base
     - ios/tests/test_m3_native_sources.py::test_overlay_connection_drivers_keep_callbacks_on_owner_queue
     - ios/tests/test_m3_native_sources.py::test_native_proxy_connections_keep_callbacks_on_owner_queue
     - ios/tests/test_m3_native_sources.py::test_web_admin_server_callbacks_keep_owner_queue

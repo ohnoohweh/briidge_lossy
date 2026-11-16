@@ -42,6 +42,17 @@ def test_accepts_lock_marker_with_named_test(monkeypatch) -> None:
     assert guard.validate(guard.changed_lines(["--staged"])) == []
 
 
+def test_zero_before_sha_uses_the_branch_merge_base(monkeypatch) -> None:
+    guard = _load()
+
+    class Result:
+        returncode = 0
+        stdout = "merge-base-sha\n"
+
+    monkeypatch.setattr(guard.subprocess, "run", lambda *_args, **_kwargs: Result())
+    assert guard.effective_base(guard.NULL_GIT_SHA) == "merge-base-sha"
+
+
 def test_rejects_new_synchronous_primitive_in_legacy_owner(monkeypatch) -> None:
     guard = _load()
     monkeypatch.setattr(

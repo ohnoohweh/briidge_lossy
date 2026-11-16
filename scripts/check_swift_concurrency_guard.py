@@ -19,6 +19,7 @@ EVIDENCE_FORMAT = re.compile(
 # This expanded rule cannot retroactively require evidence from earlier PR
 # work. Every Swift product-source change after this adoption point is gated.
 POLICY_BASELINE = "c4e994c4"
+NULL_GIT_SHA = "0" * 40
 AUDITED_SYNCHRONOUS_OWNERS = (
     (
         "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTelemetryMTLSUploader.swift",
@@ -127,6 +128,20 @@ def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:
     return any(path == owner[0] and all(marker in additions for marker in owner[1:]) for owner in AUDITED_SYNCHRONOUS_OWNERS)
 
 def effective_base(base_ref: str) -> str:
+    # GitHub supplies an all-zero `before` SHA for the first push of a newly
+    # created branch. Resolve that event against its actual common ancestor
+    # instead of passing the sentinel to `git diff` as though it were a ref.
+    if base_ref == NULL_GIT_SHA:
+        merge_base = subprocess.run(
+            ["git", "merge-base", "HEAD", "origin/main"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if merge_base.returncode == 0 and merge_base.stdout.strip():
+            return merge_base.stdout.strip()
+        return "HEAD^"
     if subprocess.run(["git", "merge-base", "--is-ancestor", base_ref, POLICY_BASELINE], cwd=ROOT).returncode == 0:
         return POLICY_BASELINE
     return base_ref
