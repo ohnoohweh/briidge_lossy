@@ -1362,6 +1362,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         tunOpenReplayTimer = nil
     }
 
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests.runtimeHealthPersistsCleanStopAndClassifiesNextLifetime
     private func appendRuntimeHealth(event: String, controlledStop: Bool = false) {
         // Diagnostic callbacks may already be queued when `stop()` records
         // its terminal marker. They belong to the retired lifetime and must
