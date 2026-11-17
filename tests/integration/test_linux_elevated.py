@@ -2009,3 +2009,80 @@ def test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer(t
         assert after_restart > 0
     finally:
         group.stop()
+
+
+def test_overlay_e2e_linux_elevated_shared_tun_survives_live_securelink_rekey(tmp_path: Path) -> None:
+    """A live authenticated epoch change retains the shared-TUN data path."""
+    _require_linux_elevated_runtime()
+    case_tag = "lt305"
+    server_ifname = _tun_name(case_tag, "s")
+    client_a_ifname = _tun_name(case_tag, "a")
+    client_b_ifname = _tun_name(case_tag, "b")
+    group = _start_shared_tun_bridge_group(
+        tmp_path=tmp_path,
+        case_index=305,
+        server_ifname=server_ifname,
+        client_a_ifname=client_a_ifname,
+        client_b_ifname=client_b_ifname,
+        mtu=1400,
+    )
+    try:
+        _wait_interface_with_bridge_logs(server_ifname, server_proc=group.server_proc, client_proc=group.client_a_proc)
+        _wait_interface_with_bridge_logs(client_a_ifname, server_proc=group.server_proc, client_proc=group.client_a_proc)
+        _wait_interface_with_bridge_logs(client_b_ifname, server_proc=group.server_proc, client_proc=group.client_b_proc)
+        _configure_tun_routes(server_ifname, "192.168.107.1", "192.168.107.2", "192.168.107.4")
+        _configure_tun_routes(client_a_ifname, "192.168.107.2", "192.168.107.1", "192.168.107.4")
+        _configure_tun_routes(client_b_ifname, "192.168.107.4", "192.168.107.1", "192.168.107.2")
+
+        _assert_tun_one_way(
+            source_ip="192.168.107.2",
+            dest_ip="192.168.107.1",
+            payload=b"shared-live-rekey-prime",
+            port=30501,
+            bind_ifname=client_a_ifname,
+            peer_ifname=server_ifname,
+        )
+        _wait_shared_tun_active_bindings(group.server_proc.admin_port or 0, 2, timeout=12.0)
+
+        status, peers = overlay_e2e.fetch_json(
+            f"http://127.0.0.1:{group.client_a_proc.admin_port}/api/peers", timeout=1.5,
+        )
+        assert status == 200
+        target_peer_id = next(
+            (
+                str(row.get("id") or "")
+                for row in list(peers.get("peers") or [])
+                if str(row.get("state") or "").lower() != "listening"
+                and str(row.get("transport") or "").lower() == "myudp"
+            ),
+            "",
+        )
+        assert target_peer_id
+        code, body = overlay_e2e.request_json(
+            f"http://127.0.0.1:{group.client_a_proc.admin_port}/api/secure-link/rekey",
+            method="POST",
+            payload={"peer_id": target_peer_id},
+            timeout=2.0,
+        )
+        assert code == 200 and body.get("ok") is True
+        overlay_e2e.wait_peer_secure_link_rekeys_completed(
+            group.client_a_proc.admin_port or 0,
+            minimum_count=1,
+            timeout=15.0,
+            label="shared-TUN client after forced rekey",
+            transport="myudp",
+            authenticated=True,
+        )
+
+        delivered = _assert_tun_one_way(
+            source_ip="192.168.107.2",
+            dest_ip="192.168.107.4",
+            payload=b"shared-live-rekey-client-a-to-client-b",
+            port=30502,
+            bind_ifname=client_a_ifname,
+            peer_ifname=client_b_ifname,
+        )
+        assert delivered > 0
+        _wait_shared_tun_active_bindings(group.server_proc.admin_port or 0, 2, timeout=20.0)
+    finally:
+        group.stop()
