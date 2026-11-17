@@ -125,8 +125,10 @@ fi
 if [[ "${SWIFT_BUILD_TESTS,,}" = "true" ]]; then
   # Compile products and test targets in one graph. A later `swift test`
   # invocation with `--skip-build` can then execute the selected tests without
-  # rebuilding every dependency with the test-only `-enable-testing` flag.
-  swift build "${SWIFT_BUILD_ARGS[@]}" --build-tests
+  # rebuilding every dependency. SwiftPM's `--build-tests` does not reliably
+  # pass `-enable-testing` to ordinary library targets on every supported
+  # toolchain, so make that requirement explicit for `@testable` imports.
+  swift build "${SWIFT_BUILD_ARGS[@]}" --build-tests -Xswiftc -enable-testing
 else
   swift build \
     "${SWIFT_BUILD_ARGS[@]}" \

@@ -206,6 +206,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var previousRuntimeLifetimeEndedCleanly: Bool?
     private var runtimeHealthTimer: DispatchSourceTimer?
     private var livenessProbeTimer: DispatchSourceTimer?
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxOverlayChannelAdapterTests
+    // The timer and adapter are both confined to `queue`.
     private var tunOpenReplayTimer: DispatchSourceTimer?
     private var activeCoordinatorEpoch: UInt64?
     private var lastFailureDiagnosticSignature: String?
