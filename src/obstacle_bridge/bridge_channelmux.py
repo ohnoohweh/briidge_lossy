@@ -3333,6 +3333,31 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         """
         if not (self._overlay_connected and self._accepting_enabled and self._session_app_ready()):
             return 0
+        # A transport epoch can clear a locally configured TUN while the
+        # lower transport remains connected but SecureLink is still
+        # reauthenticating. If application readiness changes after that epoch
+        # callback, there is no additional lifecycle edge guaranteed to call
+        # `_open_configured_tun_services_if_ready`. Recover that missing
+        # binding before considering replay of an already announced OPEN.
+        missing_before = {
+            svc_key
+            for svc_key, dev in self._svc_tun_devices.items()
+            if dev.chan_id is None
+            and str(getattr(self._effective_services_by_id().get(svc_key), "l_proto", "")) == "tun"
+        }
+        if missing_before:
+            self._open_configured_tun_services_if_ready()
+        recovered = sum(
+            1
+            for svc_key in missing_before
+            if self._svc_tun_devices.get(svc_key) is not None
+            and self._svc_tun_devices[svc_key].chan_id is not None
+        )
+        if recovered:
+            self.log.info(
+                "[TUN/OPEN] recovered %s configured TUN binding(s) after delayed app readiness",
+                recovered,
+            )
         now = time.monotonic() if now_mono is None else float(now_mono)
         reannounced = 0
         for svc_key, dev in list(self._svc_tun_devices.items()):
@@ -3362,7 +3387,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 svc_key,
                 now - last_open,
             )
-        return reannounced
+        return recovered + reannounced
 
     def replace_remote_services_catalog(self, services: list["ChannelMux.ServiceSpec"]) -> None:
         """Install and publish a new remote-service catalog for this epoch.
