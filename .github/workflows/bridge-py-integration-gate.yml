@@ -197,7 +197,11 @@ jobs:
 
       - name: Qualify Linux common-IPC lifecycle matrix
         run: |
-          swift_test=(swift test --skip-build --configuration release --scratch-path "$GITHUB_WORKSPACE/build/linux/.swift-build")
+          # The downloaded artifact contains the runtime executable, not a
+          # versioned Swift test bundle. Let SwiftPM rebuild test targets from
+          # this checkout; `--skip-build` can otherwise execute a stale bundle
+          # restored from a previous cache key.
+          swift_test=(swift test --configuration release --scratch-path "$GITHUB_WORKSPACE/build/linux/.swift-build")
           # Swift Testing reports only when an invocation finishes. Keep the
           # hosted runner observable while its integration tests are active;
           # otherwise its no-output watchdog sends SIGTERM before the result.
