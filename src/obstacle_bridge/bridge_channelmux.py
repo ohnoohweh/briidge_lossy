@@ -3333,6 +3333,20 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         """
         if not (self._overlay_connected and self._accepting_enabled and self._session_app_ready()):
             return 0
+        # A transport epoch can arrive while SecureLink is still restoring
+        # application readiness.  Once this maintenance pass observes the
+        # current authenticated session, it is the lifecycle boundary that
+        # admits its local TUN reader for that epoch.  Without this, a stale
+        # admission epoch drops every packet even after the TUN OPEN is
+        # recovered and the session reports CONNECTED in Admin.
+        if self._tun_admission_epoch != self._connection_lifecycle_epoch:
+            self._tun_admission_epoch = self._connection_lifecycle_epoch
+            for dev in list(self._tun_helper_devices.values()) + list(self._svc_tun_devices.values()):
+                self._register_tun_reader(dev)
+            self.log.info(
+                "[TUN/OPEN] admitted local TUN readers for recovered epoch=%s",
+                self._connection_lifecycle_epoch,
+            )
         # A transport epoch can clear a locally configured TUN while the
         # lower transport remains connected but SecureLink is still
         # reauthenticating. If application readiness changes after that epoch

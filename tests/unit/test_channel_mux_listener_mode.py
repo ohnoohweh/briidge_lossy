@@ -2751,6 +2751,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.mux._reannounce_stalled_tun_opens(now_mono=20.0), 1)
         self.assertIsNotNone(dev.chan_id)
         self.assertEqual(self.mux._unpack_mux(self.session.sent[-1])[3], ChannelMux.MType.OPEN)
+        self.assertTrue(self.mux._tun_admission_allowed())
 
     async def test_overlay_connect_uses_reported_lifecycle_state(self):
         spec = ChannelMux.ServiceSpec(

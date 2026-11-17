@@ -1450,7 +1450,8 @@ REQ-MUX-009:
   # preventing an unchecked native collection trap from reaching devices.
   # full-tunnel installs preserve pre-existing local subnet ownership. Swift
   # epoch-resync coverage also verifies a recovered TUN OPEN advances its
-  # ChannelMux connection sequence. Darwin hook coverage records route
+  # ChannelMux connection sequence and re-admits local Python TUN reads for
+  # that current epoch. Darwin hook coverage records route
   # ownership so teardown cannot delete an existing local/operator exclusion.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute
@@ -1475,6 +1476,7 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_allows_connected_non_securelink_transport
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_blocks_disconnected_non_securelink_transport
     - tests/unit/test_channel_mux_listener_mode.py::test_overlay_ready_proactively_opens_configured_tun_listener
+    - tests/unit/test_channel_mux_listener_mode.py::test_transport_epoch_tun_recovery_reopens_after_delayed_app_readiness
     - ios/tests/test_ios_swift_udp_tun_helper.py::test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_default_system_honors_no_proxy_on_linux
