@@ -198,18 +198,34 @@ jobs:
       - name: Qualify Linux common-IPC lifecycle matrix
         run: |
           swift_test=(swift test --skip-build --configuration release --scratch-path "$GITHUB_WORKSPACE/build/linux/.swift-build")
-          OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" "${swift_test[@]}" --filter ObstacleBridgeLinuxLiveRuntimeTests
-          "${swift_test[@]}" --filter ObstacleBridgeLinuxRuntimeConfigurationTests
+          # Swift Testing reports only when an invocation finishes. Keep the
+          # hosted runner observable while its integration tests are active;
+          # otherwise its no-output watchdog sends SIGTERM before the result.
+          run_swift_test() {
+            "$@" &
+            local test_pid=$!
+            local elapsed=0
+            while kill -0 "$test_pid" 2>/dev/null; do
+              sleep 30
+              elapsed=$((elapsed + 30))
+              if kill -0 "$test_pid" 2>/dev/null; then
+                echo "Swift test invocation still running after ${elapsed}s"
+              fi
+            done
+            wait "$test_pid"
+          }
+          run_swift_test env OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" "${swift_test[@]}" --filter ObstacleBridgeLinuxLiveRuntimeTests
+          run_swift_test "${swift_test[@]}" --filter ObstacleBridgeLinuxRuntimeConfigurationTests
           # An unchecked Swift Set/Dictionary race traps at runtime. Exercise
           # the compiled Core concurrent enqueue/drain regression before any
           # device build is tested.
-          "${swift_test[@]}" --filter ObstacleBridgeChannelMuxEgressSequencerTests
+          run_swift_test "${swift_test[@]}" --filter ObstacleBridgeChannelMuxEgressSequencerTests
           # The shared Desktop target carries the stale-reply retirement rule
           # used by the native Admin child.  Keep it in the Linux host-local
           # qualification lane with the packaged Admin and helper probes.
-          "${swift_test[@]}" --filter ObstacleBridgeWorkerIPCTests
-          "${swift_test[@]}" --filter ObstacleBridgeLinuxTunHelperAdapterTests
-          "${swift_test[@]}" --filter ObstacleBridgeLinuxTunDeviceTests
+          run_swift_test "${swift_test[@]}" --filter ObstacleBridgeWorkerIPCTests
+          run_swift_test "${swift_test[@]}" --filter ObstacleBridgeLinuxTunHelperAdapterTests
+          run_swift_test "${swift_test[@]}" --filter ObstacleBridgeLinuxTunDeviceTests
 
       - name: Qualify PXY-3C proxy collector matrix (Linux)
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
