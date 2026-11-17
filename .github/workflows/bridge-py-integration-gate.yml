@@ -218,12 +218,10 @@ jobs:
             done
             wait "$test_pid"
           }
-          # The Python harness exercises the Swift supervisor/Python-worker
-          # boundary below. Keep this SwiftPM process probe focused on the
-          # native worker built in the same scratch directory as its test
-          # bundle; a downloaded executable can otherwise be a different
-          # dynamic-link closure from the freshly rebuilt test graph.
-          run_swift_test env OBSTACLEBRIDGE_TEST_PROXY_IMPLEMENTATION=native OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/.swift-build/x86_64-unknown-linux-gnu/release/ObstacleBridgeProxyWorker" "${swift_test[@]}" --filter ObstacleBridgeLinuxLiveRuntimeTests
+          # The dedicated Python harness below owns the Swift-supervisor
+          # contract for both Python and native workers. Do not repeat its
+          # cross-process launch inside this broad SwiftPM runtime suite.
+          run_swift_test env OBSTACLEBRIDGE_TEST_SKIP_PROXY_SUPERVISOR=1 "${swift_test[@]}" --filter ObstacleBridgeLinuxLiveRuntimeTests
           run_swift_test "${swift_test[@]}" --filter ObstacleBridgeLinuxRuntimeConfigurationTests
           # An unchecked Swift Set/Dictionary race traps at runtime. Exercise
           # the compiled Core concurrent enqueue/drain regression before any

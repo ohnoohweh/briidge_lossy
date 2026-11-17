@@ -33,6 +33,12 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
 
     @Test func nativeRuntimeOwnsEitherProxyWorkerAndReportsLoss() throws {
         let environment = ProcessInfo.processInfo.environment
+        // The hosted Linux lane invokes the dedicated Python harness for this
+        // contract. That harness owns both process environments and exercises
+        // the same supervisor source with each worker; keep this SwiftPM
+        // probe available for local/package validation without duplicating an
+        // environment-sensitive child launch in the broad runtime suite.
+        guard environment["OBSTACLEBRIDGE_TEST_SKIP_PROXY_SUPERVISOR"] != "1" else { return }
         guard let python = environment["OBSTACLEBRIDGE_TEST_PYTHON"], let native = environment["OBSTACLEBRIDGE_TEST_PROXY_WORKER"] else { return }
         let candidates = [("python", python), ("native", native)]
         let selected = environment["OBSTACLEBRIDGE_TEST_PROXY_IMPLEMENTATION"]
