@@ -86,7 +86,7 @@ The active testing focus on this branch is:
 - configuration and hook-contract derivation from `TUN_routing`
 - authenticated admin and SecureLink reload/recovery flows
 - privacy-safe address fixtures drawn from IANA-reserved documentation ranges rather than live deployment endpoints
-- desktop proxy-worker contract-v1 corpus for accepted protocol/authentication shapes and rejected loopback-bind/port/protocol/authentication/egress shapes, credential-free configured-status serialization, readiness capability declarations, redacted startup-error codes, and the common `worker.capabilities` supervisor projection; its named platform-local matrix runs separately in Linux shared and macOS Swift-backed CI lanes, with each node identifying the host OS and selected worker
+- desktop proxy-worker contract-v1 corpus for accepted protocol/authentication shapes and rejected loopback-bind/port/protocol/authentication/egress shapes, credential-free configured-status serialization, readiness capability declarations, redacted startup-error codes, and the common `worker.capabilities` supervisor projection; its named platform-local matrix runs separately in Linux shared and macOS Swift-backed CI lanes, with each node identifying the host OS and selected worker. The Linux SwiftPM probe supplies the checkout `src` root explicitly to its supervised Python child so its import surface does not depend on test-runner working-directory selection.
 
 Representative anchors for those areas:
 

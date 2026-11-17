@@ -437,23 +437,22 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         listener.start()
         let clientConfiguration = ObstacleBridgeLinuxRuntimeConfiguration(
             transport: .myudp, host: "127.0.0.1", port: listener.port,
-            secureLinkPSK: Data("linux-swift-psk".utf8), receiveIdleTimeoutMilliseconds: 25
+            secureLinkPSK: Data("linux-swift-psk".utf8)
         )
-        let first = ObstacleBridgeLinuxConfiguredRuntime(configuration: clientConfiguration)
-        let session = try first.connect(sessionID: 1, clientNonce: Data(repeating: 1, count: 32))
-        defer { session.close() }
-        let second = ObstacleBridgeLinuxConfiguredRuntime(configuration: clientConfiguration)
-        // UDP peer admission happens in the listener's asynchronous pump. A
-        // client can create and send from its local socket, while the full
-        // listener deliberately withdraws that unadmitted peer rather than
-        // synchronously reporting its local EAGAIN to the client.
-        let rejectedSession = try second.connect(sessionID: 2, clientNonce: Data(repeating: 2, count: 32))
-        defer { rejectedSession.close() }
-        let deadline = Date().addingTimeInterval(1)
-        while listener.activePeerCount != 1, Date() < deadline {
+        let first = ObstacleBridgeLinuxLiveRuntime(configuration: clientConfiguration)
+        let second = ObstacleBridgeLinuxLiveRuntime(configuration: clientConfiguration)
+        defer { first.stop(); second.stop() }
+        first.start()
+        let admittedDeadline = Date().addingTimeInterval(3)
+        while listener.activePeerCount != 1, Date() < admittedDeadline {
             Thread.sleep(forTimeInterval: 0.01)
         }
         #expect(listener.activePeerCount == 1)
+        // The listener's asynchronous pump owns admission. A second runtime
+        // may send its local bootstrap, but must not displace the admitted
+        // child while the listener is at its one-peer capacity.
+        second.start()
+        Thread.sleep(forTimeInterval: 0.1)
         #expect(listener.peers().count == 1)
     }
 
