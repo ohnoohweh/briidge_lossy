@@ -218,10 +218,6 @@ jobs:
             done
             wait "$test_pid"
           }
-          # SwiftPM keeps the invoking checkout as its working directory, but
-          # make the editable Python source root explicit for the child that
-          # the Swift proxy-supervisor launches.  This keeps the packaged
-          # Python-worker probe independent of SwiftPM's test-runner cwd.
           # The Python harness exercises the Swift supervisor/Python-worker
           # boundary below.  Keep this SwiftPM process probe focused on the
           # packaged native worker, which is the worker artifact downloaded
