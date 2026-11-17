@@ -226,6 +226,8 @@ ARC-CMP-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_udp_fragmentation_survives_text_mode
 
 ARC-CMP-003:
+  # Native lifecycle qualification preserves terminal health records and
+  # detects a silent authenticated myUDP peer through its receive deadline.
   # Platform entrypoints and Linux adapters are co-located under swift/Sources.
   # Apple-only adapters remain co-located under swift/Sources/ObstacleBridgeAppleShared.
   # The iOS project patcher repairs stale generated source paths to the

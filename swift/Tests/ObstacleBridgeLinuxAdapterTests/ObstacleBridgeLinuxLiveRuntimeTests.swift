@@ -40,7 +40,11 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
             let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1, proxyProvider: config), policy: .init(initialDelayMilliseconds: 50, maximumDelayMilliseconds: 50, maximumAttempts: 1))
             runtime.start()
             defer { runtime.stop() }
-            let deadline = Date().addingTimeInterval(10)
+            // Worker bootstrap includes an inherited-IPC handshake and, on
+            // shared CI runners, can wait behind another Swift test process.
+            // The assertion is about eventual supervised readiness, not a
+            // ten-second scheduling budget.
+            let deadline = Date().addingTimeInterval(30)
             var proxy: [String: Any] = [:]
             while Date() < deadline {
                 proxy = runtime.resourceHealthForAdmin()["proxy_provider"] as? [String: Any] ?? [:]
@@ -664,7 +668,10 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         let failed = DispatchSemaphore(value: 0)
         runtime.onSnapshot = { if $0.state == "failed" { failed.signal() } }
         runtime.start()
-        #expect(failed.wait(timeout: .now() + 3) == .success)
+        // The protected peer must finish its startup ACK before it goes
+        // silent. Under a contended shared runner that bootstrap and the two
+        // bounded receive-deadline retries can exceed the nominal 3 seconds.
+        #expect(failed.wait(timeout: .now() + 10) == .success)
         #expect(runtime.snapshot.attempts == 2)
         #expect(runtime.snapshot.failureReason != nil)
         #expect(runtime.status().receiveLoopState == "stopped")

@@ -1363,6 +1363,12 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     }
 
     private func appendRuntimeHealth(event: String, controlledStop: Bool = false) {
+        // Diagnostic callbacks may already be queued when `stop()` records
+        // its terminal marker. They belong to the retired lifetime and must
+        // not overwrite that clean-stop classification on disk. Startup
+        // intentionally records while `stopped` is still true, and the
+        // terminal marker is the sole allowed record after shutdown begins.
+        guard !stopped || event == "runtime_started" || controlledStop else { return }
         let status = configuredRuntime.status()
         let receive = transportLifecycleOwner.receiveSnapshot()
         runtimeHealthLock.lock()

@@ -38,6 +38,11 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private var pendingOutboundWires: [Data] = []
     private let maximumPendingOutboundWires = 512
     private let synchronousReceiveWaitMS: Int32
+    private let asynchronousReceiveIdleTimeoutNS: UInt64
+    /// Protected by `stateLock`; this deadline is owned by the readiness
+    /// source rather than a blocking receive call.
+    private var lastAsyncReceiveNS: UInt64 = 0
+    private var asyncReceiveFailureReported = false
     /// This is deliberately metadata-only.  myUDP payloads can contain
     /// protected application traffic and must never be copied into a log.
     private let diagnosticSink: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)?
@@ -56,6 +61,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     ) throws {
         peerRuntime = .init(nextCounter: Int(nextDataCounter))
         synchronousReceiveWaitMS = Int32(max(1, min(Int(Int32.max), timeoutMilliseconds)))
+        asynchronousReceiveIdleTimeoutNS = UInt64(max(1, timeoutMilliseconds)) * 1_000_000
         self.diagnosticSink = diagnosticSink
         // Configured IPv6 literals commonly retain URI brackets. `getaddrinfo`
         // accepts the literal itself, not its URI presentation.
@@ -187,7 +193,11 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                     if try waitForSynchronousReceive() { continue }
                     diagnostic(.info, "myudp.receive_idle_timer_service", ["operation": "synchronous_receive"])
                     try serviceTimers()
-                    continue
+                    // This is the synchronous bootstrap path only. Surface a
+                    // bounded idle turn to its caller so SecureLink setup can
+                    // apply its retry/failure policy instead of spinning
+                    // forever after a peer disappears immediately after ACK.
+                    throw ObstacleBridgeLinuxMyUDPError.ioFailure(EAGAIN)
                 }
                 // Connected UDP reports an asynchronous ICMP port-unreachable
                 // from `recv` as ECONNREFUSED.  It can occur during startup
@@ -199,7 +209,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                         "operation": "receive", "errno": String(code), "reason": "peer_not_ready",
                     ]))
                     try serviceTimers()
-                    continue
+                    throw ObstacleBridgeLinuxMyUDPError.ioFailure(EAGAIN)
                 }
                 throw socketError(code, operation: "receive")
             }
@@ -250,6 +260,10 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         defer { receiveLock.unlock() }
         guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
         guard readSource == nil else { return }
+        stateLock.lock()
+        lastAsyncReceiveNS = DispatchTime.now().uptimeNanoseconds
+        asyncReceiveFailureReported = false
+        stateLock.unlock()
         let flags = fcntl(descriptor, F_GETFL)
         guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
             throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno)
@@ -260,6 +274,10 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         timer.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100), leeway: .milliseconds(10))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
+            if self.consumeAsyncReceiveDeadlineFailureIfDue() {
+                handler(.failure(ObstacleBridgeLinuxMyUDPError.ioFailure(ETIMEDOUT)))
+                return
+            }
             do { try self.serviceTimers() }
             catch { handler(.failure(error)) }
         }
@@ -289,6 +307,9 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                 handler(.failure(socketError(code, operation: "async_receive")))
                 return
             }
+            stateLock.lock()
+            lastAsyncReceiveNS = DispatchTime.now().uptimeNanoseconds
+            stateLock.unlock()
             do {
                 for payload in try acceptInboundWire(Data(buffer.prefix(Int(received)))) {
                     handler(.success(payload))
@@ -298,6 +319,20 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                 return
             }
         }
+    }
+
+    private func consumeAsyncReceiveDeadlineFailureIfDue() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !asyncReceiveFailureReported, lastAsyncReceiveNS != 0 else { return false }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now >= lastAsyncReceiveNS,
+              now - lastAsyncReceiveNS >= asynchronousReceiveIdleTimeoutNS else { return false }
+        asyncReceiveFailureReported = true
+        diagnostic(.warning, "myudp.receive_idle_timeout", diagnosticFields([
+            "timeout_ms": String(asynchronousReceiveIdleTimeoutNS / 1_000_000),
+        ]))
+        return true
     }
 
     private func acceptInboundWire(_ wire: Data) throws -> [Data] {

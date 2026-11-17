@@ -858,7 +858,8 @@ REQ-LIFE-001:
 REQ-LIFE-002:
   # The reconnect integration coverage includes bounded wait handling for
   # expected self-restart relaunches during reconnect validation; Linux native
-  # restart intent is actor-owned before the shutdown signal is raised.
+  # restart intent is actor-owned before the shutdown signal is raised. Native
+  # lifecycle tests cover clean-stop persistence and myUDP deadline recovery.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
