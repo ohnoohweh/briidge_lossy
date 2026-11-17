@@ -195,6 +195,9 @@ jobs:
           name: linux-swift-runner
           path: build/linux
 
+      - name: Restore Linux Swift artifact executable permissions
+        run: chmod 755 build/linux/ObstacleBridgeLinux build/linux/ObstacleBridgeProxyWorker build/linux/ObstacleBridgeLogCollector
+
       - name: Qualify Linux common-IPC lifecycle matrix
         run: |
           # The downloaded artifact contains the runtime executable, not a
