@@ -34,7 +34,11 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
     @Test func nativeRuntimeOwnsEitherProxyWorkerAndReportsLoss() throws {
         let environment = ProcessInfo.processInfo.environment
         guard let python = environment["OBSTACLEBRIDGE_TEST_PYTHON"], let native = environment["OBSTACLEBRIDGE_TEST_PROXY_WORKER"] else { return }
-        for (implementation, executable) in [("python", python), ("native", native)] {
+        let candidates = [("python", python), ("native", native)]
+        let selected = environment["OBSTACLEBRIDGE_TEST_PROXY_IMPLEMENTATION"]
+        let implementations = selected.map { name in candidates.filter { $0.0 == name } } ?? candidates
+        try #require(!implementations.isEmpty)
+        for (implementation, executable) in implementations {
             let bootstrap: [String: Any] = ["bind": "127.0.0.1", "http_port": 0, "socks5_port": 0, "protocols": ["http-connect"], "auth": ["mode": "none"], "egress": ["mode": "direct"], "policy": ["allow_private_destinations": true, "blocked_host_patterns": [String]()]]
             let config = ObstacleBridgeLinuxProxyProviderConfiguration(enabled: true, httpPort: 0, socks5Enabled: false, worker: implementation, workerExecutable: executable, workerBootstrap: try JSONSerialization.data(withJSONObject: bootstrap))
             let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1, proxyProvider: config), policy: .init(initialDelayMilliseconds: 50, maximumDelayMilliseconds: 50, maximumAttempts: 1))

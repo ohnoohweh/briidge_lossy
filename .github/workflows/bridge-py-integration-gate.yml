@@ -222,7 +222,11 @@ jobs:
           # make the editable Python source root explicit for the child that
           # the Swift proxy-supervisor launches.  This keeps the packaged
           # Python-worker probe independent of SwiftPM's test-runner cwd.
-          run_swift_test env PYTHONPATH="$GITHUB_WORKSPACE/src${PYTHONPATH:+:$PYTHONPATH}" OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" "${swift_test[@]}" --filter ObstacleBridgeLinuxLiveRuntimeTests
+          # The Python harness exercises the Swift supervisor/Python-worker
+          # boundary below.  Keep this SwiftPM process probe focused on the
+          # packaged native worker, which is the worker artifact downloaded
+          # into this job.
+          run_swift_test env OBSTACLEBRIDGE_TEST_PROXY_IMPLEMENTATION=native OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" "${swift_test[@]}" --filter ObstacleBridgeLinuxLiveRuntimeTests
           run_swift_test "${swift_test[@]}" --filter ObstacleBridgeLinuxRuntimeConfigurationTests
           # An unchecked Swift Set/Dictionary race traps at runtime. Exercise
           # the compiled Core concurrent enqueue/drain regression before any
@@ -235,8 +239,8 @@ jobs:
           run_swift_test "${swift_test[@]}" --filter ObstacleBridgeLinuxTunHelperAdapterTests
           run_swift_test "${swift_test[@]}" --filter ObstacleBridgeLinuxTunDeviceTests
 
-      - name: Qualify PXY-3C proxy collector matrix (Linux)
-        run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
+      - name: Qualify PXY-3C proxy collector and worker matrix (Linux)
+        run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py tests/unit/test_native_proxy_supervisor.py
 
       - name: Test isolated Python peer stack
         env:
