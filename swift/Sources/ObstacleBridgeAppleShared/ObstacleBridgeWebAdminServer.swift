@@ -492,6 +492,7 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
     }
 
     private static func sendAndClose(_ response: Data, connection: NWConnection) {
+        // OBSTACLEBRIDGE-NETWORK-SEND-BOUNDS: inflight=1; queue=one-shot-close; test=test_web_admin_server_callbacks_keep_owner_queue
         connection.send(content: response, completion: .contentProcessed { error in
             connection.cancel()
         })
@@ -638,6 +639,7 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
 
     /// Every connection callback is started on and returns to the server queue.
     private final class LiveSession: @unchecked Sendable {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue
         private static let maximumReceiveBufferBytes = 128 * 1_024
         private static let maximumPendingOutboundTopics = 16
         private static let maximumPendingOutboundBytes = 1 * 1_024 * 1_024
@@ -704,6 +706,7 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
                     contentType: "text/plain; charset=utf-8",
                     body: Data("Bad WebSocket Request".utf8)
                 )
+                // OBSTACLEBRIDGE-NETWORK-SEND-BOUNDS: inflight=1; queue=handshake-before-live-session; test=test_web_admin_server_callbacks_keep_owner_queue
                 connection.send(content: response, completion: .contentProcessed { error in
                     self.stop()
                 })
@@ -717,6 +720,7 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
                 "Connection: Upgrade\r\n" +
                 "Sec-WebSocket-Accept: \(accept)\r\n\r\n"
             let response = Data(responseText.utf8)
+            // OBSTACLEBRIDGE-NETWORK-SEND-BOUNDS: inflight=1; queue=handshake-before-live-session; test=test_web_admin_server_callbacks_keep_owner_queue
             connection.send(content: response, completion: .contentProcessed { [weak self] error in
                 guard let self else { return }
                 let intervals = Dictionary(uniqueKeysWithValues: self.supportedTopics.map { ($0, self.intervalProvider($0)) })
@@ -915,6 +919,7 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
         private func submitOutboundFrame(_ frame: Data) {
             guard !closed else { return }
             outboundSendInFlight = true
+            // OBSTACLEBRIDGE-NETWORK-SEND-BOUNDS: inflight=1; queue=pendingOutboundFrames; test=test_web_admin_server_callbacks_keep_owner_queue
             connection.send(content: frame, completion: .contentProcessed { [weak self] error in
                 guard let self else { return }
                 self.queue.async {

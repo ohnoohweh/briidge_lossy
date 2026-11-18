@@ -159,6 +159,7 @@ final class ObstacleBridgeProxyServer: @unchecked Sendable {
 /// A connection pair whose state is accessed only from the server queue.
 private final class ProxySession: @unchecked Sendable {
     // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue
     private let inbound: NWConnection
     private let configuration: ObstacleBridgeProxyServer.Configuration
     private let queue: DispatchQueue

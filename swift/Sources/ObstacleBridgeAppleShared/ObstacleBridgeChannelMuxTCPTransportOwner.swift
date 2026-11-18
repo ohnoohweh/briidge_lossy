@@ -3,6 +3,7 @@ import Network
 
 /// Owns every channel and pending write on its injected serial queue.
 final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_overlay_connection_drivers_keep_callbacks_on_owner_queue
     // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_channel_mux_tcp_owner_keeps_network_callbacks_on_owner_queue
     typealias EventSink = (String, [String: Any]) -> Void
     typealias MuxFrameSink = ([Data]) -> Void

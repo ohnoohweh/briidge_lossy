@@ -5,6 +5,7 @@ import Network
 /// submitted write and a bounded payload FIFO behind it; Network.framework is
 /// never used as an unbounded application queue.
 final class ObstacleBridgeBoundedConnectionDataSender {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue
     private struct PendingWrite {
         let data: Data
         let completion: (NWError?) -> Void

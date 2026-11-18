@@ -4,6 +4,7 @@ import Network
 @available(iOS 15.0, *)
 /// Owns QUIC connection and overlay state on its injected serial queue.
 final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_overlay_connection_drivers_keep_callbacks_on_owner_queue
     // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void

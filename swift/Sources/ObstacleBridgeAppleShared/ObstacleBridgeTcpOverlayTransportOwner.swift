@@ -7,6 +7,7 @@ import Network
 /// executors. Public mutation entry points synchronously marshal to `queue`,
 /// while callbacks re-enter that same queue before reading or writing state.
 final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_overlay_connection_drivers_keep_callbacks_on_owner_queue
     // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
