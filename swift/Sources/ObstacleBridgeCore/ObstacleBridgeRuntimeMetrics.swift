@@ -10,6 +10,14 @@ public actor ObstacleBridgeRuntimeMetrics {
     private static let store = ObstacleBridgeRuntimeMetrics()
 
     public struct Reporter: Sendable {
+        /// The packet path is synchronous, so it must not create one Swift
+        /// task for every measurement. The mailbox has one consumer and a
+        /// bounded buffer: under overload, diagnostic samples are discarded
+        /// instead of retaining an unbounded sequence of task closures.
+        fileprivate static let mailbox = Mailbox { event in
+            await ObstacleBridgeRuntimeMetrics.store.applyReporterEvent(event)
+        }
+
         @discardableResult public func measure<T>(_ category: Category, _ body: () throws -> T) rethrows -> T {
             let started = DispatchTime.now().uptimeNanoseconds
             defer { record(category, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
@@ -17,15 +25,15 @@ public actor ObstacleBridgeRuntimeMetrics {
         }
 
         public func record(_ category: Category, durationNS: UInt64, completedNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
-            Task { await ObstacleBridgeRuntimeMetrics.store.record(category, durationNS: durationNS, completedNS: completedNS) }
+            Self.mailbox.submit(.timing(category, durationNS, completedNS))
         }
 
         public func recordCPUSample(processCPUNS: UInt64, wallNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
-            Task { await ObstacleBridgeRuntimeMetrics.store.recordCPUSample(processCPUNS: processCPUNS, wallNS: wallNS) }
+            Self.mailbox.submit(.cpu(processCPUNS, wallNS))
         }
 
         public func recordMemorySample(processMemoryBytes: UInt64, measurementKind: MemoryMeasurementKind, wallNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
-            Task { await ObstacleBridgeRuntimeMetrics.store.recordMemorySample(processMemoryBytes: processMemoryBytes, measurementKind: measurementKind, wallNS: wallNS) }
+            Self.mailbox.submit(.memory(processMemoryBytes, measurementKind, wallNS))
         }
 
         /// Reads the complete projection from the metrics actor. Platform
@@ -52,6 +60,32 @@ public actor ObstacleBridgeRuntimeMetrics {
                 "longest_uninterrupted_category": NSNull(),
                 "longest_uninterrupted_last_2_seconds_category": NSNull(),
             ]
+        }
+
+        fileprivate enum Event: Sendable {
+            case timing(Category, UInt64, UInt64)
+            case cpu(UInt64, UInt64)
+            case memory(UInt64, MemoryMeasurementKind, UInt64)
+        }
+
+        /// The continuation is Sendable and the stream bounds retained events.
+        /// The only task is this long-lived consumer, not one task per packet.
+        fileprivate final class Mailbox: Sendable {
+            private let continuation: AsyncStream<Event>.Continuation
+
+            init(apply: @escaping @Sendable (Event) async -> Void) {
+                let stream = AsyncStream<Event>.makeStream(bufferingPolicy: .bufferingNewest(256))
+                continuation = stream.continuation
+                Task {
+                    for await event in stream.stream {
+                        await apply(event)
+                    }
+                }
+            }
+
+            func submit(_ event: Event) {
+                continuation.yield(event)
+            }
         }
     }
 
@@ -137,6 +171,17 @@ public actor ObstacleBridgeRuntimeMetrics {
     private var currentMemory: MemorySample?
     private var overallMemoryPeak: UInt64?
     private var recentMemory: [MemorySample] = []
+
+    private func applyReporterEvent(_ event: Reporter.Event) {
+        switch event {
+        case let .timing(category, durationNS, completedNS):
+            record(category, durationNS: durationNS, completedNS: completedNS)
+        case let .cpu(processCPUNS, wallNS):
+            recordCPUSample(processCPUNS: processCPUNS, wallNS: wallNS)
+        case let .memory(bytes, kind, wallNS):
+            recordMemorySample(processMemoryBytes: bytes, measurementKind: kind, wallNS: wallNS)
+        }
+    }
 
     public func record(_ category: Category, durationNS: UInt64, completedNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
         lifetime[category, default: .init()].add(durationNS)
