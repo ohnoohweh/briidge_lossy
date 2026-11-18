@@ -84,6 +84,10 @@ WebAdmin's coalesced live snapshots use the matching bounded keyed store: one
 latest frame per topic, rather than a history of frames. Packet-flow outgoing
 delivery processes four bounded batches per drain turn before rescheduling, so
 a continuously busy flow cannot monopolize the extension's drain executor.
+Apple proxy and per-channel UDP client writes use a shared bounded connection
+sender: one active Network.framework write plus at most 128 pending payloads,
+2 MiB, and 60 seconds of age. Queue overflow closes the affected connection;
+all pending data is released on channel or owner stop.
 
 Fragmented MyUDP records are the sole exception to direct FIFO storage because
 one record is consumed incrementally into DATA chunks. Its queue enforces the

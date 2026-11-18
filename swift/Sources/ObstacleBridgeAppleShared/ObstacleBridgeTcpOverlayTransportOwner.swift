@@ -66,6 +66,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
     private var lastOverlayRxWallNS: UInt64 = 0
     private var udpServerConnections: [Int: NWConnection] = [:]
     private var udpClientConnections: [Int: NWConnection] = [:]
+    private var udpClientSenders: [Int: ObstacleBridgeBoundedConnectionDataSender] = [:]
     private var udpClientDrivers: [Int: ObstacleBridgeUDPClientConnectionDriver] = [:]
     private var tcpConnectionStates: [Int: ObstacleBridgeOverlayConnectionState] = [:]
     private var udpConnectionStates: [Int: ObstacleBridgeOverlayConnectionState] = [:]
@@ -265,9 +266,11 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
         for connection in udpClientConnections.values {
             connection.cancel()
         }
+        for sender in udpClientSenders.values { sender.stop() }
         udpClientDrivers.removeAll()
         udpServerConnections.removeAll()
         udpClientConnections.removeAll()
+        udpClientSenders.removeAll()
         tcpConnectionStates.removeAll()
         udpConnectionStates.removeAll()
         activeTunChanIDs.removeAll()
@@ -1225,6 +1228,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
             startedProvider: { [weak self] in self?.started ?? false },
             registerConnection: { [weak self] connection in
                 self?.udpClientConnections[chanID] = connection
+                self?.udpClientSenders[chanID] = ObstacleBridgeBoundedConnectionDataSender(connection: connection)
             },
             updateConnected: { [weak self] localHost, localPort in
                 guard let self else { return }
@@ -1264,6 +1268,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
         let driver = udpClientDrivers.removeValue(forKey: chanID)
         driver?.stop()
         let connection = udpClientConnections.removeValue(forKey: chanID)
+        udpClientSenders.removeValue(forKey: chanID)?.stop()
         connection?.stateUpdateHandler = nil
         connection?.cancel()
         udpConnectionStates.removeValue(forKey: chanID)
@@ -1383,12 +1388,15 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
     }
 
     private func sendOnUDPConnection(_ connection: NWConnection, payload: Data, chanID: Int) {
-        connection.send(content: payload, completion: .contentProcessed { [weak self] error in
+        guard let sender = udpClientSenders[chanID], sender.submit(payload, completion: { [weak self] error in
             guard let self, let error else { return }
             self.queue.async {
                 self.eventSink?("tcp_overlay_udp_client_write_failed", ["chan_id": chanID, "error": error.localizedDescription])
             }
-        })
+        }) else {
+            eventSink?("tcp_overlay_udp_client_write_queue_dropped", ["chan_id": chanID, "bytes": payload.count])
+            return
+        }
     }
 
     private func handleUDPServerConnectionState(_ state: NWConnection.State) {
