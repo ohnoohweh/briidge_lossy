@@ -280,7 +280,7 @@ private final class ProxySession: @unchecked Sendable {
                     }
                     let remainder = Self.remainder(buffer: buffer, after: request.headerLength)
                     self.startTunnel(pendingInboundData: remainder)
-                })
+                }
             }
             return
         }
@@ -304,7 +304,7 @@ private final class ProxySession: @unchecked Sendable {
                 }
                 self.onBytes(forwarded.count, 0)
                 self.startTunnel(pendingInboundData: Data())
-            })
+            }
         }
     }
 
@@ -329,7 +329,7 @@ private final class ProxySession: @unchecked Sendable {
         } else {
             sendInbound(Data([0x05, 0xff])) { [weak self] _ in
                 self?.finish(error: "no acceptable socks5 auth method")
-            })
+            }
             return
         }
         let consumed = 2 + methodCount
@@ -345,7 +345,7 @@ private final class ProxySession: @unchecked Sendable {
             } else {
                 self.handleSOCKS5Request(buffer: remainder)
             }
-        })
+        }
     }
 
     private func receiveSOCKS5Greeting(buffer: Data) {
@@ -393,7 +393,7 @@ private final class ProxySession: @unchecked Sendable {
             } else {
                 self.finish(error: "socks5 authentication failed")
             }
-        })
+        }
     }
 
     private func receiveSOCKS5UserPassword(buffer: Data) {
@@ -542,7 +542,7 @@ private final class ProxySession: @unchecked Sendable {
                 return
             }
             completion?()
-        })
+        }
     }
 
     private func authorized(headers: [String: String]) -> Bool {

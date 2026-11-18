@@ -2014,7 +2014,7 @@ def test_overlay_connection_drivers_keep_callbacks_on_owner_queue() -> None:
 def test_native_proxy_connections_keep_callbacks_on_owner_queue() -> None:
     source = (SHARED_NATIVE_DIR / "ObstacleBridgeNativeProxyConnections.swift").read_text(encoding="utf-8")
 
-    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue") == 2
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue") == 3
     assert "final class ObstacleBridgeTCPProxyConnection: @unchecked Sendable" in source
     assert "final class ObstacleBridgeUDPProxyConnection: @unchecked Sendable" in source
     assert "localConnection.start(queue: queue)" in source
@@ -2028,7 +2028,7 @@ def test_native_proxy_connections_keep_callbacks_on_owner_queue() -> None:
 def test_web_admin_server_callbacks_keep_owner_queue() -> None:
     source = (SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift").read_text(encoding="utf-8")
 
-    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue") == 2
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue") == 3
     assert "final class ObstacleBridgeWebAdminServer: @unchecked Sendable" in source
     assert "private final class LiveSession: @unchecked Sendable" in source
     assert "listener.start(queue: queue)" in source
@@ -2089,7 +2089,7 @@ def test_websocket_overlay_owner_serializes_public_and_delegate_callbacks() -> N
 def test_proxy_server_sessions_stay_on_owner_queue() -> None:
     source = (SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift").read_text(encoding="utf-8")
 
-    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue") == 2
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue") == 3
     assert "ObstacleBridgeProxyServer: @unchecked Sendable" in source
     assert "ProxySession: @unchecked Sendable" in source
     assert "private func withOwnerQueue<T>" in source
