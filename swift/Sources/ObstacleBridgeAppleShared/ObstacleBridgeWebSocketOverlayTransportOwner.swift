@@ -337,7 +337,28 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 "rtt_est_ms": rttEstMS ?? NSNull(),
                 "transmit_delay_est_ms": transmitDelayEstMSValue() ?? NSNull(),
                 "protocol_stats": protocolStats,
+                "fifo_levels": [
+                    "secure_link_pending_payloads": [
+                        "queued_messages": overlayLayerTransportAdapter?.pendingSecureLinkPayloadCount() ?? 0,
+                        "queued_bytes": overlayLayerTransportAdapter?.pendingSecureLinkPayloadBytes() ?? 0,
+                    ],
+                    "outbound_websocket_messages": [
+                        "queued_messages": pendingOutboundMessages.count,
+                        "queued_bytes": pendingOutboundMessages.reduce(0) { $0 &+ Self.messageByteCount($1) },
+                    ],
+                    "channel_mux_egress": [
+                        "queued_messages": muxEgressScheduler.queuedCount,
+                    ],
+                ],
             ]
+        }
+    }
+
+    private static func messageByteCount(_ message: URLSessionWebSocketTask.Message) -> Int {
+        switch message {
+        case .data(let data): return data.count
+        case .string(let text): return text.lengthOfBytes(using: .utf8)
+        @unknown default: return 0
         }
     }
 

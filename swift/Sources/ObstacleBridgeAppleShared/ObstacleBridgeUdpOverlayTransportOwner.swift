@@ -541,9 +541,21 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             snapshot["transmit_delay_est_ms"] = overlayRuntime.transmitDelayEstMS
             snapshot["protocol_stats"] = protocolStats
             snapshot["fifo_levels"] = [
-                "secure_link_pending_payloads": ["queued_messages": overlayLayerTransportAdapter?.pendingSecureLinkPayloadCount() ?? 0, "max_queued_messages_since_start": secureLinkPayloadQueuedMax],
-                "outbound_mux_frames": ["queued_messages": pendingOutboundMuxFrames.count, "max_queued_messages_since_start": pendingOutboundMuxFramesMax],
-                "inbound_overlay_payloads": ["queued_messages": pendingInboundOverlayPayloads.count, "max_queued_messages_since_start": pendingInboundOverlayPayloadsMax],
+                "secure_link_pending_payloads": [
+                    "queued_messages": overlayLayerTransportAdapter?.pendingSecureLinkPayloadCount() ?? 0,
+                    "queued_bytes": overlayLayerTransportAdapter?.pendingSecureLinkPayloadBytes() ?? 0,
+                    "max_queued_messages_since_start": secureLinkPayloadQueuedMax,
+                ],
+                "outbound_mux_frames": [
+                    "queued_messages": pendingOutboundMuxFrames.count,
+                    "queued_bytes": pendingOutboundMuxFrames.reduce(0) { $0 &+ $1.count },
+                    "max_queued_messages_since_start": pendingOutboundMuxFramesMax,
+                ],
+                "inbound_overlay_payloads": [
+                    "queued_messages": pendingInboundOverlayPayloads.count,
+                    "queued_bytes": pendingInboundOverlayPayloads.reduce(0) { $0 &+ $1.count },
+                    "max_queued_messages_since_start": pendingInboundOverlayPayloadsMax,
+                ],
             ]
             snapshot["next_address_attempt_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()
             snapshot["restart_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()

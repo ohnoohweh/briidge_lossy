@@ -122,6 +122,15 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
 
     func pendingPayloadCount() -> Int { pendingPayloads.count }
 
+    /// This is sampled only by operator-facing status snapshots, never from
+    /// the packet path.  It attributes live retained payload bytes without
+    /// retaining a history of packet contents.
+    func pendingPayloadBytes() -> Int {
+        pendingPayloads.reduce(0) { partial, payload in
+            partial &+ payload.count
+        }
+    }
+
     public func pollDueFrames() throws -> OutboundSnapshot {
         var emittedFrames = try runtime.pollDueFrames()
         if emittedFrames.isEmpty,

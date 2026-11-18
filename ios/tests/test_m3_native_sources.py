@@ -183,6 +183,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "resident_size" in provider
     assert "phys_footprint" in provider
     assert "task_vm_info_kern_return" in provider
+    assert "malloc_zone_statistics(malloc_default_zone(), &mallocStats)" in provider
+    assert '"memory_diagnostics"' in provider
+    assert '"size_in_use": mallocStats.size_in_use' in provider
     assert "SwiftSimpleUDPPeerBridge" in provider
     assert "ObstacleBridgeUdpOverlayTransportOwner" in provider
     assert "ObstacleBridgeTcpOverlayTransportOwner" in provider
@@ -323,6 +326,8 @@ def test_native_packet_flow_bridge_source_exists() -> None:
     assert "incoming_pcap_path" in bridge
     assert "outgoing_pcap_path" in bridge
     assert "packetflow_pcap" in bridge
+    assert '"queued_bytes": incomingPackets.reduce' in bridge
+    assert '"outgoing_queued_bytes": outgoingPendingPackets.reduce' in bridge
     assert "guard enabled else" in bridge
     assert "maximumPendingPackets = 64" in bridge
     assert "bytesWritten - lastSyncBytes >= 1_024 * 1_024" in bridge
@@ -351,6 +356,8 @@ def test_ios_native_provider_log_reads_are_bounded_and_tail_chunked() -> None:
     assert "nativeProviderLogMaximumPendingWrites = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogMaximumPendingWrites" in provider
     assert "nativeProviderDiagnosticLogMaximumPendingWrites = 64" in shared
     assert "nativeProviderLogQueue.async" in provider
+    log_writer = provider[provider.index("private func writeNativeProviderLog"):]
+    assert log_writer.index("nativeProviderLogPendingWrites += 1") < log_writer.index("JSONSerialization.data(withJSONObject: payload")
     assert "rotateNativeProviderLog(at: logURL" in provider
     assert "nativeProviderLogQueue.sync" in provider
     assert "private var nativeProviderManagedLog: ObstacleBridgeManagedLogFile?" in provider

@@ -378,6 +378,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         ) else {
             return
         }
+        // Claim a bounded slot before constructing JSON or Data.  This method
+        // can be called from a packet callback, where allocating a discarded
+        // log record for every packet would itself look like traffic-linked
+        // memory growth.
+        nativeProviderLogPendingLock.lock()
+        guard nativeProviderLogPendingWrites < Self.nativeProviderLogMaximumPendingWrites else {
+            nativeProviderLogPendingLock.unlock()
+            return
+        }
+        nativeProviderLogPendingWrites += 1
+        nativeProviderLogPendingLock.unlock()
+        func releasePendingWriteSlot() {
+            nativeProviderLogPendingLock.lock()
+            nativeProviderLogPendingWrites -= 1
+            nativeProviderLogPendingLock.unlock()
+        }
         let logURL = containerURL
             .appendingPathComponent("logs", isDirectory: true)
             .appendingPathComponent("ipserver-native-provider.jsonl")
@@ -389,16 +405,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
               let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
               let text = String(data: data, encoding: .utf8)
         else {
+            releasePendingWriteSlot()
             return
         }
         let line = Data((text + "\n").utf8)
-        nativeProviderLogPendingLock.lock()
-        guard nativeProviderLogPendingWrites < Self.nativeProviderLogMaximumPendingWrites else {
-            nativeProviderLogPendingLock.unlock()
-            return
-        }
-        nativeProviderLogPendingWrites += 1
-        nativeProviderLogPendingLock.unlock()
         nativeProviderLogQueue.async { [weak self] in
             guard let self else { return }
             defer {
@@ -1167,14 +1177,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                     let proto = index < protocols.count ? protocols[index] : NSNumber(value: AF_INET)
                     ObstacleBridgePacketFlowBridge.enqueueIncomingPacket(packet, protocolFamily: proto)
                 }
-                self.recordNativeEvent(
-                    "packet_pump_forwarded_packets",
-                    fields: [
-                        "packet_count": packets.count,
-                        "protocol_count": protocols.count,
-                        "total_bytes": totalBytes,
-                    ]
-                )
+                // This callback is directly proportional to traffic and is
+                // shared by every overlay transport.  Keep the record strictly
+                // opt-in; otherwise NSLog and JSON serialization become a
+                // per-packet allocation source.
+                if self.nativePacketDiagnosticsEnabled() {
+                    self.recordNativeEvent(
+                        "packet_pump_forwarded_packets",
+                        fields: [
+                            "packet_count": packets.count,
+                            "protocol_count": protocols.count,
+                            "total_bytes": totalBytes,
+                        ]
+                    )
+                }
                 if packets.count >= 32 || totalBytes >= 32768 {
                     self.updateProviderState(
                         "packet_pump_forwarded_packets",
@@ -1265,6 +1281,29 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             payload["compressed_bytes"] = vmInfo.compressed
             payload["reusable_bytes"] = vmInfo.reusable
         }
+
+        // `phys_footprint` says whether iOS is approaching its extension
+        // budget, but it cannot tell whether the growth is live Swift/CF heap
+        // state or VM/allocator retention.  The default-zone totals are cheap
+        // to sample and let WebAdmin distinguish those cases without retaining
+        // allocation histories in the extension.
+        var mallocStats = malloc_statistics_t()
+        malloc_zone_statistics(malloc_default_zone(), &mallocStats)
+        payload["memory_diagnostics"] = [
+            "malloc_default_zone": [
+                "blocks_in_use": mallocStats.blocks_in_use,
+                "size_in_use": mallocStats.size_in_use,
+                "size_allocated": mallocStats.size_allocated,
+                "max_size_in_use": mallocStats.max_size_in_use,
+            ],
+            "vm": [
+                "resident_size": payload["resident_size"] ?? NSNull(),
+                "phys_footprint": payload["phys_footprint"] ?? NSNull(),
+                "internal_bytes": payload["internal_bytes"] ?? NSNull(),
+                "compressed_bytes": payload["compressed_bytes"] ?? NSNull(),
+                "reusable_bytes": payload["reusable_bytes"] ?? NSNull(),
+            ],
+        ]
 
         return payload
     }
