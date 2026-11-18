@@ -219,6 +219,10 @@ public enum ObstacleBridgeWorkerIPC {
 /// are handled.  It therefore makes partial Unix-socket and pipe reads safe
 /// without turning an incomplete frame into a synchronous `readExactly` wait.
 public struct ObstacleBridgeWorkerIPCStreamDecoder {
+    /// A readiness callback may coalesce a complete maximum-sized frame with
+    /// the beginning of the next one. Retain no more than that bounded
+    /// two-frame window while waiting for stream completion.
+    public static let maximumBufferedBytes = 2 * (ObstacleBridgeWorkerIPC.headerBytes + ObstacleBridgeWorkerIPC.maximumFrameBytes)
     private var buffered = Data()
 
     public init() {}
@@ -226,6 +230,10 @@ public struct ObstacleBridgeWorkerIPCStreamDecoder {
     public var bufferedByteCount: Int { buffered.count }
 
     public mutating func append(_ bytes: Data) throws -> [ObstacleBridgeWorkerIPC.Frame] {
+        guard buffered.count + bytes.count <= Self.maximumBufferedBytes else {
+            buffered.removeAll(keepingCapacity: false)
+            throw ObstacleBridgeWorkerIPC.Failure.frameTooLarge
+        }
         buffered.append(bytes)
         var frames: [ObstacleBridgeWorkerIPC.Frame] = []
         while true {
