@@ -65,7 +65,7 @@ public final class ObstacleBridgeTcpOverlayRuntime {
     private let earlyMax: Int
     private let earlyTTL: Double
     private let wbufThreshold: Int
-    private var earlyBuf = Data()
+    private let earlyBuf: ObstacleBridgeBoundedDataFIFO
     private var earlyDeadline = 0.0
     private var txBytes = 0
     private var overlayConnected = false
@@ -82,6 +82,11 @@ public final class ObstacleBridgeTcpOverlayRuntime {
     ) {
         self.earlyMax = max(0, earlyMax)
         self.earlyTTL = max(0.0, earlyTTL)
+        self.earlyBuf = .init(limits: .init(
+            maximumItems: 1_024,
+            maximumBytes: max(1, earlyMax),
+            overflowPolicy: .dropOldest
+        ))
         self.wbufThreshold = max(0, wbufThreshold)
         self.nextPeerID = max(1, nextPeerID)
     }
@@ -93,8 +98,8 @@ public final class ObstacleBridgeTcpOverlayRuntime {
                 peerTxNotifications: [],
                 writtenHex: [],
                 writtenBuffers: [],
-                earlyBufBytes: earlyBuf.count,
-                earlyBufHex: earlyBuf.isEmpty ? nil : hexFromData(earlyBuf),
+                earlyBufBytes: earlyBuf.byteCount,
+                earlyBufHex: earlyBuf.isEmpty ? nil : hexFromData(earlyBufferedData()),
                 connectRequested: false
             )
         }
@@ -105,8 +110,8 @@ public final class ObstacleBridgeTcpOverlayRuntime {
                 peerTxNotifications: [],
                 writtenHex: [],
                 writtenBuffers: [],
-                earlyBufBytes: earlyBuf.count,
-                earlyBufHex: earlyBuf.isEmpty ? nil : hexFromData(earlyBuf),
+                earlyBufBytes: earlyBuf.byteCount,
+                earlyBufHex: earlyBuf.isEmpty ? nil : hexFromData(earlyBufferedData()),
                 connectRequested: false
             )
         }
@@ -117,8 +122,8 @@ public final class ObstacleBridgeTcpOverlayRuntime {
                 peerTxNotifications: [],
                 writtenHex: [],
                 writtenBuffers: [],
-                earlyBufBytes: earlyBuf.count,
-                earlyBufHex: hexFromData(earlyBuf),
+                earlyBufBytes: earlyBuf.byteCount,
+                earlyBufHex: hexFromData(earlyBufferedData()),
                 connectRequested: peerConfigured
             )
         }
@@ -129,8 +134,8 @@ public final class ObstacleBridgeTcpOverlayRuntime {
             peerTxNotifications: [wire.count],
             writtenHex: [hexFromData(wire)],
             writtenBuffers: [wire],
-            earlyBufBytes: earlyBuf.count,
-            earlyBufHex: earlyBuf.isEmpty ? nil : hexFromData(earlyBuf),
+            earlyBufBytes: earlyBuf.byteCount,
+            earlyBufHex: earlyBuf.isEmpty ? nil : hexFromData(earlyBufferedData()),
             connectRequested: false
         )
     }
@@ -184,7 +189,7 @@ public final class ObstacleBridgeTcpOverlayRuntime {
             bpTaskStarted: true,
             flushedHex: flushedHex,
             flushedBuffers: flushedHex.compactMap(Self.dataFromHex),
-            earlyBufBytes: earlyBuf.count
+            earlyBufBytes: earlyBuf.byteCount
         )
     }
 
@@ -292,25 +297,22 @@ public final class ObstacleBridgeTcpOverlayRuntime {
         }
         earlyDeadline = now + earlyTTL
 
-        let overflow = (earlyBuf.count + wireFrame.count) - earlyMax
-        if overflow > 0 {
-            let dropCount = min(overflow, earlyBuf.count)
-            if dropCount > 0 {
-                earlyBuf.removeFirst(dropCount)
-            }
-        }
-        earlyBuf.append(wireFrame)
+        _ = earlyBuf.append(wireFrame)
     }
 
     private func flushEarly(writerPresent: Bool) -> [String] {
         guard writerPresent, !earlyBuf.isEmpty else {
             return []
         }
-        let pending = earlyBuf
-        txBytes += pending.count
-        earlyBuf.removeAll(keepingCapacity: false)
+        let pending = earlyBuf.drainAll()
+        let bytes = pending.reduce(0) { $0 + $1.count }
+        txBytes += bytes
         earlyDeadline = 0.0
-        return [hexFromData(pending)]
+        return pending.map(hexFromData)
+    }
+
+    private func earlyBufferedData() -> Data {
+        earlyBuf.snapshot().reduce(into: Data()) { $0.append($1) }
     }
 
     private func buildAppWire(_ payload: Data) -> Data? {

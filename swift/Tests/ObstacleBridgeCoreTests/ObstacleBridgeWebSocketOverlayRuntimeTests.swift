@@ -214,6 +214,20 @@ struct ObstacleBridgeWebSocketOverlayRuntimeTests {
         #expect(try ObstacleBridgeOverlayEnvelope.decodeTCP(effect.writtenBuffers[0]) == .application(Data("quic-core".utf8)))
     }
 
+    @Test func streamEarlyBuffersBoundAndReleaseOnConnection() {
+        let quic = ObstacleBridgeQuicOverlayRuntime(earlyMax: 12)
+        _ = quic.sendApp(payload: Data("first".utf8), writerPresent: false, peerConfigured: true)
+        let quicBuffered = quic.sendApp(payload: Data("second".utf8), writerPresent: false, peerConfigured: true)
+        #expect(quicBuffered.earlyBufBytes <= 12)
+        #expect(!quic.connectionOpened(host: "127.0.0.1", port: 443, socketPresent: true).isEmpty)
+
+        let tcp = ObstacleBridgeTcpOverlayRuntime(earlyMax: 12)
+        _ = tcp.sendApp(payload: Data("first".utf8), writerPresent: false, peerConfigured: true)
+        let tcpBuffered = tcp.sendApp(payload: Data("second".utf8), writerPresent: false, peerConfigured: true)
+        #expect(tcpBuffered.earlyBufBytes <= 12)
+        #expect(!tcp.connectionOpened(host: "127.0.0.1", port: 443, socketPresent: true).isEmpty)
+    }
+
     @Test func proxyConnectRequestPreservesIPv6AuthorityAndAuthorization() throws {
         let runtime = try ObstacleBridgeWebSocketOverlayRuntime(payloadMode: "binary")
 
