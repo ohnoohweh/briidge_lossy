@@ -695,8 +695,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             let shouldRecordHeartbeat: Bool
             let shouldUpdateState: Bool
             if self.swiftUDPRuntimeActive {
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
                 shouldRecordHeartbeat = self.heartbeatTickCount <= 3 || (self.heartbeatTickCount % 5) == 0
-                shouldUpdateState = self.heartbeatTickCount <= 3 || (self.heartbeatTickCount % 15) == 0
+                // Persisting a full provider snapshot is intentionally a
+                // low-rate lifecycle/health operation.  It includes atomic
+                // file writes and JSON encoding, so it must never track the
+                // packet rate.
+                shouldUpdateState = self.heartbeatTickCount <= 3 || (self.heartbeatTickCount % 30) == 0
             } else {
                 shouldRecordHeartbeat = true
                 shouldUpdateState = true
@@ -1191,15 +1196,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                         ]
                     )
                 }
-                if packets.count >= 32 || totalBytes >= 32768 {
-                    self.updateProviderState(
-                        "packet_pump_forwarded_packets",
-                        extraFields: [
-                            "packet_count": packets.count,
-                            "total_bytes": totalBytes,
-                        ]
-                    )
-                }
+                // Do not persist provider state from this callback.  Large
+                // traffic batches are normal and used to trigger full JSON
+                // snapshots plus two atomic file writes per batch.  WebAdmin
+                // already reads the aggregate packet/byte counters from the
+                // bounded bridge snapshot; lifecycle state is persisted by
+                // the 30-second heartbeat instead.
             }
             self.readPackets()
         }

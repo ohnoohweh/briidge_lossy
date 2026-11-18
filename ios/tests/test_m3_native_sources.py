@@ -173,6 +173,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "startTunnel_completed_swift_simple_udp" in provider
     assert "handleAppMessage" in provider
     assert "packet_pump_forwarded_packets" in provider
+    packet_pump = provider[provider.index("private func readPackets()"):provider.index("private static func stopReasonText")]
+    assert "updateProviderState(" not in packet_pump
+    assert "(self.heartbeatTickCount % 30) == 0" in provider
     assert "ipserver-native-provider-state.json" in provider
     assert "ipserver-runtime-health-v1.json" in provider
     assert "ObstacleBridgeRuntimeHealthRing" in provider
