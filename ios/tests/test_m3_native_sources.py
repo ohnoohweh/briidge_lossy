@@ -336,8 +336,10 @@ def test_native_packet_flow_bridge_source_exists() -> None:
     assert "incoming_pcap_path" in bridge
     assert "outgoing_pcap_path" in bridge
     assert "packetflow_pcap" in bridge
-    assert '"queued_bytes": incomingPackets.reduce' in bridge
-    assert '"outgoing_queued_bytes": outgoingPendingPackets.reduce' in bridge
+    assert '"queued_bytes": incomingPackets.byteCount' in bridge
+    assert "ObstacleBridgeBoundedFIFO<PacketRecord>" in bridge
+    assert "maximumBytes: 8 * 1_024 * 1_024" in bridge
+    assert '"outgoing_queued_bytes": outgoingPendingPackets.byteCount' in bridge
     assert "guard enabled else" in bridge
     assert "maximumPendingPackets = 64" in bridge
     assert "bytesWritten - lastSyncBytes >= 1_024 * 1_024" in bridge
@@ -2027,9 +2029,9 @@ def test_web_admin_server_callbacks_keep_owner_queue() -> None:
     assert "private final class LiveSession: @unchecked Sendable" in source
     assert "listener.start(queue: queue)" in source
     assert "private var outboundSendInFlight = false" in source
-    assert "private var pendingOutboundFrames: [String: Data] = [:]" in source
+    assert "private let pendingOutboundFrames = ObstacleBridgeBoundedKeyedDataStore<String>" in source
     assert "guard !outboundSendInFlight else" in source
-    assert "pendingOutboundFrames[coalescingKey] = frame" in source
+    assert "pendingOutboundFrames.replace(frame, for: coalescingKey)" in source
     assert "self.submitOutboundFrame(next)" in source
     assert "private func shouldBuildLiveFrame(coalescingKey: String) -> Bool" in source
     assert "guard shouldBuildLiveFrame(coalescingKey: coalescingKey) else" in source

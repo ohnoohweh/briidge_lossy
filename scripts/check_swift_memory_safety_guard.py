@@ -15,10 +15,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PREFIX = "swift/Sources/"
-BOUNDS_MARKER = "OBSTACLEBRIDGE-MEMORY-BOUNDS:"
+ALLOW_MARKER = "OBSTACLEBRIDGE-MEMORY-ALLOW:"
+NETWORK_SEND_MARKER = "OBSTACLEBRIDGE-NETWORK-SEND-BOUNDS:"
 NULL_GIT_SHA = "0" * 40
 
-PERSISTENT_DATA_QUEUE = re.compile(r"\b(?:private|fileprivate|internal)?\s*var\s+\w+\s*:\s*(?:\[[^\]]*:\s*)?\[Data\]")
+PERSISTENT_DATA_RETENTION = re.compile(
+    r"\b(?:private|fileprivate|internal)\s+(?:var|let)\s+"
+    r"(?:[A-Za-z_]\w+\s*:\s*\[[^\n=]*\bData\b[^\n=]*\]"
+    r"|[A-Za-z_]\w*(?:pending|queue|buffer|fifo|payload|frame|wire|packet|record|message)[A-Za-z_\d]*\s*(?::[^=\n]*\bData\b|=\s*Data\s*\())",
+    re.IGNORECASE,
+)
+NETWORK_SEND = re.compile(r"\b(?:\w+\.)?send\s*\(")
 STRONG_STORED_CLOSURE = re.compile(
     r"self\.(?P<property>[A-Za-z_]\w*)\s*=\s*\{(?P<capture>\s*\[[^\]]*\])?(?P<body>.*?)\n\s*\}",
     re.DOTALL,
@@ -70,8 +77,17 @@ def validate(changes: list[tuple[str, int, str]]) -> tuple[list[str], list[str]]
         changed_numbers = {line for line, _ in additions}
         added_text = "\n".join(text for _, text in additions)
         for line, text in additions:
-            if PERSISTENT_DATA_QUEUE.search(text) and BOUNDS_MARKER not in added_text:
-                errors.append(f"{path}:{line}: MEM009 persistent [Data] queue requires {BOUNDS_MARKER} items=<n>; bytes=<n>; overflow=<policy>; test=<name>.")
+            if PERSISTENT_DATA_RETENTION.search(text) and ALLOW_MARKER not in added_text:
+                errors.append(
+                    f"{path}:{line}: MEM009 persistent Data retention must use "
+                    "ObstacleBridgeBoundedDataFIFO/ObstacleBridgeBoundedFIFO. "
+                    f"An exceptional raw owner requires {ALLOW_MARKER} reason=<text>; bounds=<text>; test=<name>."
+                )
+            if NETWORK_SEND.search(text) and NETWORK_SEND_MARKER not in added_text:
+                errors.append(
+                    f"{path}:{line}: MEM010 Network.framework/WebSocket send requires "
+                    f"{NETWORK_SEND_MARKER} inflight=<n>; queue=<bounded-owner>; test=<name>."
+                )
             for rule, pattern, message in WARNING_RULES:
                 if pattern.search(text):
                     warnings.append(f"{path}:{line}: {rule} review: {message}.")

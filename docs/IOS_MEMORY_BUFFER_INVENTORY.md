@@ -73,6 +73,23 @@ queue or protected by a narrow lock/atomic primitive. They must not allocate
 per-packet dictionaries, emit high-rate logs, retain payload history, or add
 provider-state persistence to the packet path.
 
+## Bounded Retention Contract
+
+Persistent traffic payload ownership uses `ObstacleBridgeBoundedDataFIFO` (or
+its byte-accounted generic form for a packet plus protocol-family record).
+Every instance declares an item limit, byte limit, optional maximum age, and
+overflow policy. It exposes retained, peak, accepted, released, dropped, and
+expired totals and is explicitly cleared at the owner stop/disconnect boundary.
+WebAdmin's coalesced live snapshots use the matching bounded keyed store: one
+latest frame per topic, rather than a history of frames. Packet-flow outgoing
+delivery processes four bounded batches per drain turn before rescheduling, so
+a continuously busy flow cannot monopolize the extension's drain executor.
+
+Fragmented MyUDP records are the sole exception to direct FIFO storage because
+one record is consumed incrementally into DATA chunks. Its queue enforces the
+same 2 MiB byte ceiling and a 2,048-record ceiling at enqueue time; sender
+ledger payloads are bounded by the protocol's configured in-flight window.
+
 ## Interpretation Rules
 
 - `Data.count` is the logical payload size, not necessarily the allocator's

@@ -36,7 +36,9 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
     }
 
     private struct PendingTCPWrites {
-        var buffers: [Data] = []
+        let buffers = ObstacleBridgeBoundedDataFIFO(limits: .init(
+            maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
+        ))
         var isDraining = false
     }
 
@@ -52,7 +54,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
     private let maxReadSize: Int
 
     private var serverConnections: [Int: NWConnection] = [:]
-    private var pendingServerOpenFrames: [Int: [Data]] = [:]
+    private var pendingServerOpenFrames: [Int: ObstacleBridgeBoundedDataFIFO] = [:]
     private var startedServerChannels: Set<Int> = []
     private var clientConnections: [Int: NWConnection] = [:]
     private var clientServiceSpecs: [Int: ObstacleBridgeChannelMuxCodec.ServiceSpec] = [:]
@@ -107,6 +109,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
             return
         }
         active = false
+        pendingTCPWrites.values.forEach { $0.buffers.removeAll() }
         pendingTCPWrites.removeAll()
         for connection in serverConnections.values {
             cancelConnection(connection)
@@ -115,6 +118,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
             cancelConnection(connection)
         }
         serverConnections.removeAll()
+        pendingServerOpenFrames.values.forEach { $0.removeAll() }
         pendingServerOpenFrames.removeAll()
         startedServerChannels.removeAll()
         clientConnections.removeAll()
@@ -168,7 +172,11 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
                 owner.queue.async { owner.handleServerConnectionState(state, chanID: chanID) }
             }
             connection.start(queue: queue)
-            pendingServerOpenFrames[chanID] = acceptSnapshot.frames
+            let openFrames = ObstacleBridgeBoundedDataFIFO(limits: .init(
+                maximumItems: 32, maximumBytes: 512 * 1_024, maximumAge: 30
+            ))
+            for frame in acceptSnapshot.frames { _ = openFrames.append(frame) }
+            pendingServerOpenFrames[chanID] = openFrames
             return chanID
         } catch {
             eventSink?("\(eventPrefix)_tcp_accept_failed", ["service_id": spec.svcID, "error": error.localizedDescription])
@@ -265,7 +273,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
                 startedServerChannels.insert(chanID)
                 receiveFromServerConnection(chanID: chanID)
                 if let frames = pendingServerOpenFrames.removeValue(forKey: chanID) {
-                    muxFrameSink(frames)
+                    muxFrameSink(frames.drainAll())
                 }
             }
             transportEventSink?(.serverConnected(chanID: chanID))
@@ -315,7 +323,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
     private func closeServerConnection(chanID: Int) {
         cancelTCPWriteDrain(chanID: chanID)
         let connection = serverConnections.removeValue(forKey: chanID)
-        pendingServerOpenFrames.removeValue(forKey: chanID)
+        pendingServerOpenFrames.removeValue(forKey: chanID)?.removeAll()
         startedServerChannels.remove(chanID)
         do {
             let snapshot = try runtime.handleLocalServerEOF(chanID: chanID, overlayConnected: overlayConnectedProvider())
@@ -541,7 +549,10 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
                 return
             }
             var pending = pendingTCPWrites[chanID] ?? PendingTCPWrites()
-            pending.buffers.append(payload)
+            guard pending.buffers.append(payload) else {
+                self.eventSink?("\(self.eventPrefix)_tcp_write_queue_dropped", ["chan_id": chanID, "bytes": payload.count])
+                return
+            }
             pendingTCPWrites[chanID] = pending
             drainTCPWrites(connection, chanID: chanID, role: role, event: event)
         }
@@ -553,7 +564,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
               !pending.buffers.isEmpty else {
             return
         }
-        let payload = pending.buffers.removeFirst()
+        guard let payload = pending.buffers.popFirst() else { return }
         pending.isDraining = true
         pendingTCPWrites[chanID] = pending
         connection.send(content: payload, completion: .contentProcessed { [weak self, weak connection] error in
@@ -576,7 +587,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
     }
 
     private func cancelTCPWriteDrain(chanID: Int) {
-        pendingTCPWrites.removeValue(forKey: chanID)
+        pendingTCPWrites.removeValue(forKey: chanID)?.buffers.removeAll()
     }
 
     private func connectionIsCurrent(_ connection: NWConnection, chanID: Int, role: ConnectionRole) -> Bool {

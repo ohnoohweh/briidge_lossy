@@ -33,6 +33,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayFrameCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayCoordinator.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeBoundedDataFIFO.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeHealth.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeMetrics.swift",

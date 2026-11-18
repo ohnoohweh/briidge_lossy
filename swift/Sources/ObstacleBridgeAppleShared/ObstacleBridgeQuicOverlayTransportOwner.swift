@@ -20,6 +20,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
     // QUIC design notes and integration tests. Do not "optimize" this away
     // without updating docs/QUIC_DESIGN.md and re-proving larger writes.
     private static let maxNetworkFrameworkWriteBytes = 1024
+    private static let maximumReceiveBufferBytes = 2 * 1_024 * 1_024
 
     private let peerHost: String
     private let peerPort: Int
@@ -30,7 +31,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
     private let insecure: Bool
     private let overlayRuntime: ObstacleBridgeQuicOverlayRuntime
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
-    private let startupMuxFrames: [Data]
+    private let startupMuxFrames: ObstacleBridgeBoundedDataFIFO
     private let startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?
     private let reconnectRetryDelayMS: Int
     private let sessionMaxAppPayload: Int
@@ -54,7 +55,9 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
     private let serviceCatalog = ObstacleBridgeAppleServiceCatalog()
     private var overlayConnected = false
     private var receiveBuffer = Data()
-    private var pendingOutboundWires: [Data] = []
+    private let pendingOutboundWires = ObstacleBridgeBoundedDataFIFO(limits: .init(
+        maximumItems: 512, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
+    ))
     private var outboundSendInFlight = false
     private let muxEgressScheduler = ObstacleBridgeChannelMuxEgressSequencer<Data>(byteCount: { $0.count })
     private var muxEgressDrainScheduled = false
@@ -154,7 +157,9 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
         self.reconnectRetryDelayMS = max(0, reconnectRetryDelayMS)
         self.sessionMaxAppPayload = max(1, sessionMaxAppPayload)
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
-        self.startupMuxFrames = startupMuxFrames
+        let boundedStartupMuxFrames = ObstacleBridgeBoundedDataFIFO(limits: .init(maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024))
+        for frame in startupMuxFrames { _ = boundedStartupMuxFrames.append(frame) }
+        self.startupMuxFrames = boundedStartupMuxFrames
         self.startupMuxFramesProvider = startupMuxFramesProvider
         self.queue = queue
         self.eventSink = eventSink
@@ -739,6 +744,12 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
 
     private func handleOverlayPayload(_ payload: Data) {
         lastOverlayRxWallNS = DispatchTime.now().uptimeNanoseconds
+        guard receiveBuffer.count + payload.count <= Self.maximumReceiveBufferBytes else {
+            eventSink?("quic_overlay_receive_buffer_overflow", ["bytes": receiveBuffer.count + payload.count])
+            receiveBuffer.removeAll(keepingCapacity: false)
+            overlayConnection?.cancel()
+            return
+        }
         receiveBuffer.append(payload)
         drainReceiveBuffer()
     }
@@ -925,7 +936,10 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
     private func enqueueOutboundWire(_ wire: Data) {
         guard !wire.isEmpty else { return }
         for chunk in Self.networkFrameworkWriteChunks(wire) {
-            pendingOutboundWires.append(chunk)
+            guard pendingOutboundWires.append(chunk) else {
+                eventSink?("quic_overlay_send_queue_dropped", ["bytes": chunk.count])
+                continue
+            }
             ObstacleBridgeOverlayChannelCore.recordOverlayEgress(
                 bytes: chunk.count,
                 state: &overlayEgressWindow
@@ -953,7 +967,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
             return
         }
         outboundSendInFlight = true
-        let wire = pendingOutboundWires.removeFirst()
+        guard let wire = pendingOutboundWires.popFirst() else { return }
         connection.send(
             content: wire,
             contentContext: outboundContentContext,
@@ -1013,7 +1027,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
     private func flushStartupMuxFramesIfNeeded() {
         guard appReady(), !startupMuxFramesSent else { return }
         let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
-        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames.snapshot()
         guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
@@ -1041,7 +1055,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
     private func startupMuxFramesForNewTunOpen() -> [Data] {
         guard appReady(), !startupMuxFramesReplayedWithTunOpen else { return [] }
         let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
-        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames.snapshot()
         guard !frames.isEmpty else { return [] }
         startupMuxFramesReplayedWithTunOpen = true
         eventSink?("quic_overlay_startup_mux_replayed_with_tun_open", [

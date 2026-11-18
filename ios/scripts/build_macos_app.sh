@@ -144,6 +144,7 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeCrypto.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxEgressSequencer.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeBoundedDataFIFO.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCompatibilityCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskRuntime.swift" \
@@ -281,6 +282,7 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeCrypto.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxEgressSequencer.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeBoundedDataFIFO.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCompatibilityCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskRuntime.swift" \

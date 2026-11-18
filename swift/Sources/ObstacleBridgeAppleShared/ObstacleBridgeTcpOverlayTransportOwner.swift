@@ -16,6 +16,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
     private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
         ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace * 1_000_000_000
     )
+    private static let maximumReceiveBufferBytes = 2 * 1_024 * 1_024
 
     private let peerHost: String
     private let peerPort: Int
@@ -24,7 +25,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
     private let bindPort: Int
     private let overlayRuntime: ObstacleBridgeTcpOverlayRuntime
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
-    private let startupMuxFrames: [Data]
+    private let startupMuxFrames: ObstacleBridgeBoundedDataFIFO
     private let startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?
     private let reconnectRetryDelayMS: Int
     private let sessionMaxAppPayload: Int
@@ -55,7 +56,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
     private var coreReceiveEpoch: UInt64?
     private var coreRetryToken: UInt64?
     private var receiveBuffer = Data()
-    private var pendingOutboundWires: [Data] = []
+    private let pendingOutboundWires = ObstacleBridgeBoundedDataFIFO(limits: .init(
+        maximumItems: 512, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
+    ))
     private var outboundSendInFlight = false
     private let muxEgressScheduler = ObstacleBridgeChannelMuxEgressSequencer<Data>(byteCount: { $0.count })
     private var muxEgressDrainScheduled = false
@@ -151,7 +154,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
         self.reconnectRetryDelayMS = max(0, reconnectRetryDelayMS)
         self.sessionMaxAppPayload = max(0, sessionMaxAppPayload)
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
-        self.startupMuxFrames = startupMuxFrames
+        let boundedStartupMuxFrames = ObstacleBridgeBoundedDataFIFO(limits: .init(maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024))
+        for frame in startupMuxFrames { _ = boundedStartupMuxFrames.append(frame) }
+        self.startupMuxFrames = boundedStartupMuxFrames
         self.startupMuxFramesProvider = startupMuxFramesProvider
         self.queue = queue
         self.serviceNameByID = serviceNameByID
@@ -853,6 +858,12 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
                 guard owner.overlayConnection === connection else { return }
                 guard owner.overlayLayerTransportAdapter == nil || owner.coreReceiveEpoch != nil else { return }
                 if let data, !data.isEmpty {
+                    guard owner.receiveBuffer.count + data.count <= Self.maximumReceiveBufferBytes else {
+                        owner.eventSink?("tcp_overlay_receive_buffer_overflow", ["bytes": owner.receiveBuffer.count + data.count])
+                        owner.receiveBuffer.removeAll(keepingCapacity: false)
+                        owner.overlayConnection?.cancel()
+                        return
+                    }
                     owner.receiveBuffer.append(data)
                     let snapshot = owner.overlayRuntime.handleInboundBytes(owner.receiveBuffer)
                     if snapshot.consumedBytes > 0 {
@@ -1036,7 +1047,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
             return
         }
         let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
-        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames.snapshot()
         guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
@@ -1064,7 +1075,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
     private func startupMuxFramesForNewTunOpen() -> [Data] {
         guard appReady(), !startupMuxFramesReplayedWithTunOpen else { return [] }
         let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
-        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames.snapshot()
         guard !frames.isEmpty else { return [] }
         startupMuxFramesReplayedWithTunOpen = true
         eventSink?("tcp_overlay_startup_mux_replayed_with_tun_open", [
@@ -1318,7 +1329,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
 
     private func sendRawOverlayWire(_ payload: Data) {
         guard !payload.isEmpty else { return }
-        pendingOutboundWires.append(payload)
+        guard pendingOutboundWires.append(payload) else {
+            eventSink?("tcp_overlay_send_queue_dropped", ["bytes": payload.count])
+            return
+        }
         ObstacleBridgeOverlayChannelCore.recordOverlayEgress(
             bytes: payload.count,
             state: &overlayEgressWindow
@@ -1331,7 +1345,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
             return
         }
         outboundSendInFlight = true
-        let payload = pendingOutboundWires.removeFirst()
+        guard let payload = pendingOutboundWires.popFirst() else { return }
         connection.send(content: payload, completion: .contentProcessed { [weak self] error in
             guard let self else { return }
             self.queue.async {

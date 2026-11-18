@@ -1162,9 +1162,14 @@ REQ-LIFE-010:
     - tests/unit/test_swift_concurrency_guard.py::test_accepts_lock_marker_with_named_test
     - tests/unit/test_swift_concurrency_guard.py::test_zero_before_sha_uses_the_branch_merge_base
     - tests/unit/test_swift_memory_safety_guard.py::test_rejects_new_unbounded_persistent_data_queue
-    - tests/unit/test_swift_memory_safety_guard.py::test_accepts_documented_bounded_data_queue
+    - tests/unit/test_swift_memory_safety_guard.py::test_rejects_pending_data_field_and_dictionary_value_without_allowlist
+    - tests/unit/test_swift_memory_safety_guard.py::test_rejects_new_network_send_without_bounded_owner_marker
+    - tests/unit/test_swift_memory_safety_guard.py::test_accepts_documented_bounded_network_send
+    - tests/unit/test_swift_memory_safety_guard.py::test_accepts_explicit_exception_allowlist_with_rationale
     - tests/unit/test_swift_memory_safety_guard.py::test_rejects_changed_stored_closure_that_strongly_captures_self
     - tests/unit/test_swift_memory_safety_guard.py::test_reports_unowned_self_as_review_warning
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeBoundedDataFIFOTests.swift::dropNewestKeepsRetainedBytesBoundedAndDrainsInOrder
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeBoundedDataFIFOTests.swift::keyedStoreCoalescesAndRejectsOverfill
     - ios/tests/test_m3_native_sources.py::test_overlay_connection_drivers_keep_callbacks_on_owner_queue
     - ios/tests/test_m3_native_sources.py::test_native_proxy_connections_keep_callbacks_on_owner_queue
     - ios/tests/test_m3_native_sources.py::test_web_admin_server_callbacks_keep_owner_queue

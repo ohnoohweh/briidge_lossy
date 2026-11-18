@@ -125,7 +125,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
     private var clientServiceIDByChannel: [Int: Int]
     private var clientOpenKeyByChannel: [Int: ClientOpenKey]
     private var clientChannelByOpenKey: [ClientOpenKey: Int]
-    private var clientPending: [Int: [Data]]
+    private var clientPending: [Int: ObstacleBridgeBoundedDataFIFO]
     private var clientTransports: [Int: ClientTransportState]
     private var serverActiveChannels: Set<Int>
 
@@ -399,8 +399,10 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
             )
         }
 
-        var queue = clientPending[chanID] ?? []
-        queue.append(admittedPayload)
+        let queue = clientPending[chanID] ?? .init(limits: .init(maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60))
+        guard queue.append(admittedPayload) else {
+            return InboundClientDataSnapshot(buffered: false, sentImmediately: false, pendingCount: queue.count, writtenBuffers: [])
+        }
         clientPending[chanID] = queue
         return InboundClientDataSnapshot(
             buffered: true,
@@ -439,7 +441,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
             peerAddrPort: peerAddrPort ?? openKey.remotePort
         )
         clientTransports[chanID] = transport
-        let flushed = clientPending.removeValue(forKey: chanID) ?? []
+        let flushed = clientPending.removeValue(forKey: chanID)?.drainAll() ?? []
         return ClientConnectSnapshot(
             connected: true,
             serviceID: clientServiceIDByChannel[chanID],

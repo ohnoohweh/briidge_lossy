@@ -638,6 +638,9 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
 
     /// Every connection callback is started on and returns to the server queue.
     private final class LiveSession: @unchecked Sendable {
+        private static let maximumReceiveBufferBytes = 128 * 1_024
+        private static let maximumPendingOutboundTopics = 16
+        private static let maximumPendingOutboundBytes = 1 * 1_024 * 1_024
         // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue
         private let connection: NWConnection
         private let queue: DispatchQueue
@@ -657,7 +660,14 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
         // replacement per topic, because live payloads are state snapshots,
         // not an event stream.
         private var outboundSendInFlight = false
-        private var pendingOutboundFrames: [String: Data] = [:]
+        private let pendingOutboundFrames = ObstacleBridgeBoundedKeyedDataStore<String>(
+            limits: .init(
+                maximumItems: maximumPendingOutboundTopics,
+                maximumBytes: maximumPendingOutboundBytes,
+                maximumAge: 30,
+                overflowPolicy: .dropNewest
+            )
+        )
         private var pendingOutboundOrder: [String] = []
 
         init(
@@ -764,6 +774,10 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
             connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { [weak self] data, _, isComplete, error in
                 guard let self else { return }
                 if let data, !data.isEmpty {
+                    guard self.receiveBuffer.count + data.count <= Self.maximumReceiveBufferBytes else {
+                        self.close()
+                        return
+                    }
                     self.receiveBuffer.append(data)
                     self.processFrames()
                 }
@@ -853,7 +867,7 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
         /// frame when the same topic already has its newest snapshot waiting
         /// behind a slow Network.framework completion.
         private func shouldBuildLiveFrame(coalescingKey: String) -> Bool {
-            !outboundSendInFlight || pendingOutboundFrames[coalescingKey] == nil
+            !outboundSendInFlight || pendingOutboundFrames.data(for: coalescingKey) == nil
         }
 
         private func sendJSON(_ value: Any, coalescingKey: String = "control") {
@@ -886,10 +900,13 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
             guard !outboundSendInFlight else {
                 // Replace an obsolete snapshot instead of retaining every
                 // timer tick while the tunnel-side consumer is slow.
-                if pendingOutboundFrames[coalescingKey] == nil {
+                guard pendingOutboundFrames.data(for: coalescingKey) != nil || pendingOutboundFrames.count < Self.maximumPendingOutboundTopics else {
+                    return
+                }
+                if pendingOutboundFrames.data(for: coalescingKey) == nil {
                     pendingOutboundOrder.append(coalescingKey)
                 }
-                pendingOutboundFrames[coalescingKey] = frame
+                guard pendingOutboundFrames.replace(frame, for: coalescingKey) else { return }
                 return
             }
             submitOutboundFrame(frame)
@@ -908,12 +925,13 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
                         self.connection.cancel()
                         return
                     }
-                    guard let nextKey = self.pendingOutboundOrder.first,
-                          let next = self.pendingOutboundFrames.removeValue(forKey: nextKey) else {
-                        return
+                    while let nextKey = self.pendingOutboundOrder.first {
+                        self.pendingOutboundOrder.removeFirst()
+                        if let next = self.pendingOutboundFrames.removeValue(forKey: nextKey) {
+                            self.submitOutboundFrame(next)
+                            return
+                        }
                     }
-                    self.pendingOutboundOrder.removeFirst()
-                    self.submitOutboundFrame(next)
                 }
             })
         }

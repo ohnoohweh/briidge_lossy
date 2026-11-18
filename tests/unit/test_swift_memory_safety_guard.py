@@ -22,10 +22,37 @@ def test_rejects_new_unbounded_persistent_data_queue() -> None:
     assert warnings == []
 
 
-def test_accepts_documented_bounded_data_queue() -> None:
+def test_rejects_pending_data_field_and_dictionary_value_without_allowlist() -> None:
     guard = _load()
     errors, _ = guard.validate([
-        ("swift/Sources/ObstacleBridgeiOS/Owner.swift", 11, "// OBSTACLEBRIDGE-MEMORY-BOUNDS: items=64; bytes=524288; overflow=drop_newest; test=OwnerTests"),
+        ("swift/Sources/ObstacleBridgeiOS/Owner.swift", 12, "private var pendingFrame: Data = Data()"),
+        ("swift/Sources/ObstacleBridgeiOS/Owner.swift", 13, "private var pendingByClient: [String: Data] = [:]"),
+    ])
+    assert len(errors) == 2
+    assert all("MEM009" in error for error in errors)
+
+
+def test_rejects_new_network_send_without_bounded_owner_marker() -> None:
+    guard = _load()
+    errors, _ = guard.validate([
+        ("swift/Sources/ObstacleBridgeiOS/Owner.swift", 12, "connection.send(content: payload, completion: .contentProcessed { _ in })"),
+    ])
+    assert len(errors) == 1 and "MEM010" in errors[0]
+
+
+def test_accepts_documented_bounded_network_send() -> None:
+    guard = _load()
+    errors, _ = guard.validate([
+        ("swift/Sources/ObstacleBridgeiOS/Owner.swift", 11, "// OBSTACLEBRIDGE-NETWORK-SEND-BOUNDS: inflight=1; queue=bounded FIFO; test=OwnerTests"),
+        ("swift/Sources/ObstacleBridgeiOS/Owner.swift", 12, "connection.send(content: payload, completion: .contentProcessed { _ in })"),
+    ])
+    assert errors == []
+
+
+def test_accepts_explicit_exception_allowlist_with_rationale() -> None:
+    guard = _load()
+    errors, _ = guard.validate([
+        ("swift/Sources/ObstacleBridgeiOS/Owner.swift", 11, "// OBSTACLEBRIDGE-MEMORY-ALLOW: reason=protocol fixed-size frame; bounds=64 bytes; test=OwnerTests"),
         ("swift/Sources/ObstacleBridgeiOS/Owner.swift", 12, "private var packets: [Data] = []"),
     ])
     assert errors == []

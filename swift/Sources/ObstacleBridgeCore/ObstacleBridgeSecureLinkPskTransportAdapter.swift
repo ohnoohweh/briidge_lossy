@@ -41,7 +41,12 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
     private let unixTimeProvider: () -> TimeInterval
     private let diagnosticSink: DiagnosticSink?
     private let diagnosticEnabled: (ObstacleBridgeRuntimeDiagnosticLevel) -> Bool
-    private var pendingPayloads: [Data] = []
+    private let pendingPayloads = ObstacleBridgeBoundedDataFIFO(limits: .init(
+        maximumItems: 512,
+        maximumBytes: 2 * 1_024 * 1_024,
+        maximumAge: 60,
+        overflowPolicy: .dropNewest
+    ))
     private var pendingPayloadWorkSink: (() -> Void)?
     private var transportConnected = false
     private var transportConnectedAtMono: TimeInterval?
@@ -126,9 +131,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
     /// the packet path.  It attributes live retained payload bytes without
     /// retaining a history of packet contents.
     func pendingPayloadBytes() -> Int {
-        pendingPayloads.reduce(0) { partial, payload in
-            partial &+ payload.count
-        }
+        pendingPayloads.byteCount
     }
 
     public func pollDueFrames() throws -> OutboundSnapshot {
@@ -169,7 +172,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         transportConnected = false
         transportConnectedAtMono = nil
         handshakeStartedAtMono = nil
-        pendingPayloads.removeAll(keepingCapacity: false)
+        pendingPayloads.removeAll()
         runtime.handleTransportDisconnected()
     }
 
@@ -222,7 +225,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
     public func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
         let status = runtime.statusSnapshot()
         if status.appDataSendingBlocked || !pendingPayloads.isEmpty {
-            pendingPayloads.append(payload)
+            _ = pendingPayloads.append(payload)
             // A REKEY_COMMIT keeps the active keys installed, but Core
             // deliberately blocks application encryption until REKEY_DONE.
             // Match Python's post-commit hold: only ask the owner to drain
@@ -246,7 +249,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
                 sessionID: snapshot.sessionID
             )
         }
-        pendingPayloads.append(payload)
+        _ = pendingPayloads.append(payload)
         let primed = try handleTransportConnected()
 
         let updatedStatus = runtime.statusSnapshot()
@@ -319,12 +322,14 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         guard status.authenticated, !status.appDataSendingBlocked, !pendingPayloads.isEmpty else {
             return OutboundSnapshot(emittedFrames: [], queuedPayloads: pendingPayloads.count, authenticated: status.authenticated, sessionID: status.sessionID)
         }
-        let payload = pendingPayloads.removeFirst()
+        guard let payload = pendingPayloads.popFirst() else {
+            return OutboundSnapshot(emittedFrames: [], queuedPayloads: 0, authenticated: status.authenticated, sessionID: status.sessionID)
+        }
         do {
             let snapshot = try runtime.sendApp(payload)
             return OutboundSnapshot(emittedFrames: snapshot.emittedFrames, queuedPayloads: pendingPayloads.count, authenticated: snapshot.authenticated, sessionID: snapshot.sessionID)
         } catch {
-            pendingPayloads.insert(payload, at: 0)
+            _ = pendingPayloads.prepend(payload)
             throw error
         }
     }
