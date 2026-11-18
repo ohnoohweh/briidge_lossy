@@ -3,7 +3,7 @@ import Testing
 @testable import ObstacleBridgeCore
 
 private actor EgressSequencerOwner {
-    private let scheduler = ObstacleBridgeChannelMuxEgressSequencer<Int>()
+    private let scheduler = ObstacleBridgeChannelMuxEgressSequencer<Int>(maximumQueuedElements: 2_000)
 
     func enqueue(_ value: Int, from source: ObstacleBridgeChannelMuxEgressSource) {
         scheduler.enqueue(value, from: source)
@@ -50,6 +50,21 @@ struct ObstacleBridgeChannelMuxEgressSequencerTests {
         let open = ObstacleBridgeChannelMuxFrame(channelID: 4, protocolType: .tcp, counter: 0, messageType: .open, body: Data())
         let close = ObstacleBridgeChannelMuxFrame(channelID: 4, protocolType: .tcp, counter: 2, messageType: .close, body: Data())
         #expect(ObstacleBridgeChannelMuxEgressSource(open) == ObstacleBridgeChannelMuxEgressSource(close))
+    }
+
+    @Test func boundedQueueDropsNewestFramesWhenCapacityIsReached() {
+        let scheduler = ObstacleBridgeChannelMuxEgressSequencer<Data>(
+            byteCount: \.count,
+            maximumQueuedElements: 2,
+            maximumQueuedBytes: 5
+        )
+        let source = ObstacleBridgeChannelMuxEgressSource(protocolType: 2, channelID: 1)
+        #expect(scheduler.enqueue(Data([1, 2]), from: source))
+        #expect(scheduler.enqueue(Data([3, 4, 5]), from: source))
+        #expect(!scheduler.enqueue(Data([6]), from: source))
+        #expect(scheduler.droppedCount == 1)
+        #expect(scheduler.dequeueNext() == Data([1, 2]))
+        #expect(scheduler.dequeueNext() == Data([3, 4, 5]))
     }
 
     @Test func concurrentEnqueueAndDrainProtectsNativeSetStorage() async {

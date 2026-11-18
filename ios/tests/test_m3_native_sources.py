@@ -190,6 +190,13 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert '"memory_diagnostics"' in provider
     assert '"size_in_use": mallocStats.size_in_use' in provider
     assert "SwiftSimpleUDPPeerBridge" in provider
+    assert "private static let maximumSocketDrainPackets = 64" in provider
+    assert "private static let maximumSocketDrainBytes = 512 * 1024" in provider
+    assert "packets.count < Self.maximumSocketDrainPackets" in provider
+    assert "totalBytes < Self.maximumSocketDrainBytes" in provider
+    xcode_patcher = (ROOT / "ios" / "scripts" / "patch_ios_xcode_project.py").read_text(encoding="utf-8")
+    assert r"ObstacleBridgeBufferCounters\.swift" in xcode_patcher
+    assert "Remove every reference left by the temporary memory-counter experiment" in xcode_patcher
     assert "ObstacleBridgeUdpOverlayTransportOwner" in provider
     assert "ObstacleBridgeTcpOverlayTransportOwner" in provider
     assert "ObstacleBridgeWebSocketOverlayTransportOwner" in provider
@@ -2019,6 +2026,13 @@ def test_web_admin_server_callbacks_keep_owner_queue() -> None:
     assert "final class ObstacleBridgeWebAdminServer: @unchecked Sendable" in source
     assert "private final class LiveSession: @unchecked Sendable" in source
     assert "listener.start(queue: queue)" in source
+    assert "private var outboundSendInFlight = false" in source
+    assert "private var pendingOutboundFrames: [String: Data] = [:]" in source
+    assert "guard !outboundSendInFlight else" in source
+    assert "pendingOutboundFrames[coalescingKey] = frame" in source
+    assert "self.submitOutboundFrame(next)" in source
+    assert "private func shouldBuildLiveFrame(coalescingKey: String) -> Bool" in source
+    assert "guard shouldBuildLiveFrame(coalescingKey: coalescingKey) else" in source
 
 
 def test_tun_helper_xpc_reachability_state_is_synchronous_and_owned() -> None:

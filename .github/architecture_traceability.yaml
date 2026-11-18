@@ -36,6 +36,8 @@ ARC-CMP-001:
     - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_stream_egress_round_robins_one_message_per_source
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxEgressSequencerTests.swift::allMuxMessageTypesSharePersistentSourceTurns
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxEgressSequencerTests.swift::concurrentEnqueueAndDrainProtectsNativeSetStorage
+    - tests/unit/test_swift_memory_safety_guard.py::test_rejects_new_unbounded_persistent_data_queue
+    - tests/unit/test_swift_memory_safety_guard.py::test_rejects_changed_stored_closure_that_strongly_captures_self
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayConnectionPolicyTests.swift::projectsAndUpdatesConnectionState
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxChannelIDAllocationTests.swift::splitsMaximumMyUDPRecordAtTheChannelMuxWireBoundary
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebSocketOverlayRuntimeTests.swift::clientLayerAdapterRequestsAndProjectsObservedPublicEndpoint

@@ -38,8 +38,21 @@ public final class ObstacleBridgeChannelMuxEgressSequencer<Element> {
     private var queues: [ObstacleBridgeChannelMuxEgressSource: [Element]] = [:]
     private var readySources: [ObstacleBridgeChannelMuxEgressSource] = []
     private var readySet: Set<ObstacleBridgeChannelMuxEgressSource> = []
+    private let byteCount: ((Element) -> Int)?
+    private let maximumQueuedElements: Int
+    private let maximumQueuedBytes: Int
+    private var queuedBytes = 0
+    private var droppedElements = 0
 
-    public init() {}
+    public init(
+        byteCount: ((Element) -> Int)? = nil,
+        maximumQueuedElements: Int = 512,
+        maximumQueuedBytes: Int = 2 * 1_024 * 1_024
+    ) {
+        self.byteCount = byteCount
+        self.maximumQueuedElements = max(1, maximumQueuedElements)
+        self.maximumQueuedBytes = max(1, maximumQueuedBytes)
+    }
 
     public var isEmpty: Bool {
         lock.lock(); defer { lock.unlock() }
@@ -51,22 +64,48 @@ public final class ObstacleBridgeChannelMuxEgressSequencer<Element> {
         return queues.values.reduce(0) { $0 + $1.count }
     }
 
-    public func enqueue(_ element: Element, from source: ObstacleBridgeChannelMuxEgressSource) {
+    public var droppedCount: Int {
         lock.lock(); defer { lock.unlock() }
-        queues[source, default: []].append(element)
-        if readySet.insert(source).inserted { readySources.append(source) }
+        return droppedElements
     }
 
-    public func enqueue<S: Sequence>(_ elements: S, from source: ObstacleBridgeChannelMuxEgressSource) where S.Element == Element {
+    /// Bounds retained application frames when an overlay cannot transmit at
+    /// line rate.  Callers intentionally shed the newest TUN frame on
+    /// overload: allowing an unbounded heap queue would kill the extension.
+    @discardableResult
+    public func enqueue(_ element: Element, from source: ObstacleBridgeChannelMuxEgressSource) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        var appended = false
-        for element in elements {
-            queues[source, default: []].append(element)
-            appended = true
+        let bytes = elementByteCount(element)
+        guard elementCountLocked() < maximumQueuedElements,
+              queuedBytes + bytes <= maximumQueuedBytes else {
+            droppedElements += 1
+            return false
         }
-        if appended, readySet.insert(source).inserted {
+        queues[source, default: []].append(element)
+        queuedBytes += bytes
+        if readySet.insert(source).inserted { readySources.append(source) }
+        return true
+    }
+
+    @discardableResult
+    public func enqueue<S: Sequence>(_ elements: S, from source: ObstacleBridgeChannelMuxEgressSource) -> Int where S.Element == Element {
+        lock.lock(); defer { lock.unlock() }
+        var appended = 0
+        for element in elements {
+            let bytes = elementByteCount(element)
+            guard elementCountLocked() < maximumQueuedElements,
+                  queuedBytes + bytes <= maximumQueuedBytes else {
+                droppedElements += 1
+                continue
+            }
+            queues[source, default: []].append(element)
+            queuedBytes += bytes
+            appended += 1
+        }
+        if appended > 0, readySet.insert(source).inserted {
             readySources.append(source)
         }
+        return appended
     }
 
     /// Returns exactly one record and advances the persistent source cursor.
@@ -77,6 +116,7 @@ public final class ObstacleBridgeChannelMuxEgressSequencer<Element> {
             readySet.remove(source)
             guard var queue = queues[source], !queue.isEmpty else { continue }
             let element = queue.removeFirst()
+            queuedBytes = max(0, queuedBytes - elementByteCount(element))
             if queue.isEmpty {
                 queues.removeValue(forKey: source)
             } else {
@@ -94,5 +134,15 @@ public final class ObstacleBridgeChannelMuxEgressSequencer<Element> {
         queues.removeAll(keepingCapacity: false)
         readySources.removeAll(keepingCapacity: false)
         readySet.removeAll(keepingCapacity: false)
+        queuedBytes = 0
     }
+
+    private func elementCountLocked() -> Int {
+        queues.values.reduce(0) { $0 + $1.count }
+    }
+
+    private func elementByteCount(_ element: Element) -> Int {
+        max(0, byteCount?(element) ?? 0)
+    }
+
 }

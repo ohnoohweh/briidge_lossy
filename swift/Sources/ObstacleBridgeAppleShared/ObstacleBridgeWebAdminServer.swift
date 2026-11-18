@@ -33,6 +33,30 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
         let body: Data?
     }
 
+    /// The request receiver owns the bytes accumulated before a complete HTTP
+    /// request is parsed. Keeping it explicit makes WebAdmin's short-lived
+    /// request buffer visible without retaining request history.
+    private final class HTTPRequestReceiveState {
+        var buffer = Data()
+        private var items = 0
+
+        func append(_ data: Data) {
+            guard !data.isEmpty else { return }
+            buffer.append(data)
+            items += 1
+        }
+
+        func release() {
+            buffer.removeAll(keepingCapacity: false)
+            items = 0
+        }
+
+        func discard() {
+            buffer.removeAll(keepingCapacity: false)
+            items = 0
+        }
+    }
+
     private struct WebSocketFrame {
         let opcode: UInt8
         let payload: Data
@@ -334,28 +358,30 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
 
     private func handle(_ connection: NWConnection) {
         connection.start(queue: queue)
-        receiveHTTPRequest(connection, buffer: Data())
+        receiveHTTPRequest(connection, state: HTTPRequestReceiveState())
     }
 
-    private func receiveHTTPRequest(_ connection: NWConnection, buffer: Data) {
+    private func receiveHTTPRequest(_ connection: NWConnection, state: HTTPRequestReceiveState) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { [weak self] data, _, isComplete, error in
             guard let self else {
+                state.discard()
                 connection.cancel()
                 return
             }
-            var nextBuffer = buffer
             if let data, !data.isEmpty {
-                nextBuffer.append(data)
+                state.append(data)
             }
-            if let request = Self.parseHTTPRequest(from: nextBuffer) {
+            if let request = Self.parseHTTPRequest(from: state.buffer) {
+                state.release()
                 self.handleRequest(request, connection: connection)
                 return
             }
             if isComplete || error != nil {
+                state.discard()
                 connection.cancel()
                 return
             }
-            self.receiveHTTPRequest(connection, buffer: nextBuffer)
+            self.receiveHTTPRequest(connection, state: state)
         }
     }
 
@@ -370,9 +396,7 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
                 contentType: "application/json; charset=utf-8",
                 body: Self.jsonBody(["ok": false, "authenticated": false, "error": "authentication required"])
             )
-            connection.send(content: response, completion: .contentProcessed { _ in
-                connection.cancel()
-            })
+            Self.sendAndClose(response, connection: connection)
             return
         }
         if requestPath == "/api/live", Self.isWebSocketUpgrade(headers: request.headers) {
@@ -394,9 +418,7 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
         }
         guard !request.path.hasPrefix("/api/"), request.path != "/status", request.path != "/healthz" else {
             let response = response(for: request)
-            connection.send(content: response, completion: .contentProcessed { _ in
-                connection.cancel()
-            })
+            Self.sendAndClose(response, connection: connection)
             return
         }
         respondWithStaticFile(for: request, connection: connection)
@@ -437,9 +459,7 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
                         body: Data(html.utf8)
                     )
                 }
-                connection.send(content: response, completion: .contentProcessed { _ in
-                    connection.cancel()
-                })
+                Self.sendAndClose(response, connection: connection)
             }
         }
     }
@@ -469,6 +489,12 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
             contentType: "application/json; charset=utf-8",
             body: Self.jsonBody(["ok": false, "error": "not found", "path": request.path])
         )
+    }
+
+    private static func sendAndClose(_ response: Data, connection: NWConnection) {
+        connection.send(content: response, completion: .contentProcessed { error in
+            connection.cancel()
+        })
     }
 
     private static func parseHTTPRequest(from data: Data) -> HTTPRequest? {
@@ -625,6 +651,14 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
         private var receiveBuffer = Data()
         private var timer: DispatchSourceTimer?
         private var closed = false
+        // The remote WebAdmin server is commonly reached through the overlay
+        // itself. Never enqueue an unbounded series of status snapshots when
+        // that path is slower than the live-topic timer. There is one latest
+        // replacement per topic, because live payloads are state snapshots,
+        // not an event stream.
+        private var outboundSendInFlight = false
+        private var pendingOutboundFrames: [String: Data] = [:]
+        private var pendingOutboundOrder: [String] = []
 
         init(
             connection: NWConnection,
@@ -655,16 +689,14 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
             let key = headers["sec-websocket-key"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let version = headers["sec-websocket-version"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !key.isEmpty, version == "13" else {
-                connection.send(
-                    content: ObstacleBridgeWebAdminServer.httpResponse(
-                        statusLine: "HTTP/1.1 400 Bad Request",
-                        contentType: "text/plain; charset=utf-8",
-                        body: Data("Bad WebSocket Request".utf8)
-                    ),
-                    completion: .contentProcessed { _ in
-                        self.stop()
-                    }
+                let response = ObstacleBridgeWebAdminServer.httpResponse(
+                    statusLine: "HTTP/1.1 400 Bad Request",
+                    contentType: "text/plain; charset=utf-8",
+                    body: Data("Bad WebSocket Request".utf8)
                 )
+                connection.send(content: response, completion: .contentProcessed { error in
+                    self.stop()
+                })
                 return
             }
             let acceptSeed = Data((key + ObstacleBridgeWebAdminServer.liveWebSocketGUID).utf8)
@@ -675,7 +707,7 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
                 "Connection: Upgrade\r\n" +
                 "Sec-WebSocket-Accept: \(accept)\r\n\r\n"
             let response = Data(responseText.utf8)
-            connection.send(content: response, completion: .contentProcessed { [weak self] _ in
+            connection.send(content: response, completion: .contentProcessed { [weak self] error in
                 guard let self else { return }
                 let intervals = Dictionary(uniqueKeysWithValues: self.supportedTopics.map { ($0, self.intervalProvider($0)) })
                 self.sendJSON([
@@ -696,7 +728,12 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
             guard !closed, topics.contains(topic) else {
                 return
             }
-            sendJSON(["type": topic, "data": payload])
+            let coalescingKey = "topic:\(topic)"
+            guard shouldBuildLiveFrame(coalescingKey: coalescingKey) else {
+                nextDue[topic] = ProcessInfo.processInfo.systemUptime + intervalProvider(topic)
+                return
+            }
+            sendJSON(["type": topic, "data": payload], coalescingKey: coalescingKey)
             nextDue[topic] = ProcessInfo.processInfo.systemUptime + intervalProvider(topic)
         }
 
@@ -705,6 +742,9 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
             closed = true
             timer?.cancel()
             timer = nil
+            receiveBuffer.removeAll(keepingCapacity: false)
+            pendingOutboundFrames.removeAll(keepingCapacity: false)
+            pendingOutboundOrder.removeAll(keepingCapacity: false)
             connection.cancel()
             onClose(self)
         }
@@ -796,20 +836,32 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
         }
 
         private func sendTopic(_ topic: String, now: TimeInterval) {
+            let coalescingKey = "topic:\(topic)"
+            guard shouldBuildLiveFrame(coalescingKey: coalescingKey) else {
+                nextDue[topic] = now + intervalProvider(topic)
+                return
+            }
             guard let payload = topicProvider(topic) else {
                 nextDue[topic] = now + intervalProvider(topic)
                 return
             }
-            sendJSON(["type": topic, "data": payload])
+            sendJSON(["type": topic, "data": payload], coalescingKey: coalescingKey)
             nextDue[topic] = now + intervalProvider(topic)
         }
 
-        private func sendJSON(_ value: Any) {
-            let data = ObstacleBridgeWebAdminServer.jsonBody(value)
-            sendFrame(opcode: 0x1, payload: data)
+        /// Avoid constructing a status dictionary, JSON body, and WebSocket
+        /// frame when the same topic already has its newest snapshot waiting
+        /// behind a slow Network.framework completion.
+        private func shouldBuildLiveFrame(coalescingKey: String) -> Bool {
+            !outboundSendInFlight || pendingOutboundFrames[coalescingKey] == nil
         }
 
-        private func sendFrame(opcode: UInt8, payload: Data) {
+        private func sendJSON(_ value: Any, coalescingKey: String = "control") {
+            let data = ObstacleBridgeWebAdminServer.jsonBody(value)
+            sendFrame(opcode: 0x1, payload: data, coalescingKey: coalescingKey)
+        }
+
+        private func sendFrame(opcode: UInt8, payload: Data, coalescingKey: String = "control") {
             guard !closed else { return }
             var frame = Data([0x80 | opcode])
             if payload.count < 126 {
@@ -826,10 +878,42 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
                 }
             }
             frame.append(payload)
-            connection.send(content: frame, completion: .contentProcessed { [weak self] _ in
+            enqueueLatestOutboundFrame(frame, coalescingKey: coalescingKey)
+        }
+
+        private func enqueueLatestOutboundFrame(_ frame: Data, coalescingKey: String) {
+            guard !closed else { return }
+            guard !outboundSendInFlight else {
+                // Replace an obsolete snapshot instead of retaining every
+                // timer tick while the tunnel-side consumer is slow.
+                if pendingOutboundFrames[coalescingKey] == nil {
+                    pendingOutboundOrder.append(coalescingKey)
+                }
+                pendingOutboundFrames[coalescingKey] = frame
+                return
+            }
+            submitOutboundFrame(frame)
+        }
+
+        private func submitOutboundFrame(_ frame: Data) {
+            guard !closed else { return }
+            outboundSendInFlight = true
+            connection.send(content: frame, completion: .contentProcessed { [weak self] error in
                 guard let self else { return }
-                if self.closed {
-                    self.connection.cancel()
+                self.queue.async {
+                    self.outboundSendInFlight = false
+                    if error != nil || self.closed {
+                        self.pendingOutboundFrames.removeAll(keepingCapacity: false)
+                        self.pendingOutboundOrder.removeAll(keepingCapacity: false)
+                        self.connection.cancel()
+                        return
+                    }
+                    guard let nextKey = self.pendingOutboundOrder.first,
+                          let next = self.pendingOutboundFrames.removeValue(forKey: nextKey) else {
+                        return
+                    }
+                    self.pendingOutboundOrder.removeFirst()
+                    self.submitOutboundFrame(next)
                 }
             })
         }

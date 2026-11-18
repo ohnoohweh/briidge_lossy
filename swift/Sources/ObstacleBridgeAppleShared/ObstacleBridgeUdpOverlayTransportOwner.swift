@@ -126,11 +126,20 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     private var batchFlushScheduled = false
     private var secureLinkPayloadDrainScheduled = false
     private var secureLinkPayloadQueuedMax = 0
+    // These queues sit directly on the traffic path.  They must be bounded:
+    // DispatchQueue.async provides scheduling, not backpressure.
+    // OBSTACLEBRIDGE-MEMORY-BOUNDS: items=512; bytes=2097152; overflow=drop_newest; test=ObstacleBridgeChannelMuxEgressSequencerTests
+    private static let maximumDeferredPayloads = 512
+    private static let maximumDeferredPayloadBytes = 2 * 1_024 * 1_024
     private var pendingOutboundMuxFrames: [Data] = []
+    private var pendingOutboundMuxFrameBytes = 0
     private var pendingOutboundMuxFramesMax = 0
+    private var droppedOutboundMuxFrames = 0
     private var outboundMuxFrameDrainScheduled = false
     private var pendingInboundOverlayPayloads: [Data] = []
+    private var pendingInboundOverlayPayloadBytes = 0
     private var pendingInboundOverlayPayloadsMax = 0
+    private var droppedInboundOverlayPayloads = 0
     private var inboundOverlayPayloadDrainScheduled = false
     private var coreRetryToken: UInt64?
     private var coreRetryWorkItem: DispatchWorkItem?
@@ -378,6 +387,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             return
         }
         started = false
+        discardPendingInboundOverlayPayloads()
+        discardPendingOutboundMuxFrames()
+        inboundOverlayPayloadDrainScheduled = false
+        outboundMuxFrameDrainScheduled = false
         withdrawRemoteServiceCatalog()
         overlayLayerTransportAdapter?.stopCoreLifecycle()
         controlTimer?.cancel()
@@ -551,13 +564,15 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
                 ],
                 "outbound_mux_frames": [
                     "queued_messages": pendingOutboundMuxFrames.count,
-                    "queued_bytes": pendingOutboundMuxFrames.reduce(0) { $0 &+ $1.count },
+                    "queued_bytes": pendingOutboundMuxFrameBytes,
                     "max_queued_messages_since_start": pendingOutboundMuxFramesMax,
+                    "dropped_messages": droppedOutboundMuxFrames,
                 ],
                 "inbound_overlay_payloads": [
                     "queued_messages": pendingInboundOverlayPayloads.count,
-                    "queued_bytes": pendingInboundOverlayPayloads.reduce(0) { $0 &+ $1.count },
+                    "queued_bytes": pendingInboundOverlayPayloadBytes,
                     "max_queued_messages_since_start": pendingInboundOverlayPayloadsMax,
+                    "dropped_messages": droppedInboundOverlayPayloads,
                 ],
             ]
             snapshot["next_address_attempt_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()
@@ -1108,9 +1123,26 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     }
 
     private func routeOverlayPayloads(_ payloads: [Data]) {
-        pendingInboundOverlayPayloads.append(contentsOf: payloads)
+        var admitted: [Data] = []
+        for payload in payloads {
+            let fitsCount = pendingInboundOverlayPayloads.count + admitted.count < Self.maximumDeferredPayloads
+            let fitsBytes = pendingInboundOverlayPayloadBytes + payload.count <= Self.maximumDeferredPayloadBytes
+            if fitsCount && fitsBytes {
+                pendingInboundOverlayPayloadBytes += payload.count
+                admitted.append(payload)
+                continue
+            }
+            droppedInboundOverlayPayloads += payloads.count - admitted.count
+            break
+        }
+        pendingInboundOverlayPayloads.append(contentsOf: admitted)
         pendingInboundOverlayPayloadsMax = max(pendingInboundOverlayPayloadsMax, pendingInboundOverlayPayloads.count)
         scheduleInboundOverlayPayloadDrain()
+    }
+
+    private func discardPendingInboundOverlayPayloads() {
+        pendingInboundOverlayPayloads.removeAll(keepingCapacity: false)
+        pendingInboundOverlayPayloadBytes = 0
     }
 
     private func scheduleInboundOverlayPayloadDrain() {
@@ -1120,6 +1152,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             guard let self else { return }
             self.inboundOverlayPayloadDrainScheduled = false
             let payload = self.pendingInboundOverlayPayloads.removeFirst()
+            self.pendingInboundOverlayPayloadBytes = max(0, self.pendingInboundOverlayPayloadBytes - payload.count)
             if let adapter = self.overlayLayerTransportAdapter {
                 let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportSecureLinkRoute) {
                     self.overlayRuntime.recordSecureLinkBoundaryFrame(direction: "to_securelink")
@@ -1458,9 +1491,26 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     }
 
     private func sendMuxFrames(_ muxFrames: [Data]) {
-        pendingOutboundMuxFrames.append(contentsOf: muxFrames)
+        var admitted: [Data] = []
+        for frame in muxFrames {
+            let fitsCount = pendingOutboundMuxFrames.count + admitted.count < Self.maximumDeferredPayloads
+            let fitsBytes = pendingOutboundMuxFrameBytes + frame.count <= Self.maximumDeferredPayloadBytes
+            if fitsCount && fitsBytes {
+                pendingOutboundMuxFrameBytes += frame.count
+                admitted.append(frame)
+                continue
+            }
+            droppedOutboundMuxFrames += muxFrames.count - admitted.count
+            break
+        }
+        pendingOutboundMuxFrames.append(contentsOf: admitted)
         pendingOutboundMuxFramesMax = max(pendingOutboundMuxFramesMax, pendingOutboundMuxFrames.count)
         scheduleOutboundMuxFrameDrain()
+    }
+
+    private func discardPendingOutboundMuxFrames() {
+        pendingOutboundMuxFrames.removeAll(keepingCapacity: false)
+        pendingOutboundMuxFrameBytes = 0
     }
 
     private func scheduleOutboundMuxFrameDrain() {
@@ -1470,6 +1520,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             guard let self else { return }
             self.outboundMuxFrameDrainScheduled = false
             let muxFrame = self.pendingOutboundMuxFrames.removeFirst()
+            self.pendingOutboundMuxFrameBytes = max(0, self.pendingOutboundMuxFrameBytes - muxFrame.count)
             if let adapter = self.overlayLayerTransportAdapter {
                 do {
                     let snapshot = try adapter.handleOutboundPayload(muxFrame)

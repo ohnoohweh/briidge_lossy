@@ -3514,6 +3514,11 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
     private static let queueKey = DispatchSpecificKey<UInt8>()
     private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
     private static let tunProbeIdentifier: UInt16 = UInt16.random(in: 1...UInt16.max)
+    // A socket can remain readable indefinitely under sustained traffic.  The
+    // packet-device API takes an owned `[Data]`, so draining until EAGAIN would
+    // materialize an unbounded temporary batch in the Network Extension heap.
+    private static let maximumSocketDrainPackets = 64
+    private static let maximumSocketDrainBytes = 512 * 1024
     private weak var provider: PacketTunnelProvider?
     private let settings: SwiftSimpleUDPPeerSettings
     private let selectedTransport: String
@@ -4493,7 +4498,9 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
         var totalBytes = 0
         var buffer = [UInt8](repeating: 0, count: 65535)
 
-        while started {
+        while started,
+              packets.count < Self.maximumSocketDrainPackets,
+              totalBytes < Self.maximumSocketDrainBytes {
             var fromStorage = sockaddr_storage()
             var fromLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
             let received = withUnsafeMutablePointer(to: &fromStorage) { fromPtr -> Int in

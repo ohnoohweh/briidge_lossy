@@ -57,7 +57,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
     private var receiveBuffer = Data()
     private var pendingOutboundWires: [Data] = []
     private var outboundSendInFlight = false
-    private let muxEgressScheduler = ObstacleBridgeChannelMuxEgressSequencer<Data>()
+    private let muxEgressScheduler = ObstacleBridgeChannelMuxEgressSequencer<Data>(byteCount: { $0.count })
     private var muxEgressDrainScheduled = false
     private var overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
     private var lastOverlayRxWallNS: UInt64 = 0

@@ -1,0 +1,24 @@
+name: Swift Memory Safety Guard
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  swift-memory-safety-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - if: github.event_name == 'pull_request'
+        run: python scripts/check_swift_memory_safety_guard.py --base-ref "${{ github.event.pull_request.base.sha }}"
+      - if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        run: python scripts/check_swift_memory_safety_guard.py --base-ref "${{ github.event.before }}"
