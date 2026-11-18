@@ -3638,7 +3638,7 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
                     reconnectRetryDelayMS: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
                     sessionMaxAppPayload: sessionMaxAppPayload,
                     overlayLayerTransportAdapter: overlayLayerTransportAdapter,
-                    startupMuxFrames: startupMuxFrames.snapshot(),
+                    startupMuxFrames: self.startupMuxFrames.snapshot(),
                     startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in
                         guard let self else { return [] }
                         return ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(
@@ -3688,7 +3688,7 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
                     reconnectRetryDelayMS: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
                     sessionMaxAppPayload: sessionMaxAppPayload,
                     overlayLayerTransportAdapter: overlayLayerTransportAdapter,
-                    startupMuxFrames: startupMuxFrames.snapshot(),
+                    startupMuxFrames: self.startupMuxFrames.snapshot(),
                     startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in
                         guard let self else { return [] }
                         return ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(
@@ -3727,7 +3727,7 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
                         reconnectRetryDelayMS: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
                         sessionMaxAppPayload: sessionMaxAppPayload,
                         overlayLayerTransportAdapter: overlayLayerTransportAdapter,
-                        startupMuxFrames: startupMuxFrames.snapshot(),
+                        startupMuxFrames: self.startupMuxFrames.snapshot(),
                         startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in
                             guard let self else { return [] }
                             return ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(
@@ -3775,7 +3775,7 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
                     sessionMaxAppPayload: sessionMaxAppPayload,
                     maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: settings.runtimeConfig),
                     overlayLayerTransportAdapter: overlayLayerTransportAdapter,
-                    startupMuxFrames: startupMuxFrames.snapshot(),
+                    startupMuxFrames: self.startupMuxFrames.snapshot(),
                     startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in
                         guard let self else { return [] }
                         return ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(

@@ -36,7 +36,11 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
     /// The request receiver owns the bytes accumulated before a complete HTTP
     /// request is parsed. Keeping it explicit makes WebAdmin's short-lived
     /// request buffer visible without retaining request history.
-    private final class HTTPRequestReceiveState {
+    // `NWConnection.receive` invokes this continuation on the server's serial
+    // queue. The state never escapes that queue; spell this out for strict
+    // concurrency instead of allowing its short-lived request buffer to be
+    // captured as an implicitly non-Sendable value.
+    private final class HTTPRequestReceiveState: @unchecked Sendable {
         var buffer = Data()
         private var items = 0
 
@@ -779,7 +783,7 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
                 guard let self else { return }
                 if let data, !data.isEmpty {
                     guard self.receiveBuffer.count + data.count <= Self.maximumReceiveBufferBytes else {
-                        self.close()
+                        self.stop()
                         return
                     }
                     self.receiveBuffer.append(data)

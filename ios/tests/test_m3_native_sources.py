@@ -638,6 +638,8 @@ def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
 
     assert host_runner.count("startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in") == 4
     assert provider.count("startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in") == 4
+    assert provider.count("startupMuxFrames: self.startupMuxFrames.snapshot(),") == 4
+    assert "startupMuxFrames: startupMuxFrames.snapshot()," not in provider
 
 
 def test_channel_mux_udp_runtime_source_exists() -> None:
@@ -2031,6 +2033,7 @@ def test_web_admin_server_callbacks_keep_owner_queue() -> None:
     assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue") == 3
     assert "final class ObstacleBridgeWebAdminServer: @unchecked Sendable" in source
     assert "private final class LiveSession: @unchecked Sendable" in source
+    assert "private final class HTTPRequestReceiveState: @unchecked Sendable" in source
     assert "listener.start(queue: queue)" in source
     assert "private var outboundSendInFlight = false" in source
     assert "private let pendingOutboundFrames = ObstacleBridgeBoundedKeyedDataStore<String>" in source
@@ -2039,6 +2042,7 @@ def test_web_admin_server_callbacks_keep_owner_queue() -> None:
     assert "self.submitOutboundFrame(next)" in source
     assert "private func shouldBuildLiveFrame(coalescingKey: String) -> Bool" in source
     assert "guard shouldBuildLiveFrame(coalescingKey: coalescingKey) else" in source
+    assert "self.stop()" in source
 
 
 def test_tun_helper_xpc_reachability_state_is_synchronous_and_owned() -> None:
