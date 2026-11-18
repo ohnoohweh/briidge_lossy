@@ -223,7 +223,7 @@ public struct ObstacleBridgeWorkerIPCStreamDecoder {
     /// the beginning of the next one. Retain no more than that bounded
     /// two-frame window while waiting for stream completion.
     public static let maximumBufferedBytes = 2 * (ObstacleBridgeWorkerIPC.headerBytes + ObstacleBridgeWorkerIPC.maximumFrameBytes)
-    private var buffered = Data()
+    private var buffered = Data() // OBSTACLEBRIDGE-MEMORY-ALLOW: reason=incremental framed stream parser; bounds=maximumBufferedBytes; test=incrementalDecoderRejectsOversizedRetainedStreamAndReleasesIt
 
     public init() {}
 
