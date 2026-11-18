@@ -480,8 +480,11 @@ ChannelMux and TUN:
 - a raw transport `connected` event does not reset the candidate-cycle budget;
   ChannelMux resets it only after the outer lifecycle reports `connected`
 - `TUN` ingress must not be admitted into `ChannelMux` unless ChannelMux has
-  received the current `connected` state; probe generation follows the same
-  gate
+  received the current `connected` state; when authenticated application
+  readiness returns after a transport epoch without another lifecycle callback,
+  Python's bounded maintenance sweep advances the local TUN admission epoch
+  before reopening/reannouncing the channel. Probe generation follows the same
+  gate.
 - a newly reported `connected` state with a new epoch causes the normal mux
   resynchronization and service reopening path
 - a transport-epoch reset invalidates all prior TUN channel bindings and

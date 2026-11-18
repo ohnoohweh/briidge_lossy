@@ -11,7 +11,7 @@ else
 fi
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-  exec sudo env OBSTACLEBRIDGE_RUN_LINUX_ELEVATED=1 "$0" "$@"
+  exec sudo "$0" "$@"
 fi
 
 export OBSTACLEBRIDGE_RUN_LINUX_ELEVATED=1

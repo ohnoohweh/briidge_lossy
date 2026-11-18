@@ -2685,6 +2685,74 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
             await self.mux.on_overlay_state(True)
         self.assertEqual(len(self.session.sent), 1)
 
+    async def test_reconnect_reannounces_tun_open_when_first_epoch_open_is_lost(self):
+        """A dropped reconnect OPEN must not strand an otherwise-live TUN."""
+        spec = ChannelMux.ServiceSpec(
+            svc_id=8,
+            l_proto="tun",
+            l_bind="obtun0",
+            l_port=1500,
+            r_proto="tun",
+            r_host="obtun1",
+            r_port=1500,
+        )
+        svc_key = ("local", 0, 8)
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1500, service_key=svc_key)
+        self.mux._local_services[svc_key] = spec
+        self.mux._svc_tun_devices[svc_key] = dev
+
+        # The first OPEN for the recovered epoch is sent, but UDP loss means
+        # the peer never receives the channel binding.  Local TUN traffic
+        # continues and would otherwise be discarded by that peer as unknown.
+        with patch("obstacle_bridge.bridge_channelmux.time.monotonic", return_value=10.0), \
+             patch.object(self.mux, "_start_all_services", new=AsyncMock()):
+            await self.mux.on_transport_epoch_change(1)
+        self.assertEqual(len(self.session.sent), 1)
+        self.assertEqual(self.mux._unpack_mux(self.session.sent[0])[3], ChannelMux.MType.OPEN)
+        self.session.sent.clear()  # model the lost reconnect OPEN
+
+        await self.mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.CONNECTED, 1, "authenticated"))
+        with patch("obstacle_bridge.bridge_channelmux.time.monotonic", return_value=10.0):
+            self.mux._on_local_tun_packet(dev, b"outbound-packet-after-reconnect")
+        self.assertEqual(len(self.session.sent), 1)
+        self.assertEqual(self.mux._unpack_mux(self.session.sent[0])[3], ChannelMux.MType.DATA)
+
+        self.assertEqual(self.mux._reannounce_stalled_tun_opens(now_mono=20.0), 1)
+        self.assertEqual(len(self.session.sent), 2)
+        self.assertEqual(self.mux._unpack_mux(self.session.sent[-1])[3], ChannelMux.MType.OPEN)
+
+    async def test_transport_epoch_tun_recovery_reopens_after_delayed_app_readiness(self):
+        """A transport epoch may clear TUN before SecureLink is app-ready again."""
+        spec = ChannelMux.ServiceSpec(
+            svc_id=9,
+            l_proto="tun",
+            l_bind="obtun0",
+            l_port=1500,
+            r_proto="tun",
+            r_host="obtun1",
+            r_port=1500,
+        )
+        svc_key = ("local", 0, 9)
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1500, service_key=svc_key)
+        self.mux._local_services[svc_key] = spec
+        self.mux._svc_tun_devices[svc_key] = dev
+        self.mux._bind_tun_channel(41, dev)
+        self.mux._chan_owner_peer_id[41] = 0
+        self.session.connection_layers[-1]["app_ready"] = False
+
+        with patch.object(self.mux, "_start_all_services", new=AsyncMock()):
+            await self.mux.on_transport_epoch_change(1)
+        self.assertIsNone(dev.chan_id)
+        self.assertEqual(self.session.sent, [])
+
+        # SecureLink becomes usable after the epoch callback has completed;
+        # no second lifecycle callback is guaranteed for this ordering.
+        self.session.connection_layers[-1]["app_ready"] = True
+        self.assertEqual(self.mux._reannounce_stalled_tun_opens(now_mono=20.0), 1)
+        self.assertIsNotNone(dev.chan_id)
+        self.assertEqual(self.mux._unpack_mux(self.session.sent[-1])[3], ChannelMux.MType.OPEN)
+        self.assertTrue(self.mux._tun_admission_allowed())
+
     async def test_overlay_connect_uses_reported_lifecycle_state(self):
         spec = ChannelMux.ServiceSpec(
             svc_id=1,

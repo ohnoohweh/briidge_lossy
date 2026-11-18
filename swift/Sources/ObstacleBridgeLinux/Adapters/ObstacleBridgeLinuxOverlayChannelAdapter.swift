@@ -23,6 +23,11 @@ public final class ObstacleBridgeLinuxOverlayChannelAdapter {
     private let startupFrames: () -> [Data]
     private let sendMuxFrames: ([Data]) -> Void
     private let diagnosticSink: DiagnosticSink
+    private static let tunOpenReplayIntervalNS: UInt64 = 5_000_000_000
+    private var lastTunOutboundNS: UInt64 = 0
+    private var lastTunInboundNS: UInt64 = 0
+    private var lastTunOpenAnnouncementNS: UInt64 = 0
+    private var tunOpenReplayCount = 0
 
     public init(
         interfaceName: String,
@@ -59,6 +64,9 @@ public final class ObstacleBridgeLinuxOverlayChannelAdapter {
     public func overlayLifecycleChanged(ready: Bool, epochChanged: Bool = false) {
         if epochChanged {
             runtime.transportEpochChanged()
+            lastTunOutboundNS = 0
+            lastTunInboundNS = 0
+            lastTunOpenAnnouncementNS = 0
         }
         runtime.setOverlayReady(ready)
     }
@@ -77,8 +85,34 @@ public final class ObstacleBridgeLinuxOverlayChannelAdapter {
             backpressure: backpressureSnapshot(),
             startupFrames: startupFrames,
             sendMuxFrames: sendMuxFrames,
-            effectSink: emit
+            effectSink: { [weak self] effect in
+                if case .forwarded(_, let allocatedChannel) = effect {
+                    let now = DispatchTime.now().uptimeNanoseconds
+                    self?.lastTunOutboundNS = now
+                    if allocatedChannel { self?.lastTunOpenAnnouncementNS = now }
+                }
+                self?.emit(effect)
+            }
         )
+    }
+
+    /// Replay a retained TUN OPEN only while local TUN forwarding has no
+    /// inbound TUN delivery to confirm the peer binding. The caller owns the
+    /// scheduling policy and provides a monotonic timestamp for deterministic
+    /// tests.
+    @discardableResult
+    public func reannounceStalledTunOpen(nowNanoseconds: UInt64 = DispatchTime.now().uptimeNanoseconds) -> Bool {
+        guard lastTunOutboundNS > lastTunInboundNS,
+              lastTunOpenAnnouncementNS != 0,
+              nowNanoseconds >= lastTunOpenAnnouncementNS,
+              nowNanoseconds - lastTunOpenAnnouncementNS >= Self.tunOpenReplayIntervalNS,
+              let frame = runtime.reannounceLocalTunChannel()
+        else { return false }
+        lastTunOpenAnnouncementNS = nowNanoseconds
+        tunOpenReplayCount += 1
+        sendMuxFrames([frame])
+        diagnosticSink("tun_open_reannounced", ["count": String(tunOpenReplayCount)])
+        return true
     }
 
     /// Called by the selected overlay owner for each authenticated TUN frame.
@@ -88,7 +122,15 @@ public final class ObstacleBridgeLinuxOverlayChannelAdapter {
             currentPeerID: peerID,
             sendMuxFrames: sendMuxFrames,
             deliverPacket: { [weak self] packet in self?.writePacketOnce(packet) },
-            effectSink: emit
+            effectSink: { [weak self] effect in
+                switch effect {
+                case .delivered, .relayed:
+                    self?.lastTunInboundNS = DispatchTime.now().uptimeNanoseconds
+                default:
+                    break
+                }
+                self?.emit(effect)
+            }
         )
     }
 

@@ -81,6 +81,24 @@ struct ObstacleBridgeLinuxOverlayChannelAdapterTests {
         #expect(secondMux.messageType == .open)
     }
 
+    @Test func lostReconnectTunOpenIsReannouncedWithoutAllocatingAnotherChannel() throws {
+        let events = OverlayEvents()
+        let adapter = makeAdapter(events: events)
+        adapter.overlayLifecycleChanged(ready: true)
+        adapter.receivedPacketFromDevice(packet())
+        let firstBatch = try #require(events.sent.first)
+        let initialOpen = try #require(firstBatch.compactMap { try? ObstacleBridgeChannelMuxCodec.decode($0) }.first { $0.messageType == .open })
+
+        // Model a lost OPEN after a recovered epoch: the local TUN has sent
+        // data, but no peer TUN packet has confirmed its binding.
+        let replayNow = DispatchTime.now().uptimeNanoseconds + 6_000_000_000
+        #expect(adapter.reannounceStalledTunOpen(nowNanoseconds: replayNow))
+        let replayBatch = try #require(events.sent.last)
+        let replayOpen = try #require(replayBatch.compactMap { try? ObstacleBridgeChannelMuxCodec.decode($0) }.first)
+        #expect(replayOpen.messageType == .open)
+        #expect(replayOpen.channelID == initialOpen.channelID)
+    }
+
     @Test func postMuxDelayDropsTunDataButRetainsCatalogAndOpen() throws {
         let events = OverlayEvents()
         let adapter = makeAdapter(delayMS: 5_000, events: events)

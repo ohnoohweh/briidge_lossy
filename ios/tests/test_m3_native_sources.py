@@ -389,8 +389,11 @@ def test_ios_runtime_status_projects_shared_runtime_metrics() -> None:
     assert "private var cachedRuntimeMetricsSnapshot: [String: Any] = [:]" in provider
     assert "let snapshot = await ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()" in provider
     assert '"runtime_fifos"' in provider
-    assert "ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessCPU()" in provider
+    assert "ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics()" in provider
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=projectsPythonCompatibleBoundedMemoryMetrics" in provider
     assert "enum ObstacleBridgeAppleRuntimeMetricsSampler" in shared
+    assert "task_info(mach_task_self_" in shared
+    assert "recordMemorySample(processMemoryBytes: UInt64(info.resident_size), measurementKind: .resident)" in shared
     assert "packetFlowPCAPDefaultMaximumBytes" in shared
     assert "packetFlowPCAPDefaultRetentionFiles" in shared
     assert "runtimeHealthRecordsPayload" in provider
@@ -551,6 +554,21 @@ def test_swift_overlay_epoch_reset_reopens_local_tun_channels() -> None:
         owner = (SHARED_NATIVE_DIR / owner_name).read_text(encoding="utf-8")
         assert "tunRuntime?.resetTransportEpoch()" in owner
         assert "activeTunChanIDs.removeAll()" in owner
+
+
+def test_swift_tun_reconnect_open_replay_is_owned_by_udp_and_linux_runtime() -> None:
+    udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    linux_adapter = (ROOT / "swift" / "Sources" / "ObstacleBridgeLinux" / "Adapters" / "ObstacleBridgeLinuxOverlayChannelAdapter.swift").read_text(encoding="utf-8")
+    linux_runtime = (ROOT / "swift" / "Sources" / "ObstacleBridgeLinux" / "Adapters" / "ObstacleBridgeLinuxLiveRuntime.swift").read_text(encoding="utf-8")
+
+    assert "private func maybeReplayTunOpen(nowNS: UInt64)" in udp_owner
+    assert "lastTunOutboundNS > lastTunInboundNS" in udp_owner
+    assert "tunRuntime.reannounceLocalTunChannel" in udp_owner
+    assert "func reannounceStalledTunOpen(nowNanoseconds:" in linux_adapter
+    assert "lastTunOutboundNS > lastTunInboundNS" in linux_adapter
+    assert "runtime.reannounceLocalTunChannel()" in linux_adapter
+    assert "startTunOpenReplayTimer()" in linux_runtime
+    assert "reannounceStalledTunOpen()" in linux_runtime
 
 
 def test_swift_websocket_reconnect_starts_a_fresh_tun_epoch_before_new_task() -> None:

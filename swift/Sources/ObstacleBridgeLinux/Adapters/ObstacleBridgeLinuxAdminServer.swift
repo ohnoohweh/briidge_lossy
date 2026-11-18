@@ -14,6 +14,14 @@ private func obstacleBridgeLinuxProcessCPUNS() -> UInt64? {
     return ns(usage.ru_utime) &+ ns(usage.ru_stime)
 }
 
+private func obstacleBridgeLinuxProcessResidentMemoryBytes() -> UInt64? {
+    guard let status = try? String(contentsOfFile: "/proc/self/status", encoding: .utf8) else { return nil }
+    guard let row = status.split(separator: "\n").first(where: { $0.hasPrefix("VmRSS:") }) else { return nil }
+    let fields = row.split(whereSeparator: { $0 == ":" || $0 == "\t" || $0 == " " })
+    guard fields.count == 3, fields[0] == "VmRSS", fields[2] == "kB", let kibibytes = UInt64(fields[1]) else { return nil }
+    return kibibytes * 1024
+}
+
 public enum ObstacleBridgeLinuxAdminServerError: Error, Equatable, LocalizedError {
     case invalidBindHost
     case socketFailure(Int32)
@@ -716,6 +724,10 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private func statusPayload() -> [String: Any] {
         if let cpuNS = obstacleBridgeLinuxProcessCPUNS() {
             ObstacleBridgeRuntimeMetrics.shared.recordCPUSample(processCPUNS: cpuNS)
+        }
+        if let memoryBytes = obstacleBridgeLinuxProcessResidentMemoryBytes() {
+            // OBSTACLEBRIDGE-CONCURRENCY: serial; test=projectsPythonCompatibleBoundedMemoryMetrics
+            ObstacleBridgeRuntimeMetrics.shared.recordMemorySample(processMemoryBytes: memoryBytes, measurementKind: .resident)
         }
         let status = statusProvider()
         let configuration = ObstacleBridgeRuntimeConfigPort.flatten(adminConfigurationProvider())

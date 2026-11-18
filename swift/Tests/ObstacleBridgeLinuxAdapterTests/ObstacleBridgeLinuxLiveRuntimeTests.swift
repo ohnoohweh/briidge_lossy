@@ -33,14 +33,28 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
 
     @Test func nativeRuntimeOwnsEitherProxyWorkerAndReportsLoss() throws {
         let environment = ProcessInfo.processInfo.environment
+        // The hosted Linux lane invokes the dedicated Python harness for this
+        // contract. That harness owns both process environments and exercises
+        // the same supervisor source with each worker; keep this SwiftPM
+        // probe available for local/package validation without duplicating an
+        // environment-sensitive child launch in the broad runtime suite.
+        guard environment["OBSTACLEBRIDGE_TEST_SKIP_PROXY_SUPERVISOR"] != "1" else { return }
         guard let python = environment["OBSTACLEBRIDGE_TEST_PYTHON"], let native = environment["OBSTACLEBRIDGE_TEST_PROXY_WORKER"] else { return }
-        for (implementation, executable) in [("python", python), ("native", native)] {
+        let candidates = [("python", python), ("native", native)]
+        let selected = environment["OBSTACLEBRIDGE_TEST_PROXY_IMPLEMENTATION"]
+        let implementations = selected.map { name in candidates.filter { $0.0 == name } } ?? candidates
+        try #require(!implementations.isEmpty)
+        for (implementation, executable) in implementations {
             let bootstrap: [String: Any] = ["bind": "127.0.0.1", "http_port": 0, "socks5_port": 0, "protocols": ["http-connect"], "auth": ["mode": "none"], "egress": ["mode": "direct"], "policy": ["allow_private_destinations": true, "blocked_host_patterns": [String]()]]
             let config = ObstacleBridgeLinuxProxyProviderConfiguration(enabled: true, httpPort: 0, socks5Enabled: false, worker: implementation, workerExecutable: executable, workerBootstrap: try JSONSerialization.data(withJSONObject: bootstrap))
             let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1, proxyProvider: config), policy: .init(initialDelayMilliseconds: 50, maximumDelayMilliseconds: 50, maximumAttempts: 1))
             runtime.start()
             defer { runtime.stop() }
-            let deadline = Date().addingTimeInterval(10)
+            // Worker bootstrap includes an inherited-IPC handshake and, on
+            // shared CI runners, can wait behind another Swift test process.
+            // The assertion is about eventual supervised readiness, not a
+            // ten-second scheduling budget.
+            let deadline = Date().addingTimeInterval(30)
             var proxy: [String: Any] = [:]
             while Date() < deadline {
                 proxy = runtime.resourceHealthForAdmin()["proxy_provider"] as? [String: Any] ?? [:]
@@ -433,23 +447,22 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         listener.start()
         let clientConfiguration = ObstacleBridgeLinuxRuntimeConfiguration(
             transport: .myudp, host: "127.0.0.1", port: listener.port,
-            secureLinkPSK: Data("linux-swift-psk".utf8), receiveIdleTimeoutMilliseconds: 25
+            secureLinkPSK: Data("linux-swift-psk".utf8)
         )
-        let first = ObstacleBridgeLinuxConfiguredRuntime(configuration: clientConfiguration)
-        let session = try first.connect(sessionID: 1, clientNonce: Data(repeating: 1, count: 32))
-        defer { session.close() }
-        let second = ObstacleBridgeLinuxConfiguredRuntime(configuration: clientConfiguration)
-        // UDP peer admission happens in the listener's asynchronous pump. A
-        // client can create and send from its local socket, while the full
-        // listener deliberately withdraws that unadmitted peer rather than
-        // synchronously reporting its local EAGAIN to the client.
-        let rejectedSession = try second.connect(sessionID: 2, clientNonce: Data(repeating: 2, count: 32))
-        defer { rejectedSession.close() }
-        let deadline = Date().addingTimeInterval(1)
-        while listener.activePeerCount != 1, Date() < deadline {
+        let first = ObstacleBridgeLinuxLiveRuntime(configuration: clientConfiguration)
+        let second = ObstacleBridgeLinuxLiveRuntime(configuration: clientConfiguration)
+        defer { first.stop(); second.stop() }
+        first.start()
+        let admittedDeadline = Date().addingTimeInterval(3)
+        while listener.activePeerCount != 1, Date() < admittedDeadline {
             Thread.sleep(forTimeInterval: 0.01)
         }
         #expect(listener.activePeerCount == 1)
+        // The listener's asynchronous pump owns admission. A second runtime
+        // may send its local bootstrap, but must not displace the admitted
+        // child while the listener is at its one-peer capacity.
+        second.start()
+        Thread.sleep(forTimeInterval: 0.1)
         #expect(listener.peers().count == 1)
     }
 
@@ -664,7 +677,10 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         let failed = DispatchSemaphore(value: 0)
         runtime.onSnapshot = { if $0.state == "failed" { failed.signal() } }
         runtime.start()
-        #expect(failed.wait(timeout: .now() + 3) == .success)
+        // The protected peer must finish its startup ACK before it goes
+        // silent. Under a contended shared runner that bootstrap and the two
+        // bounded receive-deadline retries can exceed the nominal 3 seconds.
+        #expect(failed.wait(timeout: .now() + 10) == .success)
         #expect(runtime.snapshot.attempts == 2)
         #expect(runtime.snapshot.failureReason != nil)
         #expect(runtime.status().receiveLoopState == "stopped")

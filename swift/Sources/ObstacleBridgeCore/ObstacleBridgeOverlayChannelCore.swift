@@ -781,6 +781,16 @@ public final class ObstacleBridgeOverlayChannelRuntime {
         }
     }
 
+    /// Re-emits the retained local TUN binding for the active overlay epoch.
+    ///
+    /// The OPEN is idempotent at the peer. Platform owners use this only when
+    /// local TUN traffic continues without inbound delivery, closing the
+    /// reconnect control-frame loss window without allocating another channel.
+    public func reannounceLocalTunChannel() -> Data? {
+        guard started, overlayReady else { return nil }
+        return try? tunRuntime.reannounceLocalTunChannel(spec: serviceSpec)
+    }
+
     public func receiveMuxFrame(
         _ frame: ObstacleBridgeChannelMuxFrame,
         currentPeerID: Int? = nil,

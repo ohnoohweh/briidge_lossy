@@ -40,6 +40,17 @@ SWIFT_ADMIN_WEBSERVER_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeApple
 SWIFT_ADMIN_COMPONENT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "admin_web_component_runner.swift"
 
 
+def test_runtime_analysis_renders_optional_memory_metrics_without_affecting_older_hosts() -> None:
+    markup = (ROOT / "admin_web" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "admin_web" / "app.js").read_text(encoding="utf-8")
+    assert 'id="memoryMeter"' in markup
+    assert 'src="app.js?v=20261116a"' in markup
+    assert "const memory = metrics.memory_bytes;" in script
+    assert "memory?.warning_limit == null ? null" in script
+    assert "Memory — peak since start" in script
+    assert "function fmtMemoryBytes(value)" in script
+
+
 class _PythonAdminRunnerStub:
     def __init__(
         self,

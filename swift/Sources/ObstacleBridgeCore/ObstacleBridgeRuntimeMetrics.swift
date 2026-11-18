@@ -24,6 +24,10 @@ public actor ObstacleBridgeRuntimeMetrics {
             Task { await ObstacleBridgeRuntimeMetrics.store.recordCPUSample(processCPUNS: processCPUNS, wallNS: wallNS) }
         }
 
+        public func recordMemorySample(processMemoryBytes: UInt64, measurementKind: MemoryMeasurementKind, wallNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
+            Task { await ObstacleBridgeRuntimeMetrics.store.recordMemorySample(processMemoryBytes: processMemoryBytes, measurementKind: measurementKind, wallNS: wallNS) }
+        }
+
         /// Reads the complete projection from the metrics actor. Platform
         /// status owners publish this value into their existing asynchronous
         /// status caches, leaving request reads nonblocking.
@@ -43,6 +47,7 @@ public actor ObstacleBridgeRuntimeMetrics {
                                   "overall_contributor": NSNull(), "last_2_seconds_contributor": NSNull()],
                 "work_slice_ms_max": ["overall": NSNull(), "last_2_seconds": NSNull()],
                 "event_loop_lag_ms": ["last": NSNull(), "max": NSNull()],
+                "memory_bytes": ["current": NSNull(), "overall_peak": NSNull(), "last_2_seconds_peak": NSNull(), "warning_limit": NSNull(), "warning_active": false, "measurement_kind": "unavailable"],
                 "categories": rows,
                 "longest_uninterrupted_category": NSNull(),
                 "longest_uninterrupted_last_2_seconds_category": NSNull(),
@@ -51,6 +56,11 @@ public actor ObstacleBridgeRuntimeMetrics {
     }
 
     public static let shared = Reporter()
+
+    public enum MemoryMeasurementKind: String, Sendable {
+        case resident
+        case physicalFootprint = "physical_footprint"
+    }
 
     public enum Category: String, CaseIterable, Sendable {
         case channelMuxCallback = "channelmux_callback"
@@ -114,6 +124,7 @@ public actor ObstacleBridgeRuntimeMetrics {
     }
     private struct Recent { let completedNS: UInt64; let category: Category; let durationNS: UInt64 }
     private struct CPUPeak { let completedNS: UInt64; let cores: Double; let contributor: [String: Any]? }
+    private struct MemorySample { let completedNS: UInt64; let bytes: UInt64; let measurementKind: MemoryMeasurementKind }
 
     private var lifetime = Dictionary(uniqueKeysWithValues: Category.allCases.map { ($0, Aggregate()) })
     private var recent: [Recent] = []
@@ -123,6 +134,9 @@ public actor ObstacleBridgeRuntimeMetrics {
     private var overallCPUPeak: Double?
     private var overallContributor: [String: Any]?
     private var recentCPUPeaks: [CPUPeak] = []
+    private var currentMemory: MemorySample?
+    private var overallMemoryPeak: UInt64?
+    private var recentMemory: [MemorySample] = []
 
     public func record(_ category: Category, durationNS: UInt64, completedNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
         lifetime[category, default: .init()].add(durationNS)
@@ -145,6 +159,15 @@ public actor ObstacleBridgeRuntimeMetrics {
         recentCPUPeaks.append(peak)
         trim(nowNS: wall)
         if overallCPUPeak == nil || cores >= overallCPUPeak! { overallCPUPeak = cores; overallContributor = contributor }
+    }
+
+    public func recordMemorySample(processMemoryBytes: UInt64, measurementKind: MemoryMeasurementKind, wallNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
+        let sample = MemorySample(completedNS: wallNS, bytes: processMemoryBytes, measurementKind: measurementKind)
+        currentMemory = sample
+        overallMemoryPeak = max(overallMemoryPeak ?? 0, processMemoryBytes)
+        recentMemory.append(sample)
+        if recentMemory.count > 3 { recentMemory.removeFirst(recentMemory.count - 3) }
+        trim(nowNS: wallNS)
     }
 
     public func snapshotPayload(nowNS: UInt64? = nil) -> [String: Any] {
@@ -174,11 +197,19 @@ public actor ObstacleBridgeRuntimeMetrics {
             guard let value = row["last_2_seconds_max_ms"] as? Double, let category = row["category"] as? String else { return nil }
             return (value, category)
         }.max { $0.0 < $1.0 }
+        let recentMemoryPeak = recentMemory.map(\.bytes).max()
+        let memoryPayload: [String: Any]
+        if let currentMemory {
+            memoryPayload = ["current": NSNumber(value: currentMemory.bytes), "overall_peak": NSNumber(value: overallMemoryPeak ?? currentMemory.bytes), "last_2_seconds_peak": recentMemoryPeak.map { NSNumber(value: $0) } ?? NSNull(), "warning_limit": NSNull(), "warning_active": false, "measurement_kind": currentMemory.measurementKind.rawValue]
+        } else {
+            memoryPayload = ["current": NSNull(), "overall_peak": NSNull(), "last_2_seconds_peak": NSNull(), "warning_limit": NSNull(), "warning_active": false, "measurement_kind": "unavailable"]
+        }
         return [
             "cpu_cores_max": ["overall": overallCPUPeak.map { $0 as Any } ?? NSNull(), "last_2_seconds": peakRecent.map { $0.cores as Any } ?? NSNull(),
                               "overall_contributor": overallContributor.map { $0 as Any } ?? NSNull(), "last_2_seconds_contributor": peakRecent.flatMap(\.contributor).map { $0 as Any } ?? NSNull()],
             "work_slice_ms_max": ["overall": overallSlice.map { $0.0 as Any } ?? NSNull(), "last_2_seconds": recentSlice.map { $0.0 as Any } ?? NSNull()],
             "event_loop_lag_ms": ["last": NSNull(), "max": NSNull()],
+            "memory_bytes": memoryPayload,
             "categories": rows,
             "longest_uninterrupted_category": overallSlice?.1 ?? NSNull(),
             "longest_uninterrupted_last_2_seconds_category": recentSlice?.1 ?? NSNull(),
@@ -194,5 +225,6 @@ public actor ObstacleBridgeRuntimeMetrics {
         let window: UInt64 = 2_000_000_000
         recent.removeAll { nowNS >= $0.completedNS && nowNS - $0.completedNS > window }
         recentCPUPeaks.removeAll { nowNS >= $0.completedNS && nowNS - $0.completedNS > window }
+        recentMemory.removeAll { nowNS >= $0.completedNS && nowNS - $0.completedNS > window }
     }
 }

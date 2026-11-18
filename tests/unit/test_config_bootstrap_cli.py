@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from obstacle_bridge.bridge import ConfigAwareCLI
+from obstacle_bridge.bridge_runner import Runner
 
 
 def _register_sample_option(parser: argparse.ArgumentParser) -> None:
@@ -57,6 +58,19 @@ def test_parse_args_legacy_null_uses_registered_default(tmp_path: Path) -> None:
     )
 
     assert args.sample == 7
+
+
+def test_runner_memory_warning_limit_is_configurable_in_bytes(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "ObstacleBridge.cfg"
+    cfg_path.write_text(
+        json.dumps({"runner": {"memory_warning_limit_bytes": 4096}}),
+        encoding="utf-8",
+    )
+    args = _make_cli().parse_args(
+        ["--config", str(cfg_path)],
+        [("runner", Runner.register_overlay_cli)],
+    )
+    assert args.memory_warning_limit_bytes == 4096
 
 
 def test_parse_args_invalid_json_config_raises_clear_error(tmp_path: Path) -> None:

@@ -589,9 +589,14 @@ description rather than retaining completed work-package IDs.
 The Python runtime has dependency-free, bounded timing primitives in
 `runtime_metrics.py`: an injectable monotonic clock, fixed duration buckets,
 rolling fixed-slot histograms, and a fixed-category accumulator. `Runner` now
-owns exactly one cancellable monitor task that samples process CPU against
-monotonic elapsed time once per second and records event-loop probe lateness at
-a 250 ms cadence. The primitives retain aggregates only. Approved synchronous
+owns exactly one cancellable monitor task that samples process CPU and Linux
+current resident memory against monotonic elapsed time once per second and
+records event-loop probe lateness at a 250 ms cadence. Memory reads
+`/proc/self/status` `VmRSS`, normalizes it to bytes, and retains only the
+latest value, lifetime peak, and fixed trailing-two-second peak; unavailable
+readings remain a redacted unavailable status shape. An optional
+`--memory-warning-limit-bytes` supplies a process-local, observational warning
+threshold. The primitives retain aggregates only. Approved synchronous
 scopes cover overlay receive/send, SecureLink encode/decode, compression,
 control and retransmit ticks, WebAdmin snapshot components, logging, and the
 existing ChannelMux/TUN callbacks. Python WebAdmin splits status construction
@@ -691,7 +696,10 @@ Analysis. There is no remaining L-RM work package gap.
 The portable Swift Core owns the shared fixed-category, aggregate-only timing
 model. Linux, macOS, and iOS consume its `runtime_metrics` status payload, so
 the same lifetime/two-second maxima, source categories, and CPU-core semantics
-are available without a mixed-runtime build. Core records overlay receive/send,
+are available without a mixed-runtime build. The same payload includes the
+Python-compatible bounded process-memory object: Linux reads current RSS from
+`/proc/self/status`, while macOS and iOS read current resident bytes through
+Mach task information. Core records overlay receive/send,
 SecureLink, compression, and control/retransmit work; CPU sampling uses
 process user-plus-system time divided by elapsed monotonic time. The current
 Swift payload deliberately reports unavailable event-loop lag and percentile

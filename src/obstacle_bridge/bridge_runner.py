@@ -25,6 +25,7 @@ from .bridge_telemetry import TelemetryEmitter, TelemetryRuntimeSettings, Teleme
 from .bridge_telemetry_credentials import client_certificate_paths
 from .bridge_telemetry_uploader import TelemetryUploader
 from .runtime_health import RuntimeHealthRecord, RuntimeHealthStore
+from .memory_monitoring import RuntimeMemoryMetrics, sample_process_resident_memory_bytes
 from .runtime_metrics import NANOSECONDS_PER_SECOND, RuntimeMetricAccumulator, bounded_runtime_scope
 
 _bridge = export_bridge_globals(globals())
@@ -262,9 +263,8 @@ class Runner:
         self._runtime_health_sequence = 0
         self._runtime_health_task: Optional[asyncio.Task] = None
         self._runtime_health_last_error = ""
-        # One runner-owned monitor task samples process CPU and observes event
-        # loop lateness. It deliberately has no status projection yet: later
-        # runtime-aggregation work owns the public schema and categories.
+        # One runner-owned monitor task samples process CPU, memory, and event
+        # loop lateness without placing collection on the forwarding path.
         self._runtime_metrics_task: Optional[asyncio.Task] = None
         self._runtime_metrics_last_sample_monotonic_ns: Optional[int] = None
         self._runtime_metrics_last_sample_cpu_ns: Optional[int] = None
@@ -302,6 +302,9 @@ class Runner:
         self._runtime_metrics_cpu_peak_overall: Optional[float] = None
         self._runtime_metrics_cpu_peak_overall_contributor: Optional[dict[str, Any]] = None
         self._runtime_metrics_cpu_interval_by_category: Dict[str, int] = {}
+        self._runtime_memory_metrics = RuntimeMemoryMetrics(
+            warning_limit_bytes=getattr(args, "memory_warning_limit_bytes", None)
+        )
         self._peer_traffic_rate_state: Dict[str, Tuple[float, int, int]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._async_diag_lock = threading.Lock()
@@ -819,6 +822,12 @@ class Runner:
         self._runtime_metrics_lag_probe_count += 1
         return lag_ns
 
+    def _sample_runtime_memory(self, *, monotonic_ns: Optional[int] = None, memory_bytes: Optional[int] = None) -> bool:
+        """Record a best-effort process RSS reading without affecting runtime work."""
+        now_ns = time.monotonic_ns() if monotonic_ns is None else int(monotonic_ns)
+        value = sample_process_resident_memory_bytes() if memory_bytes is None else memory_bytes
+        return self._runtime_memory_metrics.record(value, timestamp_ns=now_ns)
+
     async def _runtime_metrics_monitor(self) -> None:
         """Use one cheap task for cadence CPU samples and event-loop lag probes."""
         sample_deadline = time.monotonic_ns()
@@ -827,6 +836,7 @@ class Runner:
             now = time.monotonic_ns()
             if now >= sample_deadline:
                 self._sample_runtime_cpu(monotonic_ns=now)
+                self._sample_runtime_memory(monotonic_ns=now)
                 sample_deadline = now + self.RUNTIME_METRICS_SAMPLE_INTERVAL_NS
             if now >= lag_deadline:
                 self._record_runtime_loop_lag(deadline_ns=lag_deadline, actual_ns=now)
@@ -877,6 +887,7 @@ class Runner:
                 "last_2_seconds": max((row["last_2_seconds_max_ms"] or 0.0 for row in rows), default=None)},
                 "event_loop_lag_ms": {"last": None if self._runtime_metrics_last_loop_lag_ns is None else self._runtime_metrics_last_loop_lag_ns / 1_000_000.0,
                 "max": self._runtime_metrics_max_loop_lag_ns / 1_000_000.0}, "categories": rows,
+                "memory_bytes": self._runtime_memory_metrics.as_payload(now_ns=now),
                 "longest_uninterrupted_category": slice_leader["category"] if slice_leader and slice_leader["count"] else None,
                 "longest_uninterrupted_last_2_seconds_category": recent_slice_leader["category"] if recent_slice_leader and recent_slice_leader["last_2_seconds_max_ms"] is not None else None}
 
@@ -3882,6 +3893,11 @@ class Runner:
                 return any(opt in a.option_strings for a in p._actions)
             except Exception:
                 return False
+        def _non_negative_bytes(value: str) -> int:
+            parsed = int(value)
+            if parsed < 0:
+                raise argparse.ArgumentTypeError("must be non-negative")
+            return parsed
         if not _has('--overlay-transport'):
             p.add_argument(
                 '--overlay-transport',
@@ -3904,6 +3920,13 @@ class Runner:
                 type=float,
                 default=0.0,
                 help='If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables.'
+            )
+        if not _has('--memory-warning-limit-bytes'):
+            p.add_argument(
+                '--memory-warning-limit-bytes',
+                type=_non_negative_bytes,
+                default=None,
+                help='Optional process-local memory warning limit in bytes; omit to disable the warning.',
             )
         if not _has('--overlay-reconnect-retry-delay-ms'):
             p.add_argument(

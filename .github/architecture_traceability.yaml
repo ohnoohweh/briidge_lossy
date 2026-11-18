@@ -226,6 +226,8 @@ ARC-CMP-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_udp_fragmentation_survives_text_mode
 
 ARC-CMP-003:
+  # Native lifecycle qualification preserves terminal health records and
+  # detects a silent authenticated myUDP peer through its receive deadline.
   # Platform entrypoints and Linux adapters are co-located under swift/Sources.
   # Apple-only adapters remain co-located under swift/Sources/ObstacleBridgeAppleShared.
   # The iOS project patcher repairs stale generated source paths to the
@@ -239,6 +241,8 @@ ARC-CMP-003:
   # fragmentation integration proof relies on peer byte counters, not logs.
   # The admin UI exposes throttle state at the ChannelMux and physical-TUN
   # aggregate boundaries, not as a per-peer TUN quota view.
+  # Python epoch recovery advances the local TUN-admission gate only after
+  # the authenticated outer session reports application readiness again.
   # Raw ChannelMux parity compiles the Core SecureLink transcript,
   # native-service specification, RuntimeConfig policy, and packet-tunnel route policy with portable
   # RuntimeConfig schema/scalar parsing/peer fields/peer exclusions/admin-auth transitions/overlay limits, packet-tunnel route validation/containment/subnet masks/diagnostics, service, listener-hook,
@@ -272,6 +276,7 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_connected_lifecycle_resets_transport_rotation_cycles
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_admission_requires_connected_lifecycle_epoch
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_admission_recovers_stale_gate_within_authenticated_epoch
+    - tests/unit/test_channel_mux_listener_mode.py::test_transport_epoch_tun_recovery_reopens_after_delayed_app_readiness
     - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_connectivity_probe_remains_available_while_tun_ingress_is_busy
     - tests/unit/test_runner_events.py::test_rotation_exhaustion_requests_restart_once
@@ -351,6 +356,10 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_allows_connected_non_securelink_transport
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_blocks_disconnected_non_securelink_transport
     - tests/unit/test_channel_mux_listener_mode.py::test_overlay_ready_proactively_opens_configured_tun_listener
+    - tests/unit/test_channel_mux_listener_mode.py::test_reconnect_reannounces_tun_open_when_first_epoch_open_is_lost
+    - tests/unit/test_channel_mux_listener_mode.py::test_transport_epoch_tun_recovery_reopens_after_delayed_app_readiness
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayChannelAdapterTests.swift::lostReconnectTunOpenIsReannouncedWithoutAllocatingAnotherChannel
+    - ios/tests/test_m3_native_sources.py::test_swift_tun_reconnect_open_replay_is_owned_by_udp_and_linux_runtime
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_tun_close_removes_closed_channel_from_interface_aliases
     - tests/unit/test_channel_mux_listener_mode.py::test_local_udp_datagram_emits_debug_level_direction_diagnostic
     - tests/unit/test_channel_mux_listener_mode.py::test_overlay_udp_to_target_emits_debug_level_direction_diagnostic
@@ -458,6 +467,8 @@ ARC-CMP-003:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_ws_secure_link_fragments
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_spoof
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
+    # Passwordless launcher coverage exercises real-TUN delivery after a PSK rekey.
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_survives_live_securelink_rekey
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_myudp_two_clients_server_restart_reoffers_remote_tcp
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_myudp_peer_on_mixed_listener
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
@@ -620,6 +631,13 @@ ARC-CMP-004:
     - tests/unit/test_runtime_metrics.py::test_accumulator_rejects_unbounded_category_definitions
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate
+    - tests/unit/test_runtime_metrics.py::test_linux_memory_sampler_reads_current_rss_in_bytes
+    - tests/unit/test_runtime_metrics.py::test_memory_metrics_are_bounded_and_report_warning_state
+    - tests/unit/test_runtime_metrics.py::test_runner_memory_sampler_projects_rss_and_unavailable_state
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::projectsPythonCompatibleBoundedMemoryMetrics
+    - tests/unit/test_runtime_metrics.py::test_memory_metrics_report_unavailable_before_a_successful_sample
+    - tests/unit/test_config_bootstrap_cli.py::test_runner_memory_warning_limit_is_configurable_in_bytes
+    - tests/unit/test_admin_web_component_parity.py::test_runtime_analysis_renders_optional_memory_metrics_without_affecting_older_hosts
     - tests/unit/test_runtime_metrics.py::test_runner_monitor_is_one_owned_task_and_cancels_cleanly
     # Covers Python/Swift transport and status peak sources, including Swift compression frame/encode/decode, SecureLink-worker, Apple parse/per-payload SecureLink/ChannelMux, and TUN data-guard/fragment/relay/system-write stages plus TCP server/client/write/close and client-open Core/publication/connection/receive stages and egress/lifecycle. Inclusive owner-queue, payload-batch, payload-delivery, TCP-message-dispatch, and TUN-payload wrappers are prohibited; disabled-collector no-I/O, enabled-collector asynchronous cached spool status, and bounded projection remain covered.
     - tests/unit/test_runtime_metrics.py::test_runner_runtime_metrics_status_is_bounded_and_redacted
@@ -1309,6 +1327,7 @@ ARC-IO-001:
     - tests/unit/test_swift_concurrency_guard.py::test_rejects_new_unchecked_sendable_conformance
     - tests/unit/test_swift_concurrency_guard.py::test_rejects_new_synchronous_primitive_in_legacy_owner
     - tests/unit/test_swift_concurrency_guard.py::test_accepts_lock_marker_with_named_test
+    - tests/unit/test_swift_concurrency_guard.py::test_zero_before_sha_uses_the_branch_merge_base
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_covers_every_product_owner
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_requires_usable_evidence
     - tests/unit/test_async_io_guards.py::test_swift_concurrency_guard_rejects_new_lock_in_legacy_owner

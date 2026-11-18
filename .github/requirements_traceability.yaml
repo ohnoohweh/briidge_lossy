@@ -858,13 +858,18 @@ REQ-LIFE-001:
 REQ-LIFE-002:
   # The reconnect integration coverage includes bounded wait handling for
   # expected self-restart relaunches during reconnect validation; Linux native
-  # restart intent is actor-owned before the shutdown signal is raised.
+  # restart intent is actor-owned before the shutdown signal is raised. Native
+  # lifecycle tests cover clean-stop persistence and myUDP deadline recovery.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
     - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
+    - tests/unit/test_channel_mux_listener_mode.py::test_reconnect_reannounces_tun_open_when_first_epoch_open_is_lost
+    - tests/unit/test_channel_mux_listener_mode.py::test_transport_epoch_tun_recovery_reopens_after_delayed_app_readiness
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayChannelAdapterTests.swift::lostReconnectTunOpenIsReannouncedWithoutAllocatingAnotherChannel
+    - ios/tests/test_m3_native_sources.py::test_swift_tun_reconnect_open_replay_is_owned_by_udp_and_linux_runtime
     - tests/unit/test_peer_resolution.py::test_udp_session_rotation_rebuilds_client_socket
     - ios/tests/test_m3_native_sources.py::test_udp_overlay_peer_rotation_rebuilds_the_native_socket
     - tests/unit/test_stream_peer_rotation.py::test_tcp_reconnect_cleanup_survives_stopped_event_loop
@@ -1155,6 +1160,7 @@ REQ-LIFE-010:
     - tests/unit/test_swift_concurrency_guard.py::test_rejects_new_unchecked_sendable_conformance
     - tests/unit/test_swift_concurrency_guard.py::test_rejects_new_synchronous_primitive_in_legacy_owner
     - tests/unit/test_swift_concurrency_guard.py::test_accepts_lock_marker_with_named_test
+    - tests/unit/test_swift_concurrency_guard.py::test_zero_before_sha_uses_the_branch_merge_base
     - ios/tests/test_m3_native_sources.py::test_overlay_connection_drivers_keep_callbacks_on_owner_queue
     - ios/tests/test_m3_native_sources.py::test_native_proxy_connections_keep_callbacks_on_owner_queue
     - ios/tests/test_m3_native_sources.py::test_web_admin_server_callbacks_keep_owner_queue
@@ -1387,6 +1393,8 @@ REQ-MUX-006:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_ws_secure_link_fragments
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_spoof
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
+    # Real-TUN PSK rekey regression runs through the authorized elevated launcher.
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_survives_live_securelink_rekey
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_myudp_channel_open
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open
     - tests/integration/test_macos_elevated.py::test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification
@@ -1412,6 +1420,7 @@ REQ-MUX-007:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_myudp_packet_carry
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_spoof
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_survives_live_securelink_rekey
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_myudp_channel_open
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open
   unit_tests:
@@ -1442,13 +1451,15 @@ REQ-MUX-009:
   # preventing an unchecked native collection trap from reaching devices.
   # full-tunnel installs preserve pre-existing local subnet ownership. Swift
   # epoch-resync coverage also verifies a recovered TUN OPEN advances its
-  # ChannelMux connection sequence. Darwin hook coverage records route
+  # ChannelMux connection sequence and re-admits local Python TUN reads for
+  # that current epoch. Darwin hook coverage records route
   # ownership so teardown cannot delete an existing local/operator exclusion.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_remote_servers_udp_forwarding
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_spoof
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_survives_live_securelink_rekey
     - tests/integration/test_macos_elevated.py::test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification
     - tests/integration/test_macos_elevated.py::test_macos_elevated_darwin_native_helper_applies_routes_and_dns_live
     - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_hooks
@@ -1466,6 +1477,7 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_allows_connected_non_securelink_transport
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_blocks_disconnected_non_securelink_transport
     - tests/unit/test_channel_mux_listener_mode.py::test_overlay_ready_proactively_opens_configured_tun_listener
+    - tests/unit/test_channel_mux_listener_mode.py::test_transport_epoch_tun_recovery_reopens_after_delayed_app_readiness
     - ios/tests/test_ios_swift_udp_tun_helper.py::test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_default_system_honors_no_proxy_on_linux
@@ -1803,6 +1815,13 @@ REQ-ADM-001:
     - tests/unit/test_runtime_metrics.py::test_accumulator_rejects_unbounded_category_definitions
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate
+    - tests/unit/test_runtime_metrics.py::test_linux_memory_sampler_reads_current_rss_in_bytes
+    - tests/unit/test_runtime_metrics.py::test_memory_metrics_are_bounded_and_report_warning_state
+    - tests/unit/test_runtime_metrics.py::test_runner_memory_sampler_projects_rss_and_unavailable_state
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::projectsPythonCompatibleBoundedMemoryMetrics
+    - tests/unit/test_runtime_metrics.py::test_memory_metrics_report_unavailable_before_a_successful_sample
+    - tests/unit/test_config_bootstrap_cli.py::test_runner_memory_warning_limit_is_configurable_in_bytes
+    - tests/unit/test_admin_web_component_parity.py::test_runtime_analysis_renders_optional_memory_metrics_without_affecting_older_hosts
     - tests/unit/test_runtime_metrics.py::test_runner_monitor_is_one_owned_task_and_cancels_cleanly
     # Covers Python/Swift transport and status peak sources, including Swift compression frame/encode/decode, SecureLink-worker, Apple parse/per-payload SecureLink/ChannelMux, and TUN data-guard/fragment/relay/system-write stages plus TCP server/client/write/close and client-open Core/publication/connection/receive stages and egress/lifecycle. Inclusive owner-queue, payload-batch, payload-delivery, TCP-message-dispatch, and TUN-payload wrappers are prohibited; disabled-collector no-I/O and bounded projection remain covered.
     - tests/unit/test_runtime_metrics.py::test_runner_runtime_metrics_status_is_bounded_and_redacted
