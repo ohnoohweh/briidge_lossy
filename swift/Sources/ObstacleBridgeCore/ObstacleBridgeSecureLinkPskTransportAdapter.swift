@@ -40,6 +40,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
     private let timeProvider: () -> TimeInterval
     private let unixTimeProvider: () -> TimeInterval
     private let diagnosticSink: DiagnosticSink?
+    private let diagnosticEnabled: (ObstacleBridgeRuntimeDiagnosticLevel) -> Bool
     private var pendingPayloads: [Data] = []
     private var pendingPayloadWorkSink: (() -> Void)?
     private var transportConnected = false
@@ -55,7 +56,8 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         retryBackoffMaxMS: Int = 5000,
         timeProvider: (() -> TimeInterval)? = nil,
         unixTimeProvider: (() -> TimeInterval)? = nil,
-        diagnosticSink: DiagnosticSink? = nil
+        diagnosticSink: DiagnosticSink? = nil,
+        diagnosticEnabled: @escaping (ObstacleBridgeRuntimeDiagnosticLevel) -> Bool = { _ in true }
     ) {
         self.runtime = runtime
         self.retryState = .init(policy: .init(
@@ -65,6 +67,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         self.timeProvider = timeProvider ?? { ProcessInfo.processInfo.systemUptime }
         self.unixTimeProvider = unixTimeProvider ?? { Date().timeIntervalSince1970 }
         self.diagnosticSink = diagnosticSink
+        self.diagnosticEnabled = diagnosticEnabled
     }
 
     public convenience init(
@@ -414,8 +417,13 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         ])
     }
 
-    private func emitDiagnostic(_ level: ObstacleBridgeRuntimeDiagnosticLevel, _ event: String, _ fields: [String: Any]) {
-        diagnosticSink?(level, event, fields)
+    private func emitDiagnostic(
+        _ level: ObstacleBridgeRuntimeDiagnosticLevel,
+        _ event: String,
+        _ fields: @autoclosure () -> [String: Any]
+    ) {
+        guard diagnosticEnabled(level) else { return }
+        diagnosticSink?(level, event, fields())
     }
 
     private func diagnosticFrameTypes(_ frames: [Data]) -> [Int] {

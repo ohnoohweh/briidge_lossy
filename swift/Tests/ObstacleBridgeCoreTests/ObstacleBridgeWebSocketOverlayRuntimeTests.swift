@@ -59,6 +59,25 @@ struct ObstacleBridgeWebSocketOverlayRuntimeTests {
         #expect(events.contains { $0.0 == .warning && $0.1 == "secure_link_transport_disconnected" })
     }
 
+    @Test func secureLinkDiagnosticLevelFilterSkipsPerFrameDebugRecords() throws {
+        var events: [(ObstacleBridgeRuntimeDiagnosticLevel, String)] = []
+        let client = ObstacleBridgeSecureLinkPskTransportAdapter(
+            runtime: .init(clientMode: true, psk: "adapter-psk"),
+            diagnosticSink: { level, event, _ in events.append((level, event)) },
+            diagnosticEnabled: { $0 == .warning }
+        )
+        let server = ObstacleBridgeSecureLinkPskRuntime(clientMode: false, psk: "adapter-psk")
+        let hello = try client.handleTransportConnected(sessionID: 97, clientNonce: Data(repeating: 6, count: 32))
+        let serverHello = server.handleInboundFrame(hello.emittedFrames[0])
+        let proof = client.handleInboundFrame(serverHello.emittedFrames[0])
+        let acknowledgement = server.handleInboundFrame(proof.emittedFrames[0])
+        _ = client.handleInboundFrame(acknowledgement.emittedFrames[0])
+        client.handleTransportDisconnected()
+
+        #expect(!events.contains { $0.0 == .debug && $0.1 == "secure_link_frame_received" })
+        #expect(events.contains { $0.0 == .warning && $0.1 == "secure_link_transport_disconnected" })
+    }
+
     @Test func secureLinkTimeThresholdProducesAnAutomaticRekeyFrame() throws {
         var now: TimeInterval = 0
         let client = ObstacleBridgeSecureLinkPskTransportAdapter(

@@ -159,6 +159,10 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "tailNativeProviderLog" in provider
     assert "packetBridgeDiagnosticEventSink" in provider
     assert "nativeChannelMuxDiagnosticsEnabled" in provider
+    assert "nativeRuntimeDiagnosticEnabled" in provider
+    assert "recordNativeRuntimeDiagnostic" in provider
+    assert "diagnosticEnabled: { level in" in provider
+    assert "ObstacleBridgeRuntimeConfig.nativeRuntimeDiagnosticEnabled" in provider
     assert "eventSink: packetBridgeDiagnosticEventSink()" in provider
     assert "the transport owner never constructs per-frame diagnostic fields" in provider
     assert "ObstacleBridgeAdminAPI" in provider
@@ -1755,7 +1759,7 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
     assert "ObstacleBridgeCompressLayerRuntime" in provider
     assert "ObstacleBridgeSecureLinkPskRuntime" in provider
     assert "diagnosticSink: { [weak self] level, event, fields in" in provider
-    assert 'fields.merging(["log_level": level.name])' in provider
+    assert "recordNativeRuntimeDiagnostic(level: level, event: event, fields: fields)" in provider
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics" in provider
     assert "ObstacleBridgePeerAddressProtocolRuntime" in provider
     assert "ObstacleBridgeWebSocketOverlayRuntime" in provider

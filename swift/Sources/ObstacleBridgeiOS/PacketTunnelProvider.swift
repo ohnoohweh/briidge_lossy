@@ -191,6 +191,26 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         )
     }
 
+    /// SecureLink observes every data frame. Keep warning evidence available,
+    /// but do not even materialize debug/info diagnostic dictionaries unless
+    /// the operator explicitly enables high-rate ChannelMux diagnostics.
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
+    private func nativeRuntimeDiagnosticEnabled(_ level: ObstacleBridgeRuntimeDiagnosticLevel) -> Bool {
+        ObstacleBridgeRuntimeConfig.nativeRuntimeDiagnosticEnabled(
+            levelName: level.name,
+            runtimeConfig: adminRuntimeConfigPayload() ?? [:]
+        )
+    }
+
+    private func recordNativeRuntimeDiagnostic(
+        level: ObstacleBridgeRuntimeDiagnosticLevel,
+        event: String,
+        fields: [String: Any]
+    ) {
+        guard nativeRuntimeDiagnosticEnabled(level) else { return }
+        recordNativeEvent(event, fields: fields.merging(["log_level": level.name]) { _, latest in latest })
+    }
+
     private func providerStateURL() -> URL? {
         guard let containerURL = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: "group.com.obstaclebridge.shared"
@@ -1486,7 +1506,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                     retryBackoffMaxMS: retryBackoffMaxMS,
                     // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
                     diagnosticSink: { [weak self] level, event, fields in
-                        self?.recordNativeEvent(event, fields: fields.merging(["log_level": level.name]) { _, latest in latest })
+                        self?.recordNativeRuntimeDiagnostic(level: level, event: event, fields: fields)
+                    },
+                    diagnosticEnabled: { level in
+                        ObstacleBridgeRuntimeConfig.nativeRuntimeDiagnosticEnabled(
+                            levelName: level.name,
+                            runtimeConfig: payload
+                        )
                     }
                 )
                 summary["secure_link_runtime"] = "ready"
@@ -1507,7 +1533,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                 transportDelayRotationThresholdMS: ObstacleBridgeRuntimeConfig.doubleValue(from: payload["channelmux_transport_delay_threshold_ms"]) ?? 5000.0,
                 transportDelayRotationGrace: (ObstacleBridgeRuntimeConfig.doubleValue(from: payload["channelmux_transport_delay_rotation_delay_ms"]) ?? 30000.0) / 1000.0,
                 diagnosticSink: { [weak self] level, event, fields in
-                    self?.recordNativeEvent(event, fields: fields.merging(["log_level": level.name]) { _, latest in latest })
+                    self?.recordNativeRuntimeDiagnostic(level: level, event: event, fields: fields)
                 }
             )
             summary["peer_address_protocol_runtime"] = "ready"

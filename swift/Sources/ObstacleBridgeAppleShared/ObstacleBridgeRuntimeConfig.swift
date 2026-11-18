@@ -76,6 +76,13 @@ enum ObstacleBridgeRuntimeConfig {
         return level.uppercased() == "DEBUG"
     }
 
+    /// Warnings remain operationally visible; INFO and DEBUG protocol
+    /// diagnostics are opt-in because a SecureLink session observes every
+    /// traffic frame on every Apple transport.
+    static func nativeRuntimeDiagnosticEnabled(levelName: String, runtimeConfig: [String: Any]) -> Bool {
+        levelName.uppercased() == "WARNING" || nativeChannelMuxDiagnosticsEnabled(runtimeConfig: runtimeConfig)
+    }
+
     static func configSchemaSnapshot() -> [String: Any] {
         ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()
     }
