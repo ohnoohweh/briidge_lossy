@@ -1393,6 +1393,7 @@ REQ-MUX-006:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_ws_secure_link_fragments
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_spoof
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
+    # Real-TUN PSK rekey regression runs through the authorized elevated launcher.
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_survives_live_securelink_rekey
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_myudp_channel_open
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open

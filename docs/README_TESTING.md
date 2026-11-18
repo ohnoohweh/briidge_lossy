@@ -106,6 +106,7 @@ Representative anchors for those areas:
   - [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py)
   - [ios/tests/test_macos_swift_host_runner.py](../ios/tests/test_macos_swift_host_runner.py)
 - current shared-TUN coverage also pins the server-side virtual-peer probe path so internally generated ICMP verification traffic is routed through the shared-TUN dispatcher, bound to explicit local-virtual ownership, and consumed locally on reply instead of surfacing as unknown-destination traffic
+- the Linux elevated launcher runs its shared-TUN live-PSK-rekey regression through the workspace virtualenv after its authorized direct-script elevation; the regression proves post-rekey client-to-client packet carriage on real TUN interfaces
 - the Swift component and iOS packet-flow probes admit TUN OPEN, OPEN chunks,
   DATA, fragments, and CLOSE through the portable session counter sequence;
   the adapter probes then exercise only packet-device delivery, including the

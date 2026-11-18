@@ -467,6 +467,7 @@ ARC-CMP-003:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_ws_secure_link_fragments
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_spoof
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
+    # Passwordless launcher coverage exercises real-TUN delivery after a PSK rekey.
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_survives_live_securelink_rekey
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_myudp_two_clients_server_restart_reoffers_remote_tcp
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_myudp_peer_on_mixed_listener
