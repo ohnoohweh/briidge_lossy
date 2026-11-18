@@ -525,6 +525,8 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
 
     private func snapshotPayload() -> [String: Any] {
         queue.sync {
+            // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_packet_flow_bridge_source_exists
+            // Queue byte totals are sampled only under the packet-flow owner.
             [
                 "active": active,
                 "tunnel_address": tunnelAddress,
