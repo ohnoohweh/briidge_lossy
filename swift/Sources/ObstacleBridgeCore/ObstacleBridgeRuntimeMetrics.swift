@@ -32,8 +32,13 @@ public actor ObstacleBridgeRuntimeMetrics {
             Self.mailbox.submit(.cpu(processCPUNS, wallNS))
         }
 
-        public func recordMemorySample(processMemoryBytes: UInt64, measurementKind: MemoryMeasurementKind, wallNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
-            Self.mailbox.submit(.memory(processMemoryBytes, measurementKind, wallNS))
+        public func recordMemorySample(
+            processMemoryBytes: UInt64,
+            measurementKind: MemoryMeasurementKind,
+            warningLimitBytes: UInt64? = nil,
+            wallNS: UInt64 = DispatchTime.now().uptimeNanoseconds
+        ) {
+            Self.mailbox.submit(.memory(processMemoryBytes, measurementKind, warningLimitBytes, wallNS))
         }
 
         /// Reads the complete projection from the metrics actor. Platform
@@ -65,7 +70,7 @@ public actor ObstacleBridgeRuntimeMetrics {
         fileprivate enum Event: Sendable {
             case timing(Category, UInt64, UInt64)
             case cpu(UInt64, UInt64)
-            case memory(UInt64, MemoryMeasurementKind, UInt64)
+            case memory(UInt64, MemoryMeasurementKind, UInt64?, UInt64)
         }
 
         /// The continuation is Sendable and the stream bounds retained events.
@@ -158,7 +163,12 @@ public actor ObstacleBridgeRuntimeMetrics {
     }
     private struct Recent { let completedNS: UInt64; let category: Category; let durationNS: UInt64 }
     private struct CPUPeak { let completedNS: UInt64; let cores: Double; let contributor: [String: Any]? }
-    private struct MemorySample { let completedNS: UInt64; let bytes: UInt64; let measurementKind: MemoryMeasurementKind }
+    private struct MemorySample {
+        let completedNS: UInt64
+        let bytes: UInt64
+        let measurementKind: MemoryMeasurementKind
+        let warningLimitBytes: UInt64?
+    }
 
     private var lifetime = Dictionary(uniqueKeysWithValues: Category.allCases.map { ($0, Aggregate()) })
     private var recent: [Recent] = []
@@ -178,8 +188,13 @@ public actor ObstacleBridgeRuntimeMetrics {
             record(category, durationNS: durationNS, completedNS: completedNS)
         case let .cpu(processCPUNS, wallNS):
             recordCPUSample(processCPUNS: processCPUNS, wallNS: wallNS)
-        case let .memory(bytes, kind, wallNS):
-            recordMemorySample(processMemoryBytes: bytes, measurementKind: kind, wallNS: wallNS)
+        case let .memory(bytes, kind, warningLimitBytes, wallNS):
+            recordMemorySample(
+                processMemoryBytes: bytes,
+                measurementKind: kind,
+                warningLimitBytes: warningLimitBytes,
+                wallNS: wallNS
+            )
         }
     }
 
@@ -206,8 +221,18 @@ public actor ObstacleBridgeRuntimeMetrics {
         if overallCPUPeak == nil || cores >= overallCPUPeak! { overallCPUPeak = cores; overallContributor = contributor }
     }
 
-    public func recordMemorySample(processMemoryBytes: UInt64, measurementKind: MemoryMeasurementKind, wallNS: UInt64 = DispatchTime.now().uptimeNanoseconds) {
-        let sample = MemorySample(completedNS: wallNS, bytes: processMemoryBytes, measurementKind: measurementKind)
+    public func recordMemorySample(
+        processMemoryBytes: UInt64,
+        measurementKind: MemoryMeasurementKind,
+        warningLimitBytes: UInt64? = nil,
+        wallNS: UInt64 = DispatchTime.now().uptimeNanoseconds
+    ) {
+        let sample = MemorySample(
+            completedNS: wallNS,
+            bytes: processMemoryBytes,
+            measurementKind: measurementKind,
+            warningLimitBytes: warningLimitBytes
+        )
         currentMemory = sample
         overallMemoryPeak = max(overallMemoryPeak ?? 0, processMemoryBytes)
         recentMemory.append(sample)
@@ -245,7 +270,8 @@ public actor ObstacleBridgeRuntimeMetrics {
         let recentMemoryPeak = recentMemory.map(\.bytes).max()
         let memoryPayload: [String: Any]
         if let currentMemory {
-            memoryPayload = ["current": NSNumber(value: currentMemory.bytes), "overall_peak": NSNumber(value: overallMemoryPeak ?? currentMemory.bytes), "last_2_seconds_peak": recentMemoryPeak.map { NSNumber(value: $0) } ?? NSNull(), "warning_limit": NSNull(), "warning_active": false, "measurement_kind": currentMemory.measurementKind.rawValue]
+            let warningLimit = currentMemory.warningLimitBytes
+            memoryPayload = ["current": NSNumber(value: currentMemory.bytes), "overall_peak": NSNumber(value: overallMemoryPeak ?? currentMemory.bytes), "last_2_seconds_peak": recentMemoryPeak.map { NSNumber(value: $0) } ?? NSNull(), "warning_limit": warningLimit.map { NSNumber(value: $0) } ?? NSNull(), "warning_active": warningLimit.map { currentMemory.bytes >= $0 } ?? false, "measurement_kind": currentMemory.measurementKind.rawValue]
         } else {
             memoryPayload = ["current": NSNull(), "overall_peak": NSNull(), "last_2_seconds_peak": NSNull(), "warning_limit": NSNull(), "warning_active": false, "measurement_kind": "unavailable"]
         }

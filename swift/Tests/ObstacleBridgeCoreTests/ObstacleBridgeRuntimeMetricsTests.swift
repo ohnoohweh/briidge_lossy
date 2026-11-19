@@ -56,4 +56,22 @@ struct ObstacleBridgeRuntimeMetricsTests {
         let expiredMemory = expired["memory_bytes"] as? [String: Any]
         #expect(expiredMemory?["last_2_seconds_peak"] is NSNull)
     }
+
+    @Test func projectsPhysicalFootprintTerminationRiskThreshold() async {
+        let metrics = ObstacleBridgeRuntimeMetrics()
+        let threshold: UInt64 = 50 * 1_024 * 1_024
+        await metrics.recordMemorySample(
+            processMemoryBytes: threshold + 1,
+            measurementKind: .physicalFootprint,
+            warningLimitBytes: threshold,
+            wallNS: 1_000_000_000
+        )
+        let payload = try! JSONSerialization.jsonObject(
+            with: Data(await metrics.snapshotBytes(nowNS: 1_000_000_000))
+        ) as! [String: Any]
+        let memory = payload["memory_bytes"] as? [String: Any]
+        #expect(memory?["measurement_kind"] as? String == "physical_footprint")
+        #expect(memory?["warning_limit"] as? NSNumber == NSNumber(value: threshold))
+        #expect(memory?["warning_active"] as? Bool == true)
+    }
 }

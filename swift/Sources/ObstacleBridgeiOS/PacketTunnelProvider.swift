@@ -82,6 +82,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         excludedRoutes6: defaultExcludedRoutes6,
     )
     private let errorDomain = "ObstacleBridge.IPServer"
+    /// Device observations show Network Extension termination around this
+    /// physical-footprint level. It is a risk threshold for WebAdmin, not an
+    /// assertion about iOS's undocumented per-device memory budget.
+    private static let physicalFootprintTerminationRiskBytes: UInt64 = 50 * 1_024 * 1_024
     private var packetPumpRunning = false
     private var packetPumpDroppedBeforeOverlay = 0
     private var providerStateUpdateCount = 0
@@ -1997,7 +2001,10 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
 
     private func adminStatusSnapshotUncached(bridgeSnapshot: [String: Any]? = nil) -> [String: Any] {
         // OBSTACLEBRIDGE-CONCURRENCY: serial; test=projectsPythonCompatibleBoundedMemoryMetrics
-        ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics()
+        ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics(
+            memoryMeasurement: .physicalFootprint,
+            memoryWarningLimitBytes: Self.physicalFootprintTerminationRiskBytes
+        )
         let bridgeSnapshot = bridgeSnapshot ?? adminBridgeSnapshot()
         let packetProcessingActive = adminPacketProcessingActive(bridgeSnapshot: bridgeSnapshot)
         let runtimeHealth = runtimeHealthAdminFields()

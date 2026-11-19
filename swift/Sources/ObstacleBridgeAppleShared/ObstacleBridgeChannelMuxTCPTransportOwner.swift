@@ -549,7 +549,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
             guard active, connectionIsCurrent(connection, chanID: chanID, role: role) else {
                 return
             }
-            var pending = pendingTCPWrites[chanID] ?? PendingTCPWrites()
+            let pending = pendingTCPWrites[chanID] ?? PendingTCPWrites()
             guard pending.buffers.append(payload) else {
                 self.eventSink?("\(self.eventPrefix)_tcp_write_queue_dropped", ["chan_id": chanID, "bytes": payload.count])
                 return

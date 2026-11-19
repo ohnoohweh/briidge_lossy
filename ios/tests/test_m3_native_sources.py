@@ -412,11 +412,14 @@ def test_ios_runtime_status_projects_shared_runtime_metrics() -> None:
     assert "private var cachedRuntimeMetricsSnapshot: [String: Any] = [:]" in provider
     assert "let snapshot = await ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()" in provider
     assert '"runtime_fifos"' in provider
-    assert "ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics()" in provider
+    assert "ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics(" in provider
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=projectsPythonCompatibleBoundedMemoryMetrics" in provider
     assert "enum ObstacleBridgeAppleRuntimeMetricsSampler" in shared
     assert "task_info(mach_task_self_" in shared
-    assert "recordMemorySample(processMemoryBytes: UInt64(info.resident_size), measurementKind: .resident)" in shared
+    assert "memoryMeasurement: .physicalFootprint" in provider
+    assert "physicalFootprintTerminationRiskBytes: UInt64 = 50 * 1_024 * 1_024" in provider
+    assert "measurementKind: .physicalFootprint" in shared
+    assert "UInt64(info.phys_footprint)" in shared
     assert "packetFlowPCAPDefaultMaximumBytes" in shared
     assert "packetFlowPCAPDefaultRetentionFiles" in shared
     assert "runtimeHealthRecordsPayload" in provider

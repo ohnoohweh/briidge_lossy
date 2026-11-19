@@ -1778,10 +1778,12 @@ For CPU, memory, wakeup, and performance-regression diagnosis, use the [runtime 
 The Python and Swift runtimes' in-process monitoring foundation is bounded and
 dependency-free: it keeps fixed-bucket, fixed-window aggregate timing for
 approved categories, while their runtime owners sample process CPU and memory.
-Python and Swift Linux obtain current RSS, while macOS and iOS Swift use Mach
-resident memory. Cached redacted status now exposes compatible bounded
-current/lifetime/recent process-memory aggregates; Python additionally accepts
-an optional process-local warning limit.
+Python and Swift Linux obtain current RSS, while macOS Swift uses Mach resident
+memory. iOS Runtime Analysis instead presents Mach physical footprint in its
+Footprint meter, with a 50 MiB observed Network Extension termination-risk
+threshold; resident memory remains available as diagnostic evidence. Cached
+redacted status exposes bounded current/lifetime/recent process-memory
+aggregates; Python additionally accepts an optional process-local warning limit.
 the local smoke is socket/TUN-free, and the WebAdmin Runtime Analysis view
 shows lifetime and trailing-two-second peak CPU and uninterrupted-work signals;
 contributors across overlay receive preparation/data/idle/control, retransmit

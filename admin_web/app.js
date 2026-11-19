@@ -2116,18 +2116,20 @@ function renderRuntimeMetrics(status) {
   };
   renderMeter('cpuMeter', metrics.cpu_cores_max, 1); renderMeter('sliceMeter', metrics.work_slice_ms_max, 100);
   const memory = metrics.memory_bytes;
-  renderMeter('memoryMeter', memory?.warning_limit == null ? null : {
+  const footprintMeter = memory?.measurement_kind === 'physical_footprint' && memory?.warning_limit != null;
+  renderMeter('memoryMeter', !footprintMeter ? null : {
     overall: memory.overall_peak,
-    last_2_seconds: memory.last_2_seconds_peak,
+    last_2_seconds: memory.current,
   }, memory?.warning_limit);
   const summary = document.getElementById('runtimeAnalysisSummary'); const rows = document.getElementById('runtimeAnalysisRows');
   if (!summary || !rows) return;
   const cpu = metrics.cpu_cores_max || {}; const slice = metrics.work_slice_ms_max || {};
+  const memoryLabel = memory?.measurement_kind === 'physical_footprint' ? 'iOS physical footprint' : `Memory — ${String(memory?.measurement_kind || 'unavailable').replaceAll('_', ' ')}`;
   const memoryRows = memory ? [
-    [`Memory — current ${String(memory.measurement_kind || 'unavailable').replaceAll('_', ' ')}`, fmtMemoryBytes(memory.current)],
-    ['Memory — peak since start', fmtMemoryBytes(memory.overall_peak)],
-    ['Memory — peak — last 2 s', fmtMemoryBytes(memory.last_2_seconds_peak)],
-    ['Memory warning limit', memory.warning_limit == null ? 'Disabled' : `${fmtMemoryBytes(memory.warning_limit)} · ${memory.warning_active ? 'Warning active' : 'Normal'}`],
+    [`${memoryLabel} — current`, fmtMemoryBytes(memory.current)],
+    [`${memoryLabel} — peak since start`, fmtMemoryBytes(memory.overall_peak)],
+    [`${memoryLabel} — peak — last 2 s`, fmtMemoryBytes(memory.last_2_seconds_peak)],
+    [memory?.measurement_kind === 'physical_footprint' ? 'Observed termination-risk threshold' : 'Memory warning limit', memory.warning_limit == null ? 'Disabled' : `${fmtMemoryBytes(memory.warning_limit)} · ${memory.warning_active ? 'Risk threshold reached' : 'Below threshold'}`],
   ] : [];
   const fifos = status?.runtime_fifos || {};
   const fifoRows = Object.entries(fifos).map(([name, level]) => {
@@ -2145,7 +2147,9 @@ function renderRuntimeMetrics(status) {
       return [`Activity — ${name}`, `${count} callbacks · ${total} ms total · ${maximum} ms max`];
     });
   const cpuContributor = (item) => item?.category ? ` · ${item.category} ${(Number(item.observed_cores) * 100).toFixed(1)}% occupancy` : '';
-  summary.textContent = 'Peak values since start and over the trailing two seconds.';
+  summary.textContent = footprintMeter
+    ? 'The Footprint meter uses iOS physical footprint: dark is lifetime peak, bright is current, and 50 MiB is the observed termination-risk threshold.'
+    : 'Peak values since start and over the trailing two seconds.';
   rows.innerHTML = [
     ['Longest uninterrupted — since start', slice.overall == null ? '—' : `${Number(slice.overall).toFixed(1)} ms · ${metrics.longest_uninterrupted_category || 'unknown source'}`],
     ['Longest uninterrupted — last 2 s', slice.last_2_seconds == null ? '—' : `${Number(slice.last_2_seconds).toFixed(1)} ms · ${metrics.longest_uninterrupted_last_2_seconds_category || 'unknown source'}`],

@@ -1835,6 +1835,7 @@ REQ-ADM-001:
     - tests/unit/test_runtime_metrics.py::test_memory_metrics_are_bounded_and_report_warning_state
     - tests/unit/test_runtime_metrics.py::test_runner_memory_sampler_projects_rss_and_unavailable_state
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::projectsPythonCompatibleBoundedMemoryMetrics
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::projectsPhysicalFootprintTerminationRiskThreshold
     - tests/unit/test_runtime_metrics.py::test_memory_metrics_report_unavailable_before_a_successful_sample
     - tests/unit/test_config_bootstrap_cli.py::test_runner_memory_warning_limit_is_configurable_in_bytes
     - tests/unit/test_admin_web_component_parity.py::test_runtime_analysis_renders_optional_memory_metrics_without_affecting_older_hosts
