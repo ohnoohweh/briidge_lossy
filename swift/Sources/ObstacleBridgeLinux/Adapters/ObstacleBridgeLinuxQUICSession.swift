@@ -31,6 +31,7 @@ final class ObstacleBridgeLinuxQUICSession: @unchecked Sendable {
                 condition.lock()
                 let handler = asyncHandler
                 if handler == nil {
+                    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxOverlayTransportTests
                     guard bytes.count + data.count <= Self.maximumBufferedBytes else {
                         inactive = true
                         condition.broadcast()
