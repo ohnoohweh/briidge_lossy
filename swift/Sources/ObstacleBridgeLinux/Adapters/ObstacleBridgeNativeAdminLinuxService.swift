@@ -227,7 +227,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
     private var clientSources: [Int32: DispatchSourceRead] = [:]
-    private var clientRequests: [Int32: Data] = [:]
+    private var clientRequests: [Int32: ObstacleBridgeBoundedDataFIFO] = [:]
     private var liveSessions: [Int32: LiveSession] = [:]
     public private(set) var port: Int = 0
 
@@ -334,8 +334,10 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             var buffer = [UInt8](repeating: 0, count: 16 * 1024)
             let received = recv(client, &buffer, buffer.count, Int32(MSG_DONTWAIT))
             if received > 0 {
-                clientRequests[client, default: Data()].append(buffer, count: Int(received))
-                guard let request = clientRequests[client], request.count <= 65_536 else { closeClientRequest(client); return }
+                let requestFIFO = clientRequests[client] ?? ObstacleBridgeBoundedDataFIFO(limits: .init(maximumItems: 4, maximumBytes: 65_536, maximumAge: 15))
+                guard requestFIFO.append(Data(buffer.prefix(Int(received)))) else { closeClientRequest(client); return }
+                clientRequests[client] = requestFIFO
+                let request = requestFIFO.snapshot().reduce(into: Data()) { $0.append($1) }
                 guard let headerRange = request.range(of: Data("\r\n\r\n".utf8)) else { continue }
                 let header = String(data: request[..<headerRange.lowerBound], encoding: .utf8) ?? ""
                 let contentLength = header.split(separator: "\r\n").dropFirst().compactMap { line -> Int? in
