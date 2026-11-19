@@ -49,6 +49,7 @@ SWIFT_SECURELINK_TRANSCRIPT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridg
 SWIFT_OVERLAY_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayFrameCodec.swift"
 SWIFT_CONTROL_CHUNK_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"
 SWIFT_SERVICE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"
+SWIFT_BOUNDED_DATA_FIFO_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBoundedDataFIFO.swift"
 SWIFT_CORE_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCore.swift"
 SWIFT_COMPRESSION_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompression.swift"
 SWIFT_WS_OVERLAY_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketOverlayRuntime.swift"
@@ -180,6 +181,7 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
         str(SWIFT_OVERLAY_FRAME_CODEC_SOURCE),
         str(SWIFT_CONTROL_CHUNK_CODEC_SOURCE),
         str(SWIFT_SERVICE_CODEC_SOURCE),
+        str(SWIFT_BOUNDED_DATA_FIFO_SOURCE),
         str(SWIFT_CORE_SOURCE),
         str(SWIFT_COMPRESSION_SOURCE),
         str(SWIFT_WS_PAYLOAD_CODEC_SOURCE),

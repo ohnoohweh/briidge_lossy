@@ -36,8 +36,8 @@ def require_swift_modules(*module_names: str, missing_swiftc_reason: str, missin
 
 @lru_cache(maxsize=None)
 def swift_core_crypto_compile_flags() -> tuple[str, ...]:
-    """Expose the pinned SwiftPM Crypto product to raw-source macOS probes."""
-    if sys.platform != "darwin":
+    """Expose the pinned SwiftPM Crypto product to raw-source probes."""
+    if sys.platform not in ("darwin", "linux"):
         return ()
     module_dirs = sorted(ROOT.glob(".build/*/debug/Modules"))
     if not module_dirs:
@@ -56,7 +56,37 @@ def swift_core_crypto_compile_flags() -> tuple[str, ...]:
     # On Apple platforms swift-crypto's `Crypto` module forwards to CryptoKit.
     # SwiftPM emits the module but no standalone libCrypto artifact, so raw
     # source probes must import the module without inventing a linker input.
-    return ("-I", str(module_dir))
+    if sys.platform == "darwin":
+        return ("-I", str(module_dir))
+
+    # Linux uses swift-crypto's BoringSSL-backed implementation. Raw-source
+    # fixtures compile Core beside their runner, so SwiftPM's normal product
+    # linker is not in the invocation: provide the built Swift module objects
+    # and its C/C++ crypto objects explicitly. Keep discovery tied to the
+    # selected SwiftPM module directory, not a host-installed CryptoKit.
+    build_dir = module_dir.parent
+    # These are Crypto's direct Swift target dependencies.  Do not pull in
+    # CryptoExtras: it is a separate product and would introduce an unrelated
+    # SwiftASN.1 dependency closure into every raw-source probe.
+    swift_objects = tuple(
+        path
+        for name in ("Crypto", "CryptoBoringWrapper", "SwiftASN1")
+        for path in sorted((build_dir / f"{name}.build").glob("*.o"))
+    )
+    c_objects = tuple(sorted((build_dir / "CCryptoBoringSSL.build").rglob("*.o")))
+    xkcp_objects = tuple(sorted((build_dir / "CXKCP.build").rglob("*.o")))
+    xkcp_shim_objects = tuple(sorted((build_dir / "CXKCPShims.build").rglob("*.o")))
+    link_objects = (*swift_objects, *c_objects, *xkcp_objects, *xkcp_shim_objects)
+    missing = [path for path in link_objects if not path.is_file()]
+    if missing or not swift_objects or not c_objects or not xkcp_shim_objects:
+        raise AssertionError("pinned Linux Swift Crypto link objects were not produced")
+    return (
+        "-I", str(module_dir),
+        "-Xcc", f"-fmodule-map-file={ROOT / 'Sources' / 'CZlib' / 'module.modulemap'}",
+        *(str(path) for path in link_objects),
+        "-Xlinker", "-lz",
+        "-Xlinker", "-lstdc++",
+    )
 
 
 @lru_cache(maxsize=None)

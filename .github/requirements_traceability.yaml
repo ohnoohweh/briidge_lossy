@@ -22,6 +22,9 @@ REQ-OVL-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_server_linux_native_client_myudp_basic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_native_python_myudp_window_pressure
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_address_sanitizer_reports_no_leaks
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_address_sanitizer_webadmin_and_logging_report_no_leaks
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_address_sanitizer_tun_helper_reports_no_leaks
     - tests/integration/test_overlay_e2e.py::test_linux_swift_myudp_reference_peer_waits_for_response_drain
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys
   unit_tests:
@@ -1033,6 +1036,7 @@ REQ-LIFE-010:
     - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_myudp_secure_link_remote_tcp_server_reaches_extension_admin_web
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_over_myudp_packet_carry
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_swift_over_myudp_packet_carry
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_swift_tun_helper_udp_tcp_webadmin_rekey_traffic
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_reports_helper_death_during_partial_cleanup
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_repairs_stale_firewall_and_routes_after_helper_loss
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_rolls_back_partial_apply_failure
@@ -1406,6 +1410,7 @@ REQ-MUX-006:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
     # Real-TUN PSK rekey regression runs through the authorized elevated launcher.
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_survives_live_securelink_rekey
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_swift_tun_helper_udp_tcp_webadmin_rekey_traffic
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_myudp_channel_open
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open
     - tests/integration/test_macos_elevated.py::test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification

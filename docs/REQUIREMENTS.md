@@ -407,7 +407,9 @@ Current implementation note:
   reusing a dirty checkout.
   The compiled helper and Python helper shall retain compatible route-policy
   behavior, and privileged Linux qualification shall prove myUDP packet carry
-  with a Python endpoint and a compiled Swift-helper endpoint.
+  with a Python endpoint and a compiled Swift-helper endpoint, including real
+  TUN UDP receive and TCP request/reply traffic while both WebAdmin endpoints
+  remain responsive across repeated SecureLink rekeys.
   Its native full-tunnel policy keeps every kernel-connected local subnet in
   the main routing table before the helper default, including host-only and
   bridge networks such as `vmnet8` and libvirt; the helper persists and
@@ -686,7 +688,7 @@ Implementation note: the in-process runtime-monitoring foundation supplies depen
 
 The Swift runtime-monitoring projection shall also publish Python-compatible `runtime_metrics.memory_bytes`: current bytes, lifetime and trailing-two-second peaks, disabled-or-configured warning fields, and a measurement kind. Linux obtains `resident` bytes from `/proc/self/status` `VmRSS`; macOS and iOS obtain `resident` bytes from Mach task information. These samplers run while refreshing existing cached status projections, so Admin HTTP and WebSocket requests do not synchronously inspect the process. The current Swift configuration surface publishes the disabled warning state (`warning_limit: null`, `warning_active: false`).
 
-Apple transport, ChannelMux, SecureLink, MyUDP, WebAdmin-live, and packet-flow payload retention shall have an explicit item/byte/age/overflow contract and release retained payloads at drain or stop boundaries. Each Network.framework send owner shall admit at most one in-flight send plus a bounded pending owner queue; packet-flow drain callbacks shall yield after a fixed bounded batch budget. The Swift memory-safety gate shall reject newly introduced persistent raw `Data` queues or dictionaries and new unmarked send paths, unless a documented ownership and bounds rationale is present.
+Apple transport, ChannelMux, SecureLink, MyUDP, WebAdmin-live, and packet-flow payload retention shall have an explicit item/byte/age/overflow contract and release retained payloads at drain or stop boundaries. Each Network.framework send owner shall admit at most one in-flight send plus a bounded pending owner queue; packet-flow drain callbacks shall yield after a fixed bounded batch budget. The Swift memory-safety gate shall reject newly introduced persistent raw `Data` queues or dictionaries and new unmarked send paths, unless a documented ownership and bounds rationale is present. A dedicated Linux qualification shall build the native Swift runner with AddressSanitizer and run LeakSanitizer-enabled Python-to-Swift myUDP/SecureLink, foreground WebAdmin/local-diagnostic-log, authenticated TUN-helper IPC lifecycle, and sustained TCP service traffic through ten time-triggered SecureLink rekeys; a non-zero sanitizer exit or leak report fails that lane.
 
 Linux-native myUDP transitions from its bounded synchronous bootstrap exchange to a nonblocking, readiness-driven receive source after authentication. The UDP fd is drained only when readable and Core retransmit, CONTROL, and IDLE effects run from an independent timer on the same serialized queue. The isolated synchronous exchange compatibility path also uses `MSG_DONTWAIT`; it may make only its configured bounded `poll` wait while no event-loop owner exists. A post-authenticated client receive owner shall therefore not retain a blocking `recv` wait. Runtime Analysis shall start a myUDP receive measurement before Core decodes one ready datagram and end it before outbound transport I/O; DATA, CONTROL, and IDLE use their respective categories, while malformed input uses the generic receive category. No lower-transport socket wait may be included in a Runtime Analysis work slice.
 

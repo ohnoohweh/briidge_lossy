@@ -707,6 +707,7 @@ def _start_tun_bridge_pair(
     server_remote_specs: Optional[list[str]] = None,
     client_own_specs: Optional[list[str]] = None,
     client_remote_specs: Optional[list[str]] = None,
+    client_additional_own_specs: Optional[list[str]] = None,
     server_env_extra: Optional[dict[str, str]] = None,
     client_env_extra: Optional[dict[str, str]] = None,
 ) -> TunBridgePair:
@@ -742,7 +743,11 @@ def _start_tun_bridge_pair(
     client_args = _with_service_specs(
         _strip_option_and_values(materialized.bridge_client_args, "--remote-servers"),
         "--own-servers",
-        list(client_own_specs) if client_own_specs is not None else [client_spec],
+        (
+            list(client_own_specs)
+            if client_own_specs is not None
+            else [client_spec, *(client_additional_own_specs or [])]
+        ),
     )
     client_args = _with_service_specs(
         client_args,
@@ -977,6 +982,21 @@ def _assert_tun_one_way(
     return _wait_link_total_increase(peer_ifname, before_total, timeout=timeout)
 
 
+def _assert_overlay_tcp_round_trip(*, port: int, payload: bytes) -> None:
+    """Exercise a TCP service transported by the authenticated overlay."""
+    with socket.create_connection(("127.0.0.1", port), timeout=12.0) as client:
+        client.settimeout(12.0)
+        client.sendall(payload)
+        expected = overlay_e2e.response_payload(payload)
+        received = bytearray()
+        while len(received) < len(expected):
+            chunk = client.recv(len(expected) - len(received))
+            if not chunk:
+                raise AssertionError("overlay TCP service closed before replying")
+            received.extend(chunk)
+    assert bytes(received) == expected
+
+
 def test_overlay_e2e_linux_elevated_tun_over_myudp_packet_carry(tmp_path: Path) -> None:
     _require_linux_elevated_runtime()
     case_tag = "lt301"
@@ -1153,6 +1173,168 @@ def test_overlay_e2e_linux_elevated_tun_helper_swift_over_myudp_packet_carry(tmp
         assert after_total > 0
     finally:
         pair.stop()
+
+
+def test_overlay_e2e_linux_elevated_swift_tun_helper_udp_tcp_webadmin_rekey_traffic(tmp_path: Path) -> None:
+    """Exercise TUN UDP plus an overlay TCP service across SecureLink rekeys.
+
+    The lower overlay is myUDP, while both application protocols are routed
+    through a Swift-helper-owned kernel TUN device and an overlay TCP service.
+    The two TUN endpoints intentionally have distinct /32 address spaces: the
+    test process has one network namespace, unlike deployed peers.  WebAdmin
+    observes every authenticated/rekeyed epoch rather than being a separate
+    control-only smoke request.
+    """
+    _require_linux_elevated_runtime()
+    case_tag = "lt316"
+    client_ifname = _tun_name(case_tag, "c")
+    server_ifname = _tun_name(case_tag, "s")
+    helper_args = [
+        "--tun-execution-mode", "helper",
+        "--tun-helper-backend", "linux-swift",
+        "--log-tun-helper", "DEBUG",
+    ]
+    secure_link_args = [
+        "--secure-link",
+        "--secure-link-mode",
+        "psk",
+        "--secure-link-psk",
+        "elevated-rekey-traffic-secret",
+    ]
+    client_routing_args = [
+        "--tunnel-address", "198.18.48.1",
+        "--tunnel-prefix", "32",
+        "--tunnel-gateway", "198.19.48.2",
+        "--included-routes", "198.19.48.2/32",
+        "--tunnel-address6", "fd20:316::1",
+        "--tunnel-prefix6", "128",
+        "--tunnel-gateway6", "fd20:317::2",
+        "--included-routes6", "fd20:317::2/128",
+    ]
+    server_routing_args = [
+        "--tunnel-address", "198.19.48.2",
+        "--tunnel-prefix", "32",
+        "--tunnel-gateway", "198.18.48.1",
+        "--included-routes", "198.18.48.1/32",
+        "--tunnel-address6", "fd20:317::2",
+        "--tunnel-prefix6", "128",
+        "--tunnel-gateway6", "fd20:316::1",
+        "--included-routes6", "fd20:316::1/128",
+    ]
+    tcp_service_port = overlay_e2e.alloc_admin_port(case_index=316 + 10)
+    tcp_target_port = overlay_e2e.alloc_admin_port({tcp_service_port}, case_index=316 + 11)
+    tcp_service = json.dumps(
+        {
+            "name": "swift-helper-rekey-tcp",
+            "listen": {"protocol": "tcp", "bind": "127.0.0.1", "port": tcp_service_port},
+            "target": {"protocol": "tcp", "host": "127.0.0.1", "port": tcp_target_port},
+        },
+        separators=(",", ":"),
+    )
+    bounce = overlay_e2e.BounceBackServer(
+        "swift_helper_rekey_tcp_target", "tcp", "127.0.0.1", tcp_target_port,
+        tmp_path / "swift_helper_rekey_tcp_target.log",
+    )
+    bounce.start()
+    pair: Optional[TunBridgePair] = None
+    try:
+        pair = _start_tun_bridge_pair(
+            base_case=overlay_e2e.CASES["case01_udp_over_own_udp_ipv4"],
+            tmp_path=tmp_path,
+            case_index=316,
+            client_ifname=client_ifname,
+            server_ifname=server_ifname,
+            mtu=1400,
+            server_extra_args=helper_args + secure_link_args + server_routing_args,
+            client_extra_args=helper_args + secure_link_args + client_routing_args,
+            client_additional_own_specs=[tcp_service],
+        )
+        _wait_interface_with_bridge_logs(client_ifname, server_proc=pair.server_proc, client_proc=pair.client_proc)
+        _wait_interface_with_bridge_logs(server_ifname, server_proc=pair.server_proc, client_proc=pair.client_proc)
+        _wait_tun_helper_runtime(
+            pair.client_proc.admin_port or 0,
+            expected_backend="linux-swift-native",
+            expected_ifname=client_ifname,
+        )
+        _wait_tun_helper_runtime(
+            pair.server_proc.admin_port or 0,
+            expected_backend="linux-swift-native",
+            expected_ifname=server_ifname,
+        )
+        _wait_interface_cidr(client_ifname, "198.18.48.1/32", family="-4")
+        _wait_interface_cidr(server_ifname, "198.19.48.2/32", family="-4")
+
+        client_admin = pair.client_proc.admin_port or 0
+        server_admin = pair.server_proc.admin_port or 0
+        code, peers = overlay_e2e.fetch_json(f"http://127.0.0.1:{client_admin}/api/peers", timeout=2.0)
+        assert code == 200
+        peer_id = next(
+            (
+                str(row.get("id") or "")
+                for row in list(peers.get("peers") or [])
+                if str(row.get("state") or "").lower() != "listening"
+                and str(row.get("transport") or "").lower() == "myudp"
+            ),
+            "",
+        )
+        assert peer_id
+
+        for cycle in range(1, 4):
+            # WebAdmin must remain live while the lower myUDP epoch carries
+            # real TUN UDP and TCP-service packets.
+            for port in (client_admin, server_admin):
+                status_code, status = overlay_e2e.fetch_json(f"http://127.0.0.1:{port}/api/status", timeout=2.0)
+                assert status_code == 200
+                assert (status.get("tun_helper") or {}).get("connected") is True
+
+            _assert_tun_one_way(
+                source_ip="198.18.48.1",
+                dest_ip="198.19.48.2",
+                payload=f"swift-helper-udp-cycle-{cycle}".encode(),
+                port=31600 + cycle,
+                bind_ifname=client_ifname,
+                peer_ifname=server_ifname,
+            )
+            _assert_overlay_tcp_round_trip(
+                port=tcp_service_port,
+                payload=f"swift-helper-tcp-cycle-{cycle}".encode(),
+            )
+
+            rekey_code, rekey = overlay_e2e.request_json(
+                f"http://127.0.0.1:{client_admin}/api/secure-link/rekey",
+                method="POST", payload={"peer_id": peer_id}, timeout=2.0,
+            )
+            assert rekey_code == 200 and rekey.get("ok") is True
+            overlay_e2e.wait_peer_secure_link_rekeys_completed(
+                client_admin,
+                minimum_count=cycle,
+                timeout=20.0,
+                label=f"Swift TUN traffic cycle {cycle}",
+                transport="myudp",
+                authenticated=True,
+            )
+            for port in (client_admin, server_admin):
+                status_code, status = overlay_e2e.fetch_json(f"http://127.0.0.1:{port}/api/status", timeout=2.0)
+                assert status_code == 200
+                assert (status.get("tun_helper") or {}).get("connected") is True
+            # A completed Admin counter is insufficient: each fresh epoch
+            # must carry both the TUN UDP and TCP-service traffic.
+            _assert_tun_one_way(
+                source_ip="198.18.48.1",
+                dest_ip="198.19.48.2",
+                payload=f"swift-helper-udp-after-rekey-{cycle}".encode(),
+                port=31620 + cycle,
+                bind_ifname=client_ifname,
+                peer_ifname=server_ifname,
+            )
+            _assert_overlay_tcp_round_trip(
+                port=tcp_service_port,
+                payload=f"swift-helper-tcp-after-rekey-{cycle}".encode(),
+            )
+    finally:
+        if pair is not None:
+            pair.stop()
+        bounce.stop()
 
 
 def test_overlay_e2e_linux_elevated_tun_helper_native_reports_post_start_helper_loss(tmp_path: Path) -> None:

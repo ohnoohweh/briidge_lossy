@@ -275,6 +275,45 @@ jobs:
         # routine PR validation covers the Linux Swift product boundary.
         run: pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only" -k "linux_swift"
 
+  bridge-py-linux-swift-leak-sanitizer:
+    name: Integration Gate (Linux Swift LeakSanitizer)
+    # This product build has a separate time budget so AddressSanitizer does
+    # not lengthen the shared Linux integration job's critical path.
+    timeout-minutes: 30
+    needs: detect-bridge-change
+    if: needs.detect-bridge-change.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[test]
+
+      - name: Build AddressSanitizer Linux Swift runner
+        run: |
+          swift build --configuration debug --sanitize address \
+            --scratch-path "$GITHUB_WORKSPACE/build/linux-asan/.swift-build" \
+            --product ObstacleBridgeLinux
+
+      - name: Run Python-to-Swift overlay LeakSanitizer probes
+        env:
+          OBSTACLEBRIDGE_LSAN_REQUIRED: "1"
+          OBSTACLEBRIDGE_LINUX_RUNNER_BINARY: ${{ github.workspace }}/build/linux-asan/.swift-build/debug/ObstacleBridgeLinux
+        run: |
+          pytest -vv --timeout=90 tests/integration/test_overlay_e2e.py -k "linux_swift_address_sanitizer"
+          pytest -vv --timeout=300 \
+            'tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys[swift]'
+
   bridge-py-integration-linux-full:
     name: Integration Gate (Linux full overlay qualification)
     timeout-minutes: 30
@@ -368,6 +407,14 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install privileged integration dependencies
+        run: python -m pip install -e ".[test]"
 
       - name: Run Linux Swift privileged TUN qualification
         env:

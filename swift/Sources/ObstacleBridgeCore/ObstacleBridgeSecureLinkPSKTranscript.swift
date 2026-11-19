@@ -3,9 +3,13 @@ import Foundation
 /// Canonical SecureLink v1 PSK transcript byte construction. Crypto backends
 /// consume these bytes; protocol owners do not reconstruct prefixes locally.
 public enum ObstacleBridgeSecureLinkPSKTranscript {
-    private static let keyDerivationPrefix = Data("obstaclebridge-securelink-psk-v1|".utf8)
-    private static let serverProofPrefix = Data("obstaclebridge-securelink-server-proof-v1|".utf8)
-    private static let clientRekeyCommitProofPrefix = Data("obstaclebridge-securelink-client-rekey-commit-v1|".utf8)
+    // Build the small transcript prefixes for each handshake rather than
+    // retaining heap-backed Data in process-lifetime lazy statics. This keeps
+    // the cryptographic transcript ownership scoped to its caller and lets
+    // Linux LeakSanitizer verify a clean product exit.
+    private static var keyDerivationPrefix: Data { Data("obstaclebridge-securelink-psk-v1|".utf8) }
+    private static var serverProofPrefix: Data { Data("obstaclebridge-securelink-server-proof-v1|".utf8) }
+    private static var clientRekeyCommitProofPrefix: Data { Data("obstaclebridge-securelink-client-rekey-commit-v1|".utf8) }
 
     public static func keyDerivationInfo(sessionID: UInt64, clientNonce: Data, serverNonce: Data) -> Data {
         keyDerivationPrefix + sessionID.bigEndianData + clientNonce + serverNonce
