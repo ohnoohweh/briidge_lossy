@@ -85,6 +85,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     /// Device observations show Network Extension termination around this
     /// physical-footprint level. It is a risk threshold for WebAdmin, not an
     /// assertion about iOS's undocumented per-device memory budget.
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_runtime_status_projects_shared_runtime_metrics
     private static let physicalFootprintTerminationRiskBytes: UInt64 = 50 * 1_024 * 1_024
     private var packetPumpRunning = false
     private var packetPumpDroppedBeforeOverlay = 0

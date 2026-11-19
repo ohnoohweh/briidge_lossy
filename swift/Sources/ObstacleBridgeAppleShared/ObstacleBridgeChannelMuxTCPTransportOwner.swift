@@ -549,6 +549,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner: @unchecked Sendable {
             guard active, connectionIsCurrent(connection, chanID: chanID, role: role) else {
                 return
             }
+            // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_channel_mux_tcp_owner_keeps_network_callbacks_on_owner_queue
             let pending = pendingTCPWrites[chanID] ?? PendingTCPWrites()
             guard pending.buffers.append(payload) else {
                 self.eventSink?("\(self.eventPrefix)_tcp_write_queue_dropped", ["chan_id": chanID, "bytes": payload.count])
