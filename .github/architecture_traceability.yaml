@@ -43,6 +43,7 @@ ARC-CMP-001:
     - tests/unit/test_swift_memory_safety_guard.py::test_rejects_changed_stored_closure_that_strongly_captures_self
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeBoundedDataFIFOTests.swift::dropNewestKeepsRetainedBytesBoundedAndDrainsInOrder
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeBoundedDataFIFOTests.swift::keyedStoreCoalescesAndRejectsOverfill
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::handoffQueueDropsOverByteLimitAndReleasesOnStop
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayConnectionPolicyTests.swift::projectsAndUpdatesConnectionState
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxChannelIDAllocationTests.swift::splitsMaximumMyUDPRecordAtTheChannelMuxWireBoundary
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebSocketOverlayRuntimeTests.swift::clientLayerAdapterRequestsAndProjectsObservedPublicEndpoint
@@ -1254,6 +1255,7 @@ ARC-CMP-006:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionReceivesPeerFrameAfterAddressRegistration
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::workerDeliversEpochTaggedFramesAndCancelsBlockingReceive
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::asyncWorkerRearmsAfterEachDeliveredFrame
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::handoffQueueDropsOverByteLimitAndReleasesOnStop
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkReceivesProtectedPeerFrameBeforeLocalSend
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketSecureLinkReceivesProtectedPeerFrameBeforeLocalSend
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkReceivesProtectedPeerFrameBeforeLocalSend

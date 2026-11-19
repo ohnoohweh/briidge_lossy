@@ -27,7 +27,9 @@ public enum ObstacleBridgeLinuxMyUDPError: Error, Equatable, LocalizedError {
 public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private var descriptor: Int32
     private let peerRuntime: ObstacleBridgeUdpOverlayPeerRuntime
-    private var deliveredPayloads: [Data] = []
+    private let deliveredPayloads = ObstacleBridgeBoundedDataFIFO(limits: .init(
+        maximumItems: 256, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
+    ))
     private let stateLock = NSLock()
     private let receiveLock = NSLock()
     /// POSIX sends share the descriptor between the Core-effect producer and
@@ -35,8 +37,9 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     /// timer can retry them instead of converting local UDP congestion into a
     /// transport reconnect.
     private let outboundLock = NSLock()
-    private var pendingOutboundWires: [Data] = []
-    private let maximumPendingOutboundWires = 512
+    private let pendingOutboundWires = ObstacleBridgeBoundedDataFIFO(limits: .init(
+        maximumItems: 512, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
+    ))
     private let synchronousReceiveWaitMS: Int32
     private let asynchronousReceiveIdleTimeoutNS: UInt64
     /// Protected by `stateLock`; this deadline is owned by the readiness
@@ -173,8 +176,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         defer { receiveLock.unlock() }
         while true {
             stateLock.lock()
-            if !deliveredPayloads.isEmpty {
-                let payload = deliveredPayloads.removeFirst()
+            if let payload = deliveredPayloads.popFirst() {
                 stateLock.unlock()
                 return (0, payload)
             }
@@ -226,8 +228,8 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                 // established myUDP session alive; do the same here.
                 continue
             }
-            deliveredPayloads.append(contentsOf: effect.deliveredPayloads)
-            let payload = deliveredPayloads.isEmpty ? nil : deliveredPayloads.removeFirst()
+            for payload in effect.deliveredPayloads { _ = deliveredPayloads.append(payload) }
+            let payload = deliveredPayloads.popFirst()
             stateLock.unlock()
             receivedWire(wire, effect: effect, operation: "receive")
             try execute(effect.emittedFrames)
@@ -286,6 +288,8 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     }
 
     private func drainReadyDatagrams(_ handler: @escaping (Result<Data, Error>) -> Void) {
+        var drainedPackets = 0
+        var drainedBytes = 0
         while true {
             var buffer = [UInt8](repeating: 0, count: 1_452)
             // Dispatch readiness can be stale after close or an adjacent
@@ -318,6 +322,14 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                 handler(.failure(error))
                 return
             }
+            drainedPackets += 1
+            drainedBytes += Int(received)
+            if drainedPackets >= 64 || drainedBytes >= 2 * 1_024 * 1_024 {
+                // Keep each readiness turn bounded even when the socket stays
+                // readable continuously. DispatchSourceRead is level-triggered,
+                // so returning lets its next readiness turn drain the fd.
+                return
+            }
         }
     }
 
@@ -347,9 +359,8 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             // not tear down an authenticated overlay epoch.
             return []
         }
-        deliveredPayloads.append(contentsOf: effect.deliveredPayloads)
-        let payloads = deliveredPayloads
-        deliveredPayloads.removeAll(keepingCapacity: true)
+        for payload in effect.deliveredPayloads { _ = deliveredPayloads.append(payload) }
+        let payloads = deliveredPayloads.drainAll()
         stateLock.unlock()
         receivedWire(wire, effect: effect, operation: "async_receive")
         try execute(effect.emittedFrames)
@@ -389,11 +400,18 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
 
     public func protocolStatsSnapshot() -> [String: UInt64] {
         stateLock.lock(); defer { stateLock.unlock() }
-        return peerRuntime.protocolStatsSnapshot().reduce(into: [:]) { result, entry in
+        var stats: [String: UInt64] = peerRuntime.protocolStatsSnapshot().reduce(into: [:]) { result, entry in
             if let value = entry.value as? Int { result[entry.key] = UInt64(max(0, value)) }
             else if let value = entry.value as? UInt64 { result[entry.key] = value }
             else if let value = entry.value as? Double { result[entry.key] = UInt64(max(0, value.rounded())) }
         }
+        outboundLock.lock()
+        let outbound = pendingOutboundWires.counters
+        outboundLock.unlock()
+        stats["linux_pending_outbound_wires"] = UInt64(outbound.retainedItems)
+        stats["linux_pending_outbound_wire_bytes"] = UInt64(outbound.retainedBytes)
+        stats["linux_pending_outbound_wire_drops"] = UInt64(outbound.droppedItems)
+        return stats
     }
 
     /// Counts the frame at the myUDP/SecureLink boundary, rather than at an
@@ -430,9 +448,9 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private func drainPendingOutboundWires() throws {
         outboundLock.lock()
         defer { outboundLock.unlock() }
-        while let wire = pendingOutboundWires.first {
+        while let wire = pendingOutboundWires.snapshot().first {
             guard try sendWireLocked(wire) else { return }
-            pendingOutboundWires.removeFirst()
+            _ = pendingOutboundWires.popFirst()
         }
     }
 
@@ -462,7 +480,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     }
 
     private func enqueueDeferredWireLocked(_ wire: Data, reason: String) {
-        guard pendingOutboundWires.count < maximumPendingOutboundWires else {
+        guard pendingOutboundWires.append(wire) else {
             // Core's reliable retransmission timer will regenerate a dropped
             // frame.  Do not retire the authenticated epoch merely because
             // the local UDP socket remains congested.
@@ -470,11 +488,10 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                 "reason": "deferred_queue_full",
                 "wire_bytes": String(wire.count),
                 "pending_wire_count": String(pendingOutboundWires.count),
-                "pending_wire_limit": String(maximumPendingOutboundWires),
+                "pending_wire_limit": String(pendingOutboundWires.limits.maximumItems),
             ]))
             return
         }
-        pendingOutboundWires.append(wire)
         diagnostic(.debug, "myudp.send_deferred_queued", diagnosticFields([
             "reason": reason,
             "wire_bytes": String(wire.count),

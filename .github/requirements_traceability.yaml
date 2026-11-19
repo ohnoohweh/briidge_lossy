@@ -935,6 +935,7 @@ REQ-LIFE-005:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusReflectsConnectAndDisconnectTransitions
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::workerDeliversEpochTaggedFramesAndCancelsBlockingReceive
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::handoffQueueDropsOverByteLimitAndReleasesOnStop
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpDuplexSessionReceivesPeerFrameBeforeLocalSend
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketDuplexSessionReceivesPeerFrameBeforeLocalSend
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionReceivesPeerFrameAfterAddressRegistration
@@ -1170,6 +1171,7 @@ REQ-LIFE-010:
     - tests/unit/test_swift_memory_safety_guard.py::test_reports_unowned_self_as_review_warning
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeBoundedDataFIFOTests.swift::dropNewestKeepsRetainedBytesBoundedAndDrainsInOrder
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeBoundedDataFIFOTests.swift::keyedStoreCoalescesAndRejectsOverfill
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::handoffQueueDropsOverByteLimitAndReleasesOnStop
     - ios/tests/test_m3_native_sources.py::test_overlay_connection_drivers_keep_callbacks_on_owner_queue
     - ios/tests/test_m3_native_sources.py::test_native_proxy_connections_keep_callbacks_on_owner_queue
     - ios/tests/test_m3_native_sources.py::test_web_admin_server_callbacks_keep_owner_queue
