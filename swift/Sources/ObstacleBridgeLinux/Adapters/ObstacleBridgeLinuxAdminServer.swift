@@ -66,6 +66,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
     private var clientSources: [Int32: DispatchSourceRead] = [:]
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxAdminServerTests
     private var clientRequests: [Int32: ObstacleBridgeBoundedDataFIFO] = [:]
     private var cachedRuntimeMetricsSnapshot: [String: Any] = [:]
     public private(set) var port: Int = 0

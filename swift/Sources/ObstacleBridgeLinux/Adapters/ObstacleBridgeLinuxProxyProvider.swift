@@ -34,6 +34,7 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
         private var remoteRead: DispatchSourceRead?
         private var clientWrite: DispatchSourceWrite?
         private var remoteWrite: DispatchSourceWrite?
+        // OBSTACLEBRIDGE-CONCURRENCY: actor; test=ObstacleBridgeLinuxProxyProviderTests
         private var activeToClient = Data()
         private var activeToRemote = Data()
         private let pendingToClient = ObstacleBridgeBoundedDataFIFO(limits: .init(maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60))

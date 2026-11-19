@@ -26,7 +26,7 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
     typealias StaticFileProvider = (String) -> (contentType: String, body: Data)?
     typealias LiveTopicProvider = (String) -> Any?
 
-    private struct HTTPRequest {
+    private struct HTTPRequest: Sendable {
         let method: String
         let path: String
         let headers: [String: String]
@@ -36,28 +36,28 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
     /// The request receiver owns the bytes accumulated before a complete HTTP
     /// request is parsed. Keeping it explicit makes WebAdmin's short-lived
     /// request buffer visible without retaining request history.
-    // `NWConnection.receive` invokes this continuation on the server's serial
-    // queue. The state never escapes that queue; spell this out for strict
-    // concurrency instead of allowing its short-lived request buffer to be
-    // captured as an implicitly non-Sendable value.
-    private final class HTTPRequestReceiveState: @unchecked Sendable {
-        var buffer = Data()
-        private var items = 0
+    // An actor makes this state safe to capture by Network.framework's
+    // continuation. The owning server queue schedules the next receive only
+    // after this actor has processed the preceding callback.
+    // OBSTACLEBRIDGE-CONCURRENCY: actor; test=test_web_admin_server_callbacks_keep_owner_queue
+    private actor HTTPRequestReceiveState {
+        private var buffer = Data()
 
         func append(_ data: Data) {
             guard !data.isEmpty else { return }
             buffer.append(data)
-            items += 1
         }
 
-        func release() {
+        func takeRequest() -> HTTPRequest? {
+            guard let request = ObstacleBridgeWebAdminServer.parseHTTPRequest(from: buffer) else {
+                return nil
+            }
             buffer.removeAll(keepingCapacity: false)
-            items = 0
+            return request
         }
 
         func discard() {
             buffer.removeAll(keepingCapacity: false)
-            items = 0
         }
     }
 
@@ -367,25 +367,30 @@ final class ObstacleBridgeWebAdminServer: @unchecked Sendable {
 
     private func receiveHTTPRequest(_ connection: NWConnection, state: HTTPRequestReceiveState) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { [weak self] data, _, isComplete, error in
-            guard let self else {
-                state.discard()
-                connection.cancel()
-                return
+            Task { [weak self, state, connection] in
+                guard let self else {
+                    await state.discard()
+                    connection.cancel()
+                    return
+                }
+                if let data, !data.isEmpty {
+                    await state.append(data)
+                }
+                if let request = await state.takeRequest() {
+                    self.queue.async { [weak self] in
+                        self?.handleRequest(request, connection: connection)
+                    }
+                    return
+                }
+                if isComplete || error != nil {
+                    await state.discard()
+                    connection.cancel()
+                    return
+                }
+                self.queue.async { [weak self] in
+                    self?.receiveHTTPRequest(connection, state: state)
+                }
             }
-            if let data, !data.isEmpty {
-                state.append(data)
-            }
-            if let request = Self.parseHTTPRequest(from: state.buffer) {
-                state.release()
-                self.handleRequest(request, connection: connection)
-                return
-            }
-            if isComplete || error != nil {
-                state.discard()
-                connection.cancel()
-                return
-            }
-            self.receiveHTTPRequest(connection, state: state)
         }
     }
 

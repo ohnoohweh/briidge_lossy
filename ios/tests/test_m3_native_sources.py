@@ -2033,7 +2033,8 @@ def test_web_admin_server_callbacks_keep_owner_queue() -> None:
     assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue") == 3
     assert "final class ObstacleBridgeWebAdminServer: @unchecked Sendable" in source
     assert "private final class LiveSession: @unchecked Sendable" in source
-    assert "private final class HTTPRequestReceiveState: @unchecked Sendable" in source
+    assert "private actor HTTPRequestReceiveState" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: actor; test=test_web_admin_server_callbacks_keep_owner_queue" in source
     assert "listener.start(queue: queue)" in source
     assert "private var outboundSendInFlight = false" in source
     assert "private let pendingOutboundFrames = ObstacleBridgeBoundedKeyedDataStore<String>" in source

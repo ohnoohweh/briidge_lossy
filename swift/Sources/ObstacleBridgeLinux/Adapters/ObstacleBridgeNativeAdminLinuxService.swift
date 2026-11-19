@@ -34,6 +34,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         private var topics: Set<String>
         private var nextDue: [String: TimeInterval] = [:]
         private var receiveBuffer = Data()
+        // OBSTACLEBRIDGE-CONCURRENCY: actor; test=ObstacleBridgeLinuxTunDeviceTests
         private var activeWrite = Data()
         private let pendingWrites = ObstacleBridgeBoundedDataFIFO(limits: .init(
             maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
@@ -227,6 +228,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
     private var clientSources: [Int32: DispatchSourceRead] = [:]
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxTunDeviceTests
     private var clientRequests: [Int32: ObstacleBridgeBoundedDataFIFO] = [:]
     private var liveSessions: [Int32: LiveSession] = [:]
     public private(set) var port: Int = 0

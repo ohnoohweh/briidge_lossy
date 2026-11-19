@@ -87,6 +87,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// while the client is still completing the lower peer-address exchange.
     /// Keep that frame until the single receive owner is active rather than
     /// treating it as handshake-only traffic.
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests
     private let handshakeDeliveredPayloads = ObstacleBridgeBoundedDataFIFO(limits: .init(
         maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
     ))

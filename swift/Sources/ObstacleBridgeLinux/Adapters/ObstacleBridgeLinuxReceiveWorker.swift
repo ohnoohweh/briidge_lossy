@@ -17,6 +17,7 @@ public struct ObstacleBridgeLinuxReceiveWorkerSnapshot: Equatable, Sendable {
 /// use its reader queue; readiness-driven transports supply callbacks. In both
 /// cases a bounded handoff queue keeps ChannelMux processing isolated.
 public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxReceiveWorkerTests
     private let epoch: UInt64
     private let receive: () throws -> Data
     private let asyncReceive: ((@escaping (Result<Data?, Error>) -> Void) -> Void)?
