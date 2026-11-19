@@ -26,6 +26,16 @@ struct ObstacleBridgeWorkerIPCTests {
         #expect(decoder.bufferedByteCount == 0)
     }
 
+    @Test func incrementalDecoderRejectsOversizedRetainedStreamAndReleasesIt() throws {
+        var decoder = ObstacleBridgeWorkerIPCStreamDecoder()
+        let overflow = Data(repeating: 0, count: ObstacleBridgeWorkerIPCStreamDecoder.maximumBufferedBytes + 1)
+
+        #expect(throws: ObstacleBridgeWorkerIPC.Failure.self) {
+            try decoder.append(overflow)
+        }
+        #expect(decoder.bufferedByteCount == 0)
+    }
+
     @Test func controlDecodeRejectsDuplicateObjectMembersAtEveryDepth() throws {
         for payload in [
             #"{"op":"SNAPSHOT","op":"STOP","payload":{}}"#,

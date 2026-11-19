@@ -479,6 +479,10 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         secureLinkAdapter?.pendingPayloadCount() ?? 0
     }
 
+    func pendingSecureLinkPayloadBytes() -> Int {
+        secureLinkAdapter?.pendingPayloadBytes() ?? 0
+    }
+
     private func observeTransportState(connected: Bool, reason: String = "transport_state") {
         let nextState: ObstacleBridgeConnectionLifecycleState = connected ? .connected : .disconnected
         guard transportLifecycle.state != nextState else {

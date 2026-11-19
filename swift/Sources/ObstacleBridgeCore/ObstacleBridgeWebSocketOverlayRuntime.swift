@@ -84,8 +84,7 @@ public final class ObstacleBridgeWebSocketOverlayRuntime {
     private let sendTimeoutS: Double
     private let tcpUserTimeoutMS: Int
     private let reconnectGraceS: Double
-    private var earlyBuf: [Data] = []
-    private var earlyBufBytes = 0
+    private let earlyBuf: ObstacleBridgeBoundedDataFIFO
     private var txBytes = 0
     private var disconnectScheduled = false
     private var overlayConnected = false
@@ -104,6 +103,11 @@ public final class ObstacleBridgeWebSocketOverlayRuntime {
         self.payloadMode = payloadMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.corePayloadMode = try ObstacleBridgeWebSocketPayloadCodec.mode(self.payloadMode)
         self.frameMaxSize = ObstacleBridgeWebSocketPayloadCodec.maximumEncodedSize(wsMaxSize, mode: self.corePayloadMode)
+        self.earlyBuf = .init(limits: .init(
+            maximumItems: 128,
+            maximumBytes: max(1_024, self.frameMaxSize * 16),
+            maximumAge: 30
+        ))
         self.sendTimeoutS = max(0.0, sendTimeoutS)
         self.tcpUserTimeoutMS = max(0, tcpUserTimeoutMS)
         self.reconnectGraceS = max(0.0, reconnectGraceS)
@@ -205,14 +209,11 @@ public final class ObstacleBridgeWebSocketOverlayRuntime {
     }
 
     func bufferEarly(_ wire: Data) {
-        earlyBuf.append(wire)
-        earlyBufBytes += wire.count
+        _ = earlyBuf.append(wire)
     }
 
     func flushEarly(sendWillTimeout: Bool = false) throws -> SendSnapshot {
-        let pending = earlyBuf
-        earlyBuf.removeAll()
-        earlyBufBytes = 0
+        let pending = earlyBuf.drainAll()
         return try sendWires(pending, sendWillTimeout: sendWillTimeout)
     }
 
@@ -247,7 +248,7 @@ public final class ObstacleBridgeWebSocketOverlayRuntime {
             sentPayloadKinds: payloadKinds,
             sentPayloadValues: payloadValues,
             closeCalls: closeCalls,
-            earlyBufBytes: earlyBufBytes
+            earlyBufBytes: earlyBuf.byteCount
         )
     }
 

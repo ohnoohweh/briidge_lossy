@@ -82,6 +82,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         excludedRoutes6: defaultExcludedRoutes6,
     )
     private let errorDomain = "ObstacleBridge.IPServer"
+    /// Device observations show Network Extension termination around this
+    /// physical-footprint level. It is a risk threshold for WebAdmin, not an
+    /// assertion about iOS's undocumented per-device memory budget.
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_runtime_status_projects_shared_runtime_metrics
+    private static let physicalFootprintTerminationRiskBytes: UInt64 = 50 * 1_024 * 1_024
     private var packetPumpRunning = false
     private var packetPumpDroppedBeforeOverlay = 0
     private var providerStateUpdateCount = 0
@@ -189,6 +194,26 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         ObstacleBridgeRuntimeConfig.nativeChannelMuxDiagnosticsEnabled(
             runtimeConfig: adminRuntimeConfigPayload() ?? [:]
         )
+    }
+
+    /// SecureLink observes every data frame. Keep warning evidence available,
+    /// but do not even materialize debug/info diagnostic dictionaries unless
+    /// the operator explicitly enables high-rate ChannelMux diagnostics.
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
+    private func nativeRuntimeDiagnosticEnabled(_ level: ObstacleBridgeRuntimeDiagnosticLevel) -> Bool {
+        ObstacleBridgeRuntimeConfig.nativeRuntimeDiagnosticEnabled(
+            levelName: level.name,
+            runtimeConfig: adminRuntimeConfigPayload() ?? [:]
+        )
+    }
+
+    private func recordNativeRuntimeDiagnostic(
+        level: ObstacleBridgeRuntimeDiagnosticLevel,
+        event: String,
+        fields: [String: Any]
+    ) {
+        guard nativeRuntimeDiagnosticEnabled(level) else { return }
+        recordNativeEvent(event, fields: fields.merging(["log_level": level.name]) { _, latest in latest })
     }
 
     private func providerStateURL() -> URL? {
@@ -358,6 +383,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         ) else {
             return
         }
+        // Claim a bounded slot before constructing JSON or Data.  This method
+        // can be called from a packet callback, where allocating a discarded
+        // log record for every packet would itself look like traffic-linked
+        // memory growth.
+        nativeProviderLogPendingLock.lock()
+        guard nativeProviderLogPendingWrites < Self.nativeProviderLogMaximumPendingWrites else {
+            nativeProviderLogPendingLock.unlock()
+            return
+        }
+        nativeProviderLogPendingWrites += 1
+        nativeProviderLogPendingLock.unlock()
+        func releasePendingWriteSlot() {
+            nativeProviderLogPendingLock.lock()
+            nativeProviderLogPendingWrites -= 1
+            nativeProviderLogPendingLock.unlock()
+        }
         let logURL = containerURL
             .appendingPathComponent("logs", isDirectory: true)
             .appendingPathComponent("ipserver-native-provider.jsonl")
@@ -369,16 +410,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
               let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
               let text = String(data: data, encoding: .utf8)
         else {
+            releasePendingWriteSlot()
             return
         }
         let line = Data((text + "\n").utf8)
-        nativeProviderLogPendingLock.lock()
-        guard nativeProviderLogPendingWrites < Self.nativeProviderLogMaximumPendingWrites else {
-            nativeProviderLogPendingLock.unlock()
-            return
-        }
-        nativeProviderLogPendingWrites += 1
-        nativeProviderLogPendingLock.unlock()
         nativeProviderLogQueue.async { [weak self] in
             guard let self else { return }
             defer {
@@ -665,8 +700,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             let shouldRecordHeartbeat: Bool
             let shouldUpdateState: Bool
             if self.swiftUDPRuntimeActive {
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
                 shouldRecordHeartbeat = self.heartbeatTickCount <= 3 || (self.heartbeatTickCount % 5) == 0
-                shouldUpdateState = self.heartbeatTickCount <= 3 || (self.heartbeatTickCount % 15) == 0
+                // Persisting a full provider snapshot is intentionally a
+                // low-rate lifecycle/health operation.  It includes atomic
+                // file writes and JSON encoding, so it must never track the
+                // packet rate.
+                shouldUpdateState = self.heartbeatTickCount <= 3 || (self.heartbeatTickCount % 30) == 0
             } else {
                 shouldRecordHeartbeat = true
                 shouldUpdateState = true
@@ -1147,23 +1187,26 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                     let proto = index < protocols.count ? protocols[index] : NSNumber(value: AF_INET)
                     ObstacleBridgePacketFlowBridge.enqueueIncomingPacket(packet, protocolFamily: proto)
                 }
-                self.recordNativeEvent(
-                    "packet_pump_forwarded_packets",
-                    fields: [
-                        "packet_count": packets.count,
-                        "protocol_count": protocols.count,
-                        "total_bytes": totalBytes,
-                    ]
-                )
-                if packets.count >= 32 || totalBytes >= 32768 {
-                    self.updateProviderState(
+                // This callback is directly proportional to traffic and is
+                // shared by every overlay transport.  Keep the record strictly
+                // opt-in; otherwise NSLog and JSON serialization become a
+                // per-packet allocation source.
+                if self.nativePacketDiagnosticsEnabled() {
+                    self.recordNativeEvent(
                         "packet_pump_forwarded_packets",
-                        extraFields: [
+                        fields: [
                             "packet_count": packets.count,
+                            "protocol_count": protocols.count,
                             "total_bytes": totalBytes,
                         ]
                     )
                 }
+                // Do not persist provider state from this callback.  Large
+                // traffic batches are normal and used to trigger full JSON
+                // snapshots plus two atomic file writes per batch.  WebAdmin
+                // already reads the aggregate packet/byte counters from the
+                // bounded bridge snapshot; lifecycle state is persisted by
+                // the 30-second heartbeat instead.
             }
             self.readPackets()
         }
@@ -1245,6 +1288,29 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             payload["compressed_bytes"] = vmInfo.compressed
             payload["reusable_bytes"] = vmInfo.reusable
         }
+
+        // `phys_footprint` says whether iOS is approaching its extension
+        // budget, but it cannot tell whether the growth is live Swift/CF heap
+        // state or VM/allocator retention.  The default-zone totals are cheap
+        // to sample and let WebAdmin distinguish those cases without retaining
+        // allocation histories in the extension.
+        var mallocStats = malloc_statistics_t()
+        malloc_zone_statistics(malloc_default_zone(), &mallocStats)
+        payload["memory_diagnostics"] = [
+            "malloc_default_zone": [
+                "blocks_in_use": mallocStats.blocks_in_use,
+                "size_in_use": mallocStats.size_in_use,
+                "size_allocated": mallocStats.size_allocated,
+                "max_size_in_use": mallocStats.max_size_in_use,
+            ],
+            "vm": [
+                "resident_size": payload["resident_size"] ?? NSNull(),
+                "phys_footprint": payload["phys_footprint"] ?? NSNull(),
+                "internal_bytes": payload["internal_bytes"] ?? NSNull(),
+                "compressed_bytes": payload["compressed_bytes"] ?? NSNull(),
+                "reusable_bytes": payload["reusable_bytes"] ?? NSNull(),
+            ],
+        ]
 
         return payload
     }
@@ -1486,7 +1552,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                     retryBackoffMaxMS: retryBackoffMaxMS,
                     // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
                     diagnosticSink: { [weak self] level, event, fields in
-                        self?.recordNativeEvent(event, fields: fields.merging(["log_level": level.name]) { _, latest in latest })
+                        self?.recordNativeRuntimeDiagnostic(level: level, event: event, fields: fields)
+                    },
+                    diagnosticEnabled: { level in
+                        ObstacleBridgeRuntimeConfig.nativeRuntimeDiagnosticEnabled(
+                            levelName: level.name,
+                            runtimeConfig: payload
+                        )
                     }
                 )
                 summary["secure_link_runtime"] = "ready"
@@ -1507,7 +1579,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                 transportDelayRotationThresholdMS: ObstacleBridgeRuntimeConfig.doubleValue(from: payload["channelmux_transport_delay_threshold_ms"]) ?? 5000.0,
                 transportDelayRotationGrace: (ObstacleBridgeRuntimeConfig.doubleValue(from: payload["channelmux_transport_delay_rotation_delay_ms"]) ?? 30000.0) / 1000.0,
                 diagnosticSink: { [weak self] level, event, fields in
-                    self?.recordNativeEvent(event, fields: fields.merging(["log_level": level.name]) { _, latest in latest })
+                    self?.recordNativeRuntimeDiagnostic(level: level, event: event, fields: fields)
                 }
             )
             summary["peer_address_protocol_runtime"] = "ready"
@@ -1930,7 +2002,10 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
 
     private func adminStatusSnapshotUncached(bridgeSnapshot: [String: Any]? = nil) -> [String: Any] {
         // OBSTACLEBRIDGE-CONCURRENCY: serial; test=projectsPythonCompatibleBoundedMemoryMetrics
-        ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics()
+        ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics(
+            memoryMeasurement: .physicalFootprint,
+            memoryWarningLimitBytes: Self.physicalFootprintTerminationRiskBytes
+        )
         let bridgeSnapshot = bridgeSnapshot ?? adminBridgeSnapshot()
         let packetProcessingActive = adminPacketProcessingActive(bridgeSnapshot: bridgeSnapshot)
         let runtimeHealth = runtimeHealthAdminFields()
@@ -3447,6 +3522,11 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
     private static let queueKey = DispatchSpecificKey<UInt8>()
     private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
     private static let tunProbeIdentifier: UInt16 = UInt16.random(in: 1...UInt16.max)
+    // A socket can remain readable indefinitely under sustained traffic.  The
+    // packet-device API takes an owned `[Data]`, so draining until EAGAIN would
+    // materialize an unbounded temporary batch in the Network Extension heap.
+    private static let maximumSocketDrainPackets = 64
+    private static let maximumSocketDrainBytes = 512 * 1024
     private weak var provider: PacketTunnelProvider?
     private let settings: SwiftSimpleUDPPeerSettings
     private let selectedTransport: String
@@ -3454,7 +3534,7 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
     private let tunnelAddress6: String
     private let tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec]
     private let udpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec]
-    private let startupMuxFrames: [Data]
+    private let startupMuxFrames: ObstacleBridgeBoundedDataFIFO
     private let muxInstanceID: UInt64
     private let muxConnectionSeq: UInt32
     private let queue = DispatchQueue(label: "com.obstaclebridge.ipserver.swift-simple-udp-peer")
@@ -3540,7 +3620,9 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
         self.tunnelAddress6 = tunnelAddress6
         self.tcpServiceSpecs = tcpServiceSpecs
         self.udpServiceSpecs = udpServiceSpecs
-        self.startupMuxFrames = startupMuxFrames
+        let boundedStartupMuxFrames = ObstacleBridgeBoundedDataFIFO(limits: .init(maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024))
+        for frame in startupMuxFrames { _ = boundedStartupMuxFrames.append(frame) }
+        self.startupMuxFrames = boundedStartupMuxFrames
         self.muxInstanceID = muxInstanceID
         self.muxConnectionSeq = muxConnectionSeq
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
@@ -3564,7 +3646,7 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
                     reconnectRetryDelayMS: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
                     sessionMaxAppPayload: sessionMaxAppPayload,
                     overlayLayerTransportAdapter: overlayLayerTransportAdapter,
-                    startupMuxFrames: startupMuxFrames,
+                    startupMuxFrames: self.startupMuxFrames.snapshot(),
                     startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in
                         guard let self else { return [] }
                         return ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(
@@ -3614,7 +3696,7 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
                     reconnectRetryDelayMS: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
                     sessionMaxAppPayload: sessionMaxAppPayload,
                     overlayLayerTransportAdapter: overlayLayerTransportAdapter,
-                    startupMuxFrames: startupMuxFrames,
+                    startupMuxFrames: self.startupMuxFrames.snapshot(),
                     startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in
                         guard let self else { return [] }
                         return ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(
@@ -3653,7 +3735,7 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
                         reconnectRetryDelayMS: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
                         sessionMaxAppPayload: sessionMaxAppPayload,
                         overlayLayerTransportAdapter: overlayLayerTransportAdapter,
-                        startupMuxFrames: startupMuxFrames,
+                        startupMuxFrames: self.startupMuxFrames.snapshot(),
                         startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in
                             guard let self else { return [] }
                             return ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(
@@ -3701,7 +3783,7 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
                     sessionMaxAppPayload: sessionMaxAppPayload,
                     maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: settings.runtimeConfig),
                     overlayLayerTransportAdapter: overlayLayerTransportAdapter,
-                    startupMuxFrames: startupMuxFrames,
+                    startupMuxFrames: self.startupMuxFrames.snapshot(),
                     startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in
                         guard let self else { return [] }
                         return ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(
@@ -4426,7 +4508,9 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
         var totalBytes = 0
         var buffer = [UInt8](repeating: 0, count: 65535)
 
-        while started {
+        while started,
+              packets.count < Self.maximumSocketDrainPackets,
+              totalBytes < Self.maximumSocketDrainBytes {
             var fromStorage = sockaddr_storage()
             var fromLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
             let received = withUnsafeMutablePointer(to: &fromStorage) { fromPtr -> Int in

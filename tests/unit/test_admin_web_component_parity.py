@@ -44,10 +44,11 @@ def test_runtime_analysis_renders_optional_memory_metrics_without_affecting_olde
     markup = (ROOT / "admin_web" / "index.html").read_text(encoding="utf-8")
     script = (ROOT / "admin_web" / "app.js").read_text(encoding="utf-8")
     assert 'id="memoryMeter"' in markup
-    assert 'src="app.js?v=20261116a"' in markup
+    assert 'src="app.js?v=20261119a"' in markup
     assert "const memory = metrics.memory_bytes;" in script
-    assert "memory?.warning_limit == null ? null" in script
-    assert "Memory — peak since start" in script
+    assert "memory?.measurement_kind === 'physical_footprint'" in script
+    assert "Observed termination-risk threshold" in script
+    assert "Risk threshold reached" in script
     assert "function fmtMemoryBytes(value)" in script
 
 

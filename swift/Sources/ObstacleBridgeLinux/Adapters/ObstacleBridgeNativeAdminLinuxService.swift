@@ -34,7 +34,11 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
         private var topics: Set<String>
         private var nextDue: [String: TimeInterval] = [:]
         private var receiveBuffer = Data()
-        private var pendingWrite = Data()
+        // OBSTACLEBRIDGE-CONCURRENCY: actor; test=ObstacleBridgeLinuxTunDeviceTests
+        private var activeWrite = Data()
+        private let pendingWrites = ObstacleBridgeBoundedDataFIFO(limits: .init(
+            maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
+        ))
         private var closeAfterWrite = false
         private var readSource: DispatchSourceRead?
         private var writeSource: DispatchSourceWrite?
@@ -51,7 +55,7 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             } else {
                 self.topics = Set(ObstacleBridgeNativeAdminLinuxService.initialLiveTopics)
             }
-            self.pendingWrite = handshake
+            self.activeWrite = handshake
         }
 
         func start() {
@@ -146,14 +150,20 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             if payload.count < 126 { frame.append(UInt8(payload.count)) }
             else { frame.append(126); var length = UInt16(payload.count).bigEndian; frame.append(Data(bytes: &length, count: 2)) }
             frame.append(payload)
-            pendingWrite.append(frame)
+            if activeWrite.isEmpty {
+                activeWrite = frame
+            } else if !pendingWrites.append(frame) {
+                finish()
+                return
+            }
             flushOutput()
         }
 
         private func flushOutput() {
-            while !pendingWrite.isEmpty {
-                let count = pendingWrite.withUnsafeBytes { write(client, $0.baseAddress, pendingWrite.count) }
-                if count > 0 { pendingWrite.removeFirst(Int(count)); continue }
+            while !activeWrite.isEmpty || !pendingWrites.isEmpty {
+                if activeWrite.isEmpty, let next = pendingWrites.popFirst() { activeWrite = next }
+                let count = activeWrite.withUnsafeBytes { write(client, $0.baseAddress, activeWrite.count) }
+                if count > 0 { activeWrite.removeFirst(Int(count)); continue }
                 if count < 0, errno == EINTR { continue }
                 if count < 0, errno == EAGAIN || errno == EWOULDBLOCK { installWriteSource(); return }
                 finish()
@@ -174,11 +184,13 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
 
         private func finish(afterPendingWrites: Bool = false) {
             guard !stopped else { return }
-            if afterPendingWrites, !pendingWrite.isEmpty {
+            if afterPendingWrites, !activeWrite.isEmpty || !pendingWrites.isEmpty {
                 closeAfterWrite = true
                 return
             }
             stopped = true
+            activeWrite.removeAll(keepingCapacity: false)
+            pendingWrites.removeAll()
             timer?.cancel(); timer = nil
             readSource?.cancel(); readSource = nil
             writeSource?.cancel(); writeSource = nil
@@ -216,7 +228,8 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
     private var clientSources: [Int32: DispatchSourceRead] = [:]
-    private var clientRequests: [Int32: Data] = [:]
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxTunDeviceTests
+    private var clientRequests: [Int32: ObstacleBridgeBoundedDataFIFO] = [:]
     private var liveSessions: [Int32: LiveSession] = [:]
     public private(set) var port: Int = 0
 
@@ -323,8 +336,10 @@ public final class ObstacleBridgeNativeAdminLinuxService: @unchecked Sendable {
             var buffer = [UInt8](repeating: 0, count: 16 * 1024)
             let received = recv(client, &buffer, buffer.count, Int32(MSG_DONTWAIT))
             if received > 0 {
-                clientRequests[client, default: Data()].append(buffer, count: Int(received))
-                guard let request = clientRequests[client], request.count <= 65_536 else { closeClientRequest(client); return }
+                let requestFIFO = clientRequests[client] ?? ObstacleBridgeBoundedDataFIFO(limits: .init(maximumItems: 4, maximumBytes: 65_536, maximumAge: 15))
+                guard requestFIFO.append(Data(buffer.prefix(Int(received)))) else { closeClientRequest(client); return }
+                clientRequests[client] = requestFIFO
+                let request = requestFIFO.snapshot().reduce(into: Data()) { $0.append($1) }
                 guard let headerRange = request.range(of: Data("\r\n\r\n".utf8)) else { continue }
                 let header = String(data: request[..<headerRange.lowerBound], encoding: .utf8) ?? ""
                 let contentLength = header.split(separator: "\r\n").dropFirst().compactMap { line -> Int? in

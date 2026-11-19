@@ -896,6 +896,9 @@ private final class POSIXTCPFrameDecoder {
     private var buffered = Data()
 
     func append(_ bytes: Data) throws -> [Data] {
+        guard buffered.count + bytes.count <= ObstacleBridgeOverlayFrameCodec.maximumBodyLength + 4 else {
+            throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+        }
         buffered.append(bytes)
         var frames: [Data] = []
         while buffered.count >= 4 {
@@ -922,6 +925,9 @@ private final class POSIXWebSocketFrameDecoder {
     enum Frame { case payload(ObstacleBridgeWebSocketPayload), ping(Data) }
 
     func append(_ bytes: Data) throws -> [Frame] {
+        guard buffered.count + bytes.count <= 1_048_576 + 10 else {
+            throw ObstacleBridgeLinuxOverlayTransportError.webSocketProtocolError
+        }
         buffered.append(bytes)
         var frames: [Frame] = []
         while buffered.count >= 2 {

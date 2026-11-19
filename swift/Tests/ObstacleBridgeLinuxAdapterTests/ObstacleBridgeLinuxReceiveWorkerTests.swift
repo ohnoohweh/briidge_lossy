@@ -65,6 +65,44 @@ struct ObstacleBridgeLinuxReceiveWorkerTests {
         #expect(source.registrations >= 3)
     }
 
+    @Test func handoffQueueDropsOverByteLimitAndReleasesOnStop() async {
+        let source = AsyncReceiveSource()
+        let sinkStarted = DispatchSemaphore(value: 0)
+        let allowSink = DispatchSemaphore(value: 0)
+        let worker = ObstacleBridgeLinuxReceiveWorker(
+            epoch: 11,
+            capacity: 2,
+            maximumQueuedBytes: 5,
+            receive: { throw WorkerError.stopped },
+            asyncReceive: source.register,
+            cancelReceive: {},
+            sink: { _, _ in
+                sinkStarted.signal()
+                allowSink.wait()
+            }
+        )
+
+        worker.start()
+        #expect(source.waitForRegistration(timeout: 2))
+        source.completeNext(.success(Data("one".utf8)))
+        #expect(sinkStarted.wait(timeout: .now() + 2) == .success)
+        #expect(source.waitForRegistration(timeout: 2))
+        source.completeNext(.success(Data("two".utf8)))
+        #expect(source.waitForRegistration(timeout: 2))
+        source.completeNext(.success(Data("three".utf8)))
+
+        let overfilled = worker.snapshot()
+        #expect(overfilled.queueDepth == 1)
+        #expect(overfilled.queuedBytes == 3)
+        #expect(overfilled.droppedFrames == 1)
+
+        worker.stop()
+        let stopped = worker.snapshot()
+        #expect(stopped.queueDepth == 0)
+        #expect(stopped.queuedBytes == 0)
+        allowSink.signal()
+    }
+
     private enum WorkerError: Error { case stopped }
 }
 

@@ -204,6 +204,8 @@ public struct ObstacleBridgeMyUDPOutboundBatch: Equatable, Sendable {
 /// Non-Sendable protocol state, retained by one peer engine and mutated by
 /// that peer's serialized transport owner.
 public final class ObstacleBridgeMyUDPSendQueue {
+    public static let maximumQueuedRecords = 2_048
+    public static let maximumQueuedBytes = 2 * 1_024 * 1_024
     private struct QueuedRecord: Sendable {
         var bytes: Data
         let queuedAtNanoseconds: UInt64
@@ -212,6 +214,7 @@ public final class ObstacleBridgeMyUDPSendQueue {
     public let maximumInFlight: Int
     public private(set) var nextCounter: UInt16
     private var records: [QueuedRecord] = []
+    private var queuedBytes = 0
 
     public init(nextCounter: UInt16 = 1, maximumInFlight: Int = 200) {
         self.nextCounter = nextCounter == 0 ? 1 : nextCounter
@@ -219,24 +222,32 @@ public final class ObstacleBridgeMyUDPSendQueue {
     }
 
     public var waitingRecordCount: Int { records.count }
+    public var waitingRecordBytes: Int { queuedBytes }
 
     public func reset() {
-        records.removeAll()
+        records.removeAll(); queuedBytes = 0
         nextCounter = 1
     }
 
     public func enqueue(_ payload: Data, queuedAtNanoseconds: UInt64) throws {
-        records.append(.init(bytes: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(payload), queuedAtNanoseconds: queuedAtNanoseconds))
+        let record = try ObstacleBridgeMyUDPCodec.encodeStreamRecord(payload)
+        guard records.count < Self.maximumQueuedRecords,
+              queuedBytes + record.count <= Self.maximumQueuedBytes else {
+            throw ObstacleBridgeMyUDPCodecError.payloadTooLarge
+        }
+        records.append(.init(bytes: record, queuedAtNanoseconds: queuedAtNanoseconds))
+        queuedBytes += record.count
     }
 
     /// Removes one bounded batch when there is room in the supplied flight
     /// window. `nil` means no queued work or no available counter slot.
-    public func dequeueBatch(inFlightCount: Int) -> ObstacleBridgeMyUDPOutboundBatch? {
+    public func dequeueBatch(inFlightCount: Int, maximumAdditionalPayloadBytes: Int = .max) -> ObstacleBridgeMyUDPOutboundBatch? {
         let slots = maximumInFlight - max(0, inFlightCount)
         guard slots > 0, !records.isEmpty else { return nil }
         var chunks: [ObstacleBridgeMyUDPStreamChunk] = []
         var consumed: [Int] = []
         var payloadUsed = ObstacleBridgeMyUDPCodec.batchHeaderSize
+        var retainedPayloadBytes = 0
         var recordIndex = 0
         var recordOffset = 0
         var counter = nextCounter
@@ -247,11 +258,13 @@ public final class ObstacleBridgeMyUDPSendQueue {
             guard recordOffset < record.count else { recordIndex += 1; recordOffset = 0; continue }
             let length = min(ObstacleBridgeMyUDPCodec.maximumPayloadSize, budget, record.count - recordOffset)
             guard length > 0 else { break }
+            guard retainedPayloadBytes + length <= maximumAdditionalPayloadBytes else { break }
             let start = record.index(record.startIndex, offsetBy: recordOffset)
             let end = record.index(start, offsetBy: length)
             let bytes = Data(record[start..<end])
             chunks.append(.init(counter: counter, payload: bytes))
             consumed.append(length)
+            retainedPayloadBytes += length
             payloadUsed += ObstacleBridgeMyUDPCodec.batchRecordLengthSize + ObstacleBridgeMyUDPCodec.chunkHeaderSize + length
             recordOffset += length
             if recordOffset == record.count { recordIndex += 1; recordOffset = 0 }
@@ -261,6 +274,7 @@ public final class ObstacleBridgeMyUDPSendQueue {
         let queuedAt = records[0].queuedAtNanoseconds
         for length in consumed {
             records[0].bytes.removeFirst(length)
+            queuedBytes = max(0, queuedBytes - length)
             if records[0].bytes.isEmpty { records.removeFirst() }
         }
         nextCounter = counter
@@ -282,8 +296,10 @@ public struct ObstacleBridgeMyUDPSenderFeedback: Equatable, Sendable {
 /// Non-Sendable protocol state, retained by one peer engine and mutated by
 /// that peer's serialized transport owner.
 public final class ObstacleBridgeMyUDPSenderLedger {
+    public static let maximumRetainedPayloadBytes = 2 * 1_024 * 1_024
     private let queue: ObstacleBridgeMyUDPSendQueue
     private var payloads: [UInt16: Data] = [:]
+    private var retainedPayloadBytes = 0
     private var firstTransmit: [UInt16: UInt64] = [:]
     private var pathStart: [UInt16: UInt64] = [:]
     private var attempts: [UInt16: Int] = [:]
@@ -303,7 +319,7 @@ public final class ObstacleBridgeMyUDPSenderLedger {
     public var sendAttempts: [UInt16: Int] { attempts }
     public var lastRetransmissionNanoseconds: [UInt16: UInt64] { lastRetransmission }
     public func reset() {
-        queue.reset(); payloads.removeAll(); firstTransmit.removeAll(); pathStart.removeAll()
+        queue.reset(); payloads.removeAll(); retainedPayloadBytes = 0; firstTransmit.removeAll(); pathStart.removeAll()
         attempts.removeAll(); lastRetransmission.removeAll(); peerReportedMissing.removeAll()
         lastSendNanoseconds = 0
         metrics = .init(transmitDelaySampleMilliseconds: 0, transmitDelayEstimateMilliseconds: 0,
@@ -312,9 +328,13 @@ public final class ObstacleBridgeMyUDPSenderLedger {
     }
     public func enqueue(_ payload: Data, at nowNanoseconds: UInt64) throws { try queue.enqueue(payload, queuedAtNanoseconds: nowNanoseconds) }
     public func dequeueBatch(nowNanoseconds: UInt64) -> ObstacleBridgeMyUDPOutboundBatch? {
-        guard let batch = queue.dequeueBatch(inFlightCount: payloads.count) else { return nil }
+        guard let batch = queue.dequeueBatch(
+            inFlightCount: payloads.count,
+            maximumAdditionalPayloadBytes: max(0, Self.maximumRetainedPayloadBytes - retainedPayloadBytes)
+        ) else { return nil }
         for chunk in batch.chunks {
             payloads[chunk.counter] = chunk.payload
+            retainedPayloadBytes += chunk.payload.count
             firstTransmit[chunk.counter] = nowNanoseconds
             pathStart[chunk.counter] = batch.queuedAtNanoseconds
             attempts[chunk.counter] = (attempts[chunk.counter] ?? 0) + 1
@@ -327,6 +347,7 @@ public final class ObstacleBridgeMyUDPSenderLedger {
         let retained = Set(plan.retainedCounters)
         metrics = ObstacleBridgeMyUDPConfirmationMetricsPolicy.finalize(confirmedCounters: Set(outstandingCounters).subtracting(retained), pathStartNanoseconds: pathStart, firstTransmitNanoseconds: firstTransmit, sendAttempts: attempts, acknowledgementNanoseconds: nowNanoseconds, rttEstimateMilliseconds: rttEstimateMilliseconds, prior: metrics)
         payloads = payloads.filter { retained.contains($0.key) }
+        retainedPayloadBytes = payloads.values.reduce(0) { $0 + $1.count }
         firstTransmit = firstTransmit.filter { retained.contains($0.key) }
         pathStart = pathStart.filter { retained.contains($0.key) }
         attempts = attempts.filter { retained.contains($0.key) }
@@ -647,6 +668,13 @@ public final class ObstacleBridgeMyUDPStreamReceiveState {
     }
 
     private func appendContiguous(_ bytes: Data, completed: inout [Data]) -> Bool {
+        // A partial record may retain at most its protocol-declared payload
+        // plus the fixed header.  Reject instead of accumulating malformed
+        // stream fragments indefinitely.
+        guard streamBuffer.count + bytes.count <= ObstacleBridgeMyUDPCodec.maximumStreamRecordSize + ObstacleBridgeMyUDPCodec.streamRecordHeaderSize else {
+            streamBuffer.removeAll(); expectedRecordLength = nil
+            return false
+        }
         streamBuffer.append(bytes)
         while true {
             if expectedRecordLength == nil {
@@ -914,7 +942,12 @@ public final class ObstacleBridgeMyUDPPeerEngine {
     private let sender: ObstacleBridgeMyUDPSenderLedger
     private let receiver: ObstacleBridgeMyUDPReceiverEngine
     private var lastIdleSentNanoseconds: UInt64 = 0
-    private var pendingDeliveredRecords: [Data] = []
+    private let pendingDeliveredRecords = ObstacleBridgeBoundedDataFIFO(limits: .init(
+        maximumItems: 512,
+        maximumBytes: 2 * 1_024 * 1_024,
+        maximumAge: 60,
+        overflowPolicy: .dropNewest
+    ))
     private var lastAcknowledgedByPeer: UInt16 = 0
 
     public init(
@@ -938,7 +971,7 @@ public final class ObstacleBridgeMyUDPPeerEngine {
     }
 
     public func resetEpoch() { sender.reset(); receiver.reset(); lastIdleSentNanoseconds = 0; pendingDeliveredRecords.removeAll(); lastAcknowledgedByPeer = 0 }
-    public func takeDeliveredRecord() -> Data? { pendingDeliveredRecords.isEmpty ? nil : pendingDeliveredRecords.removeFirst() }
+    public func takeDeliveredRecord() -> Data? { pendingDeliveredRecords.popFirst() }
 
     public func enqueueApplicationRecord(_ record: Data, nowNanoseconds: UInt64) throws {
         try sender.enqueue(record, at: nowNanoseconds)
@@ -1045,7 +1078,7 @@ public final class ObstacleBridgeMyUDPPeerEngine {
             category = .overlayReceiveData
             let data = try ObstacleBridgeMyUDPCodec.decodeDataChunks(wire)
             guard let inbound = receiver.processData(chunks: data.chunks, nowNanoseconds: nowNanoseconds, transmittedNanoseconds: data.transmittedNanoseconds, echoedNanoseconds: data.echoedNanoseconds, transportWritable: transportWritable) else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
-            pendingDeliveredRecords.append(contentsOf: inbound.completedRecords)
+            for record in inbound.completedRecords { _ = pendingDeliveredRecords.append(record) }
             let control = inbound.controlReasons.isEmpty ? [] : [try receiver.buildControlDatagram(nowNanoseconds: nowNanoseconds)]
             return .init(outboundDatagrams: control, outboundDataCounters: [], deliveredRecords: inbound.completedRecords, nextControlDeadlineNanoseconds: nil)
         case ObstacleBridgeMyUDPCodec.controlType:

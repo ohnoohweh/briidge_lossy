@@ -159,6 +159,7 @@ final class ObstacleBridgeProxyServer: @unchecked Sendable {
 /// A connection pair whose state is accessed only from the server queue.
 private final class ProxySession: @unchecked Sendable {
     // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue
     private let inbound: NWConnection
     private let configuration: ObstacleBridgeProxyServer.Configuration
     private let queue: DispatchQueue
@@ -169,6 +170,8 @@ private final class ProxySession: @unchecked Sendable {
     private var closed = false
     private var inboundReady = false
     private var outboundReady = false
+    private lazy var inboundSender = ObstacleBridgeBoundedConnectionDataSender(connection: inbound)
+    private var outboundSender: ObstacleBridgeBoundedConnectionDataSender?
 
     init(
         inbound: NWConnection,
@@ -257,7 +260,7 @@ private final class ProxySession: @unchecked Sendable {
             response.append(Data("Proxy-Authenticate: Basic realm=\"ObstacleBridge\"\r\n".utf8))
             response.append(Data("Content-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8))
             response.append(body)
-            inbound.send(content: response, completion: .contentProcessed { [weak self] _ in self?.finish(error: "proxy authentication required") })
+            sendInbound(response) { [weak self] _ in self?.finish(error: "proxy authentication required") }
             return
         }
         if request.method.uppercased() == "CONNECT" {
@@ -269,7 +272,7 @@ private final class ProxySession: @unchecked Sendable {
                 guard let self else { return }
                 guard success else { return }
                 let response = Data("HTTP/1.1 200 Connection Established\r\nProxy-Agent: ObstacleBridge\r\n\r\n".utf8)
-                self.inbound.send(content: response, completion: .contentProcessed { [weak self] error in
+                self.sendInbound(response) { [weak self] error in
                     guard let self else { return }
                     if let error {
                         self.finish(error: error.localizedDescription)
@@ -277,7 +280,7 @@ private final class ProxySession: @unchecked Sendable {
                     }
                     let remainder = Self.remainder(buffer: buffer, after: request.headerLength)
                     self.startTunnel(pendingInboundData: remainder)
-                })
+                }
             }
             return
         }
@@ -293,7 +296,7 @@ private final class ProxySession: @unchecked Sendable {
             let remainder = Self.remainder(buffer: buffer, after: request.headerLength)
             mutableForwarded.append(remainder)
             let forwarded = mutableForwarded
-            self.outbound?.send(content: forwarded, completion: .contentProcessed { [weak self] error in
+            self.sendOutbound(forwarded) { [weak self] error in
                 guard let self else { return }
                 if let error {
                     self.finish(error: error.localizedDescription)
@@ -301,7 +304,7 @@ private final class ProxySession: @unchecked Sendable {
                 }
                 self.onBytes(forwarded.count, 0)
                 self.startTunnel(pendingInboundData: Data())
-            })
+            }
         }
     }
 
@@ -324,14 +327,14 @@ private final class ProxySession: @unchecked Sendable {
         } else if !authRequired, methods.contains(0x00) {
             selectedMethod = 0x00
         } else {
-            inbound.send(content: Data([0x05, 0xff]), completion: .contentProcessed { [weak self] _ in
+            sendInbound(Data([0x05, 0xff])) { [weak self] _ in
                 self?.finish(error: "no acceptable socks5 auth method")
-            })
+            }
             return
         }
         let consumed = 2 + methodCount
         let remainder = Self.remainder(buffer: buffer, after: consumed)
-        inbound.send(content: Data([0x05, selectedMethod]), completion: .contentProcessed { [weak self] error in
+        sendInbound(Data([0x05, selectedMethod])) { [weak self] error in
             guard let self else { return }
             if let error {
                 self.finish(error: error.localizedDescription)
@@ -342,7 +345,7 @@ private final class ProxySession: @unchecked Sendable {
             } else {
                 self.handleSOCKS5Request(buffer: remainder)
             }
-        })
+        }
     }
 
     private func receiveSOCKS5Greeting(buffer: Data) {
@@ -383,14 +386,14 @@ private final class ProxySession: @unchecked Sendable {
         let authorized = username == configuration.credentials?.username && password == configuration.credentials?.password
         let consumed = passwordStart + passwordLength
         let remainder = Self.remainder(buffer: buffer, after: consumed)
-        inbound.send(content: Data([0x01, authorized ? 0x00 : 0x01]), completion: .contentProcessed { [weak self] _ in
+        sendInbound(Data([0x01, authorized ? 0x00 : 0x01])) { [weak self] _ in
             guard let self else { return }
             if authorized {
                 self.handleSOCKS5Request(buffer: remainder)
             } else {
                 self.finish(error: "socks5 authentication failed")
             }
-        })
+        }
     }
 
     private func receiveSOCKS5UserPassword(buffer: Data) {
@@ -446,6 +449,7 @@ private final class ProxySession: @unchecked Sendable {
         }
         let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: .tcp)
         outbound = connection
+        outboundSender = ObstacleBridgeBoundedConnectionDataSender(connection: connection)
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
@@ -468,7 +472,7 @@ private final class ProxySession: @unchecked Sendable {
 
     private func startTunnel(pendingInboundData: Data) {
         if !pendingInboundData.isEmpty {
-            outbound?.send(content: pendingInboundData, completion: .contentProcessed { _ in })
+            sendOutbound(pendingInboundData)
             onBytes(pendingInboundData.count, 0)
         }
         receiveInboundForTunnel()
@@ -481,7 +485,7 @@ private final class ProxySession: @unchecked Sendable {
             guard let self else { return }
             if let data, !data.isEmpty {
                 self.onBytes(data.count, 0)
-                self.outbound?.send(content: data, completion: .contentProcessed { _ in })
+                self.sendOutbound(data)
             }
             if isComplete || error != nil {
                 self.finish(error: error?.localizedDescription)
@@ -497,7 +501,7 @@ private final class ProxySession: @unchecked Sendable {
             guard let self else { return }
             if let data, !data.isEmpty {
                 self.onBytes(0, data.count)
-                self.inbound.send(content: data, completion: .contentProcessed { _ in })
+                self.sendInbound(data)
             }
             if isComplete || error != nil {
                 self.finish(error: error?.localizedDescription)
@@ -507,24 +511,38 @@ private final class ProxySession: @unchecked Sendable {
         }
     }
 
+    private func sendInbound(_ data: Data, completion: @escaping (NWError?) -> Void = { _ in }) {
+        guard inboundSender.submit(data, completion: completion) else {
+            finish(error: "inbound proxy send queue overflow")
+            return
+        }
+    }
+
+    private func sendOutbound(_ data: Data, completion: @escaping (NWError?) -> Void = { _ in }) {
+        guard let outboundSender, outboundSender.submit(data, completion: completion) else {
+            finish(error: "outbound proxy send queue overflow")
+            return
+        }
+    }
+
     private func sendHTTPError(status: String, message: String) {
         let body = Data("\(message)\n".utf8)
         var response = Data("HTTP/1.1 \(status)\r\n".utf8)
         response.append(Data("Content-Type: text/plain; charset=utf-8\r\n".utf8))
         response.append(Data("Content-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8))
         response.append(body)
-        inbound.send(content: response, completion: .contentProcessed { [weak self] _ in self?.finish(error: message) })
+        sendInbound(response) { [weak self] _ in self?.finish(error: message) }
     }
 
     private func sendSOCKS5Reply(status: UInt8, completion: (@Sendable () -> Void)? = nil) {
         let response = Data([0x05, status, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-        inbound.send(content: response, completion: .contentProcessed { [weak self] error in
+        sendInbound(response) { [weak self] error in
             if let error {
                 self?.finish(error: error.localizedDescription)
                 return
             }
             completion?()
-        })
+        }
     }
 
     private func authorized(headers: [String: String]) -> Bool {
@@ -534,6 +552,8 @@ private final class ProxySession: @unchecked Sendable {
     private func finish(error: String?) {
         guard !closed else { return }
         closed = true
+        inboundSender.stop()
+        outboundSender?.stop()
         inbound.cancel()
         outbound?.cancel()
         onClose(self, error)

@@ -188,6 +188,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
     }
 
     private static let shared = ObstacleBridgePacketFlowBridge()
+    private typealias PacketRecord = (data: Data, protocolFamily: NSNumber)
     private let queue = DispatchQueue(label: "com.obstaclebridge.ipserver.packet-flow-bridge")
     private let outgoingDrainQueue = DispatchQueue(label: "com.obstaclebridge.ipserver.packet-flow-bridge.outgoing-drain")
     private weak var provider: PacketTunnelProvider?
@@ -202,8 +203,10 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
     private var pcapMaximumBytes = ObstacleBridgeRuntimeConfig.packetFlowPCAPDefaultMaximumBytes
     private var pcapRetentionFiles = ObstacleBridgeRuntimeConfig.packetFlowPCAPDefaultRetentionFiles
     private var wakeupFD: Int32 = -1
-    private var incomingPackets: [Data] = []
-    private var incomingProtocols: [NSNumber] = []
+    private let incomingPackets = ObstacleBridgeBoundedFIFO<PacketRecord>(
+        limits: .init(maximumItems: 2048, maximumBytes: 8 * 1_024 * 1_024, maximumAge: 60),
+        byteCount: { $0.data.count }
+    )
     private var packetsFromSystem = 0
     private var packetsToSystem = 0
     private var bytesFromSystem = 0
@@ -230,8 +233,10 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
         count: 21
     )
     private var outgoingWriteBatches = 0
-    private var outgoingPendingPackets: [Data] = []
-    private var outgoingPendingProtocols: [NSNumber] = []
+    private let outgoingPendingPackets = ObstacleBridgeBoundedFIFO<PacketRecord>(
+        limits: .init(maximumItems: ObstacleBridgeRuntimeConfig.packetFlowFIFOQueueCapacity, maximumBytes: 8 * 1_024 * 1_024, maximumAge: 60),
+        byteCount: { $0.data.count }
+    )
     private var outgoingDrainScheduled = false
     /// Deferred drains are scoped to a packet-tunnel lifecycle. This prevents
     /// work queued before a stop from observing a rapid reactivation.
@@ -262,7 +267,6 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
                 retentionFiles: pcapRetentionFiles
             )
             shared.incomingPackets.removeAll(keepingCapacity: true)
-            shared.incomingProtocols.removeAll(keepingCapacity: true)
             shared.packetsFromSystem = 0
             shared.packetsToSystem = 0
             shared.bytesFromSystem = 0
@@ -285,8 +289,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
             )
             shared.observeOutgoingQueueLevel(0)
             shared.outgoingWriteBatches = 0
-            shared.outgoingPendingPackets.removeAll(keepingCapacity: false)
-            shared.outgoingPendingProtocols.removeAll(keepingCapacity: false)
+            shared.outgoingPendingPackets.removeAll()
             shared.outgoingDrainScheduled = false
             shared.outgoingDrainGeneration &+= 1
             return capture
@@ -305,7 +308,8 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
                 "tunnel_address": shared.tunnelAddress,
                 "mtu": shared.mtu,
                 "queued_packets": shared.incomingPackets.count,
-                "queued_protocols": shared.incomingProtocols.count,
+                "queued_bytes": shared.incomingPackets.byteCount,
+                "queued_protocols": shared.incomingPackets.count,
                 "packets_from_system": shared.packetsFromSystem,
                 "packets_to_system": shared.packetsToSystem,
                 "bytes_from_system": shared.bytesFromSystem,
@@ -321,6 +325,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
                 "outgoing_write_last_started_at": shared.outgoingWriteLastStartedAt,
                 "outgoing_write_last_finished_at": shared.outgoingWriteLastFinishedAt,
                 "outgoing_queued_packets": shared.outgoingQueuedPackets,
+                "outgoing_queued_bytes": shared.outgoingPendingPackets.byteCount,
                 "outgoing_queued_packets_max": shared.outgoingQueuedPacketsMax,
                 "outgoing_queue_max_since_start": shared.outgoingQueuedPacketsMaxSinceStart,
                 "outgoing_queue_max_last_2_seconds": shared.recentOutgoingQueueLevelMax(),
@@ -338,10 +343,8 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
             shared.wakeupFD = -1
             shared.active = false
             shared.provider = nil
-            shared.incomingPackets.removeAll(keepingCapacity: false)
-            shared.incomingProtocols.removeAll(keepingCapacity: false)
-            shared.outgoingPendingPackets.removeAll(keepingCapacity: false)
-            shared.outgoingPendingProtocols.removeAll(keepingCapacity: false)
+            shared.incomingPackets.removeAll()
+            shared.outgoingPendingPackets.removeAll()
             shared.outgoingDrainScheduled = false
             shared.outgoingDrainGeneration &+= 1
             return (provider, payload)
@@ -359,7 +362,8 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
                 return (["reason": "bridge_inactive", "packet_bytes": packet.count], nil)
             }
             shared.incomingPCAPWriter?.enqueuePacket(packet)
-            if shared.incomingPackets.count >= shared.maxQueuedPackets {
+            let shouldSignal = shared.incomingPackets.isEmpty
+            if shared.incomingPackets.count >= shared.maxQueuedPackets || !shared.incomingPackets.append((packet, protocolFamily)) {
                 shared.droppedIncomingPackets += 1
                 return ([
                     "reason": "queue_full",
@@ -368,9 +372,6 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
                     "dropped_incoming_packets": shared.droppedIncomingPackets,
                 ], shared.provider)
             }
-            let shouldSignal = shared.incomingPackets.isEmpty
-            shared.incomingPackets.append(packet)
-            shared.incomingProtocols.append(protocolFamily)
             if shouldSignal {
                 shared.signalWakeupFD()
             }
@@ -398,10 +399,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
             guard shared.active, !shared.incomingPackets.isEmpty else {
                 return nil
             }
-            if !shared.incomingProtocols.isEmpty {
-                shared.incomingProtocols.removeFirst()
-            }
-            return shared.incomingPackets.removeFirst() as NSData
+            return shared.incomingPackets.popFirst().map { $0.data as NSData }
         }
     }
 
@@ -432,7 +430,8 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
             guard shared.active, let provider = shared.provider else {
                 return (nil, false, proto, 0, 0, 0, 0, false, shared.outgoingDrainGeneration)
             }
-            guard shared.outgoingPendingPackets.count < shared.maxOutgoingQueuedPackets else {
+            guard shared.outgoingPendingPackets.count < shared.maxOutgoingQueuedPackets,
+                  shared.outgoingPendingPackets.append((data, NSNumber(value: proto))) else {
                 shared.droppedOutgoingPackets += 1
                 return (
                     provider,
@@ -449,8 +448,6 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
             shared.outgoingPCAPWriter?.enqueuePacket(data)
             shared.packetsToSystem += 1
             shared.bytesToSystem += data.count
-            shared.outgoingPendingPackets.append(data)
-            shared.outgoingPendingProtocols.append(NSNumber(value: proto))
             shared.outgoingQueuedPackets = shared.outgoingPendingPackets.count
             shared.outgoingQueuedPacketsMax = max(shared.outgoingQueuedPacketsMax, shared.outgoingQueuedPackets)
             shared.outgoingQueuedPacketsMaxSinceStart = max(
@@ -523,12 +520,15 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
 
     private func snapshotPayload() -> [String: Any] {
         queue.sync {
+            // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_packet_flow_bridge_source_exists
+            // Queue byte totals are sampled only under the packet-flow owner.
             [
                 "active": active,
                 "tunnel_address": tunnelAddress,
                 "mtu": mtu,
                 "queued_packets": incomingPackets.count,
-                "queued_protocols": incomingProtocols.count,
+                "queued_bytes": incomingPackets.byteCount,
+                "queued_protocols": incomingPackets.count,
                 "packets_from_system": packetsFromSystem,
                 "packets_to_system": packetsToSystem,
                 "bytes_from_system": bytesFromSystem,
@@ -544,6 +544,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
                 "outgoing_write_last_started_at": outgoingWriteLastStartedAt,
                 "outgoing_write_last_finished_at": outgoingWriteLastFinishedAt,
                 "outgoing_queued_packets": outgoingQueuedPackets,
+                "outgoing_queued_bytes": outgoingPendingPackets.byteCount,
                 "outgoing_queued_packets_max": outgoingQueuedPacketsMax,
                 "outgoing_queue_max_since_start": outgoingQueuedPacketsMaxSinceStart,
                 "outgoing_queue_max_last_2_seconds": recentOutgoingQueueLevelMax(),
@@ -676,7 +677,11 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
     }
 
     private static func drainOutgoingPackets(provider: PacketTunnelProvider, generation: UInt64) {
-        while true {
+        // A packet-flow write can synchronously spend significant time in the
+        // Network Extension. Yield after a small number of batches so one
+        // busy flow cannot monopolize this serial drain queue indefinitely.
+        let maximumBatchesPerDrainTurn = 4
+        for _ in 0..<maximumBatchesPerDrainTurn {
             let batch = shared.queue.sync { () -> ([Data], [NSNumber], Int) in
                 guard shared.active,
                       let currentProvider = shared.provider,
@@ -691,10 +696,15 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
                     return ([], [], 0)
                 }
                 let count = min(shared.maxOutgoingBatchPackets, shared.outgoingPendingPackets.count)
-                let packets = Array(shared.outgoingPendingPackets.prefix(count))
-                let protocols = Array(shared.outgoingPendingProtocols.prefix(count))
-                shared.outgoingPendingPackets.removeFirst(count)
-                shared.outgoingPendingProtocols.removeFirst(count)
+                var packets: [Data] = []
+                var protocols: [NSNumber] = []
+                packets.reserveCapacity(count)
+                protocols.reserveCapacity(count)
+                for _ in 0..<count {
+                    guard let record = shared.outgoingPendingPackets.popFirst() else { break }
+                    packets.append(record.data)
+                    protocols.append(record.protocolFamily)
+                }
                 shared.outgoingQueuedPackets = shared.outgoingPendingPackets.count
                 shared.observeOutgoingQueueLevel(shared.outgoingQueuedPackets)
                 shared.outgoingWriteInflight += packets.count
@@ -720,6 +730,10 @@ final class ObstacleBridgePacketFlowBridge: NSObject, @unchecked Sendable {
                 batchNumber: batch.2
             )
         }
+
+        // Keep the scheduled flag set while the continuation is outstanding:
+        // writers therefore cannot create parallel drain loops.
+        scheduleOutgoingDrain(provider: provider, generation: generation)
     }
 
     private static func recordOutgoingWriteCompletion(

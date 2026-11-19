@@ -144,13 +144,18 @@ enum ObstacleBridgeLinuxMain {
             )
             try server.start()
             print("{\"socket_path\":\"\(socketPath)\",\"state\":\"listening\",\"backend\":\"linux-swift-native\"}")
-            let resources: [Any] = [server, backend]
-                + installForegroundShutdown(stop: { server.stop() }, admin: nil, holdSeconds: nil)
-            DispatchQueue.global().async {
-                stopped.wait()
-                exit(0)
-            }
-            withExtendedLifetime(resources) { dispatchMain() }
+            // Do not call exit() from the stop callback.  That skips Swift's
+            // release of the server's dispatch sources and hides teardown
+            // leaks from the standalone helper process.  A semaphore wait
+            // keeps the command alive for its signal handlers, then allows
+            // every command-owned resource to leave scope normally.
+            let shutdownResources = installForegroundShutdown(
+                stop: { server.stop() }, admin: nil, holdSeconds: nil
+            )
+            stopped.wait() // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: command-mode helper lifetime waits for its signal/admin stop boundary before releasing dispatch owners.
+            server.stop()
+            cancelDispatchSources(shutdownResources)
+            withExtendedLifetime([server, backend] + shutdownResources) {}
         } catch {
             writeError("ObstacleBridgeLinux: TUN helper server failed: \(error.localizedDescription)")
             exit(1)
@@ -257,9 +262,13 @@ enum ObstacleBridgeLinuxMain {
                 try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
                 runtime.start()
                 print("{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":true}")
+                let stopped = DispatchSemaphore(value: 0)
                 let resources: [Any] = [runtime, admin, observability]
-                    + installForegroundShutdown(stop: { observability.recordForegroundLifecycle(state: "stopped", transport: configuration.transport.rawValue); observability.stop(); logWorker?.stop(); runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds)
-                withExtendedLifetime(resources) { dispatchMain() }
+                    + installForegroundShutdown(stop: { observability.recordForegroundLifecycle(state: "stopped", transport: configuration.transport.rawValue); observability.stop(); logWorker?.stop(); runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds, onStopped: { stopped.signal() })
+                stopped.wait() // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: listener command lifetime waits for its signal/admin stop boundary before releasing runtime owners.
+                cancelDispatchSources(resources)
+                withExtendedLifetime(resources) {}
+                return
             }
             let healthURL = URL(fileURLWithPath: options.configurationPath)
                 .deletingLastPathComponent()
@@ -340,13 +349,17 @@ enum ObstacleBridgeLinuxMain {
             }
             let status = "{\"admin_port\":\(admin.port),\"admin_url\":\"http://127.0.0.1:\(admin.port)/\",\"state\":\"starting\",\"listener_mode\":\(configuration.listenerMode)}"
             print(status)
+            let stopped = DispatchSemaphore(value: 0)
             resources.append(contentsOf: installForegroundShutdown(
                 stop: { observability.recordForegroundLifecycle(state: "stopped", transport: configuration.transport.rawValue); observability.stop(); logWorker?.stop(); runtime.stop() },
                 recordSignal: runtime.recordShutdownSignal,
                 admin: admin,
-                holdSeconds: options.holdSeconds
+                holdSeconds: options.holdSeconds,
+                onStopped: { stopped.signal() }
             ))
-            withExtendedLifetime(resources) { dispatchMain() }
+            stopped.wait() // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: foreground command lifetime waits for its signal/admin stop boundary before releasing runtime owners.
+            cancelDispatchSources(resources)
+            withExtendedLifetime(resources) {}
         } catch {
             writeError("ObstacleBridgeLinux: runtime start failed: \(error.localizedDescription)")
             exit(1)
@@ -372,7 +385,8 @@ enum ObstacleBridgeLinuxMain {
         stop: @escaping () -> Void,
         recordSignal: ((ObstacleBridgeLinuxShutdownSignal) -> Void)? = nil,
         admin: ObstacleBridgeLinuxAdminServer?,
-        holdSeconds: Int?
+        holdSeconds: Int?,
+        onStopped: @escaping @Sendable () -> Void = {}
     ) -> [Any] {
         let shutdownLock = NSLock()
         var shutdownStarted = false
@@ -387,7 +401,7 @@ enum ObstacleBridgeLinuxMain {
                 admin?.stop()
                 Task {
                     if await foregroundRestartState.consume() { restartForegroundProcess() }
-                    exit(0)
+                    onStopped()
                 }
             }
             DispatchQueue.global(qos: .userInitiated).async(execute: shutdownWork)
@@ -396,23 +410,33 @@ enum ObstacleBridgeLinuxMain {
         #if os(Linux)
         signal(SIGINT, SIG_IGN)
         signal(SIGTERM, SIG_IGN)
-        let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+        let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
         interrupt.setEventHandler { shutdown(signal: .interrupt) }
         interrupt.resume()
-        let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
         terminate.setEventHandler { shutdown(signal: .terminate) }
         terminate.resume()
         resources.append(interrupt)
         resources.append(terminate)
         #endif
         if let holdSeconds {
-            let timer = DispatchSource.makeTimerSource(queue: .main)
+            let timer = DispatchSource.makeTimerSource(queue: .global())
             timer.schedule(deadline: .now() + .seconds(holdSeconds))
             timer.setEventHandler { shutdown() }
             timer.resume()
             resources.append(timer)
         }
         return resources
+    }
+
+    private static func cancelDispatchSources(_ resources: [Any]) {
+        for case let source as any DispatchSourceProtocol in resources {
+            source.cancel()
+        }
+        // libdispatch releases cancelled source handlers asynchronously. Give
+        // its queues one bounded turn before command-mode teardown releases
+        // the owners captured by those handlers.
+        Thread.sleep(forTimeInterval: 0.05) // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded dispatch-source cancellation handoff before command teardown releases captured owners.
     }
 
     private static func requestForegroundShutdown() {

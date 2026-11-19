@@ -26,7 +26,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     private let configuredPeerPort: Int?
     private let configuredPeerResolveFamily: String
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
-    private let startupMuxFrames: [Data]
+    private let startupMuxFrames: ObstacleBridgeBoundedDataFIFO
     private let startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?
     private let sessionMaxAppPayload: Int
     private let maxInFlight: Int
@@ -88,6 +88,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     private var peerFallbackTimer: DispatchSourceTimer?
     private var udpServerConnections: [Int: NWConnection] = [:]
     private var udpClientConnections: [Int: NWConnection] = [:]
+    private var udpClientSenders: [Int: ObstacleBridgeBoundedConnectionDataSender] = [:]
     private var udpClientDrivers: [Int: ObstacleBridgeUDPClientConnectionDriver] = [:]
     private var udpConnectionStates: [Int: ObstacleBridgeOverlayConnectionState] = [:]
     private var tcpConnectionStates: [Int: ObstacleBridgeOverlayConnectionState] = [:]
@@ -126,11 +127,15 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     private var batchFlushScheduled = false
     private var secureLinkPayloadDrainScheduled = false
     private var secureLinkPayloadQueuedMax = 0
-    private var pendingOutboundMuxFrames: [Data] = []
-    private var pendingOutboundMuxFramesMax = 0
+    // These queues sit directly on the traffic path. DispatchQueue.async
+    // schedules work but does not provide ownership bounds.
+    private let pendingOutboundMuxFrames = ObstacleBridgeBoundedDataFIFO(limits: .init(
+        maximumItems: 512, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
+    ))
     private var outboundMuxFrameDrainScheduled = false
-    private var pendingInboundOverlayPayloads: [Data] = []
-    private var pendingInboundOverlayPayloadsMax = 0
+    private let pendingInboundOverlayPayloads = ObstacleBridgeBoundedDataFIFO(limits: .init(
+        maximumItems: 512, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
+    ))
     private var inboundOverlayPayloadDrainScheduled = false
     private var coreRetryToken: UInt64?
     private var coreRetryWorkItem: DispatchWorkItem?
@@ -173,7 +178,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         self.configuredPeerPort = peerPort
         self.configuredPeerResolveFamily = peerResolveFamily
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
-        self.startupMuxFrames = startupMuxFrames
+        let boundedStartupMuxFrames = ObstacleBridgeBoundedDataFIFO(limits: .init(maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024))
+        for frame in startupMuxFrames { _ = boundedStartupMuxFrames.append(frame) }
+        self.startupMuxFrames = boundedStartupMuxFrames
         self.startupMuxFramesProvider = startupMuxFramesProvider
         self.queue = queue
         self.serviceNameByID = serviceNameByID
@@ -378,6 +385,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             return
         }
         started = false
+        discardPendingInboundOverlayPayloads()
+        discardPendingOutboundMuxFrames()
+        inboundOverlayPayloadDrainScheduled = false
+        outboundMuxFrameDrainScheduled = false
         withdrawRemoteServiceCatalog()
         overlayLayerTransportAdapter?.stopCoreLifecycle()
         controlTimer?.cancel()
@@ -396,9 +407,11 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         for connection in udpClientConnections.values {
             cancelConnection(connection)
         }
+        for sender in udpClientSenders.values { sender.stop() }
         udpClientDrivers.removeAll()
         udpServerConnections.removeAll()
         udpClientConnections.removeAll()
+        udpClientSenders.removeAll()
         udpConnectionStates.removeAll()
         tcpConnectionStates.removeAll()
         activeTunChanIDs.removeAll()
@@ -540,10 +553,27 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             snapshot["rtt_est_ms"] = overlayRuntime.rttEstMS
             snapshot["transmit_delay_est_ms"] = overlayRuntime.transmitDelayEstMS
             snapshot["protocol_stats"] = protocolStats
+            // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue
+            // All payload arrays are owned by `queue`; status only samples
+            // their aggregate byte counts while on that same owner.
             snapshot["fifo_levels"] = [
-                "secure_link_pending_payloads": ["queued_messages": overlayLayerTransportAdapter?.pendingSecureLinkPayloadCount() ?? 0, "max_queued_messages_since_start": secureLinkPayloadQueuedMax],
-                "outbound_mux_frames": ["queued_messages": pendingOutboundMuxFrames.count, "max_queued_messages_since_start": pendingOutboundMuxFramesMax],
-                "inbound_overlay_payloads": ["queued_messages": pendingInboundOverlayPayloads.count, "max_queued_messages_since_start": pendingInboundOverlayPayloadsMax],
+                "secure_link_pending_payloads": [
+                    "queued_messages": overlayLayerTransportAdapter?.pendingSecureLinkPayloadCount() ?? 0,
+                    "queued_bytes": overlayLayerTransportAdapter?.pendingSecureLinkPayloadBytes() ?? 0,
+                    "max_queued_messages_since_start": secureLinkPayloadQueuedMax,
+                ],
+                "outbound_mux_frames": [
+                    "queued_messages": pendingOutboundMuxFrames.count,
+                    "queued_bytes": pendingOutboundMuxFrames.byteCount,
+                    "max_queued_messages_since_start": pendingOutboundMuxFrames.counters.peakRetainedItems,
+                    "dropped_messages": pendingOutboundMuxFrames.counters.droppedItems,
+                ],
+                "inbound_overlay_payloads": [
+                    "queued_messages": pendingInboundOverlayPayloads.count,
+                    "queued_bytes": pendingInboundOverlayPayloads.byteCount,
+                    "max_queued_messages_since_start": pendingInboundOverlayPayloads.counters.peakRetainedItems,
+                    "dropped_messages": pendingInboundOverlayPayloads.counters.droppedItems,
+                ],
             ]
             snapshot["next_address_attempt_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()
             snapshot["restart_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()
@@ -1093,9 +1123,14 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     }
 
     private func routeOverlayPayloads(_ payloads: [Data]) {
-        pendingInboundOverlayPayloads.append(contentsOf: payloads)
-        pendingInboundOverlayPayloadsMax = max(pendingInboundOverlayPayloadsMax, pendingInboundOverlayPayloads.count)
+        for payload in payloads {
+            _ = pendingInboundOverlayPayloads.append(payload)
+        }
         scheduleInboundOverlayPayloadDrain()
+    }
+
+    private func discardPendingInboundOverlayPayloads() {
+        pendingInboundOverlayPayloads.removeAll()
     }
 
     private func scheduleInboundOverlayPayloadDrain() {
@@ -1104,7 +1139,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             self.inboundOverlayPayloadDrainScheduled = false
-            let payload = self.pendingInboundOverlayPayloads.removeFirst()
+            guard let payload = self.pendingInboundOverlayPayloads.popFirst() else { return }
             if let adapter = self.overlayLayerTransportAdapter {
                 let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportSecureLinkRoute) {
                     self.overlayRuntime.recordSecureLinkBoundaryFrame(direction: "to_securelink")
@@ -1156,7 +1191,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             return
         }
         let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
-        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames.snapshot()
         guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
@@ -1205,7 +1240,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     private func startupMuxFramesForNewTunOpen() -> [Data] {
         guard appReady(), !startupMuxFramesReplayedWithTunOpen else { return [] }
         let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
-        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames.snapshot()
         guard !frames.isEmpty else { return [] }
         startupMuxFramesReplayedWithTunOpen = true
         eventSink?("udp_overlay_startup_mux_replayed_with_tun_open", [
@@ -1392,6 +1427,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             startedProvider: { [weak self] in self?.started ?? false },
             registerConnection: { [weak self] connection in
                 self?.udpClientConnections[chanID] = connection
+                self?.udpClientSenders[chanID] = ObstacleBridgeBoundedConnectionDataSender(connection: connection)
             },
             updateConnected: { [weak self] localHost, localPort in
                 guard let self else { return }
@@ -1431,6 +1467,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         let driver = udpClientDrivers.removeValue(forKey: chanID)
         driver?.stop()
         let connection = udpClientConnections.removeValue(forKey: chanID)
+        udpClientSenders.removeValue(forKey: chanID)?.stop()
         connection?.stateUpdateHandler = nil
         connection?.cancel()
         udpConnectionStates.removeValue(forKey: chanID)
@@ -1443,9 +1480,14 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     }
 
     private func sendMuxFrames(_ muxFrames: [Data]) {
-        pendingOutboundMuxFrames.append(contentsOf: muxFrames)
-        pendingOutboundMuxFramesMax = max(pendingOutboundMuxFramesMax, pendingOutboundMuxFrames.count)
+        for frame in muxFrames {
+            _ = pendingOutboundMuxFrames.append(frame)
+        }
         scheduleOutboundMuxFrameDrain()
+    }
+
+    private func discardPendingOutboundMuxFrames() {
+        pendingOutboundMuxFrames.removeAll()
     }
 
     private func scheduleOutboundMuxFrameDrain() {
@@ -1454,7 +1496,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             self.outboundMuxFrameDrainScheduled = false
-            let muxFrame = self.pendingOutboundMuxFrames.removeFirst()
+            guard let muxFrame = self.pendingOutboundMuxFrames.popFirst() else { return }
             if let adapter = self.overlayLayerTransportAdapter {
                 do {
                     let snapshot = try adapter.handleOutboundPayload(muxFrame)
@@ -1581,12 +1623,15 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     }
 
     private func sendOnUDPConnection(_ connection: NWConnection, payload: Data, chanID: Int) {
-        connection.send(content: payload, completion: .contentProcessed { [weak self] error in
+        guard let sender = udpClientSenders[chanID], sender.submit(payload, completion: { [weak self] error in
             guard let self, let error else { return }
             self.queue.async {
                 self.eventSink?("udp_overlay_udp_client_write_failed", ["chan_id": chanID, "error": error.localizedDescription])
             }
-        })
+        }) else {
+            eventSink?("udp_overlay_udp_client_write_queue_dropped", ["chan_id": chanID, "bytes": payload.count])
+            return
+        }
     }
 
     private func cancelConnection(_ connection: NWConnection) {

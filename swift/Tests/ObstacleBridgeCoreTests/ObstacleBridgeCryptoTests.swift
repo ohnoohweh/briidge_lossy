@@ -197,6 +197,20 @@ struct ObstacleBridgeCryptoTests {
         try queue.enqueue(Data("blocked".utf8), queuedAtNanoseconds: 12)
         #expect(queue.dequeueBatch(inFlightCount: 2) == nil)
     }
+    @Test func myudpCoreSendQueueBoundsRetainedRecordsAndReleasesOnDrain() throws {
+        let queue = ObstacleBridgeMyUDPSendQueue(maximumInFlight: 512)
+        for _ in 0..<ObstacleBridgeMyUDPSendQueue.maximumQueuedRecords {
+            try queue.enqueue(Data([1]), queuedAtNanoseconds: 1)
+        }
+        #expect(queue.waitingRecordCount == ObstacleBridgeMyUDPSendQueue.maximumQueuedRecords)
+        #expect(queue.waitingRecordBytes <= ObstacleBridgeMyUDPSendQueue.maximumQueuedBytes)
+        #expect(throws: ObstacleBridgeMyUDPCodecError.payloadTooLarge) {
+            try queue.enqueue(Data([2]), queuedAtNanoseconds: 2)
+        }
+        while queue.dequeueBatch(inFlightCount: 0) != nil {}
+        #expect(queue.waitingRecordCount == 0)
+        #expect(queue.waitingRecordBytes == 0)
+    }
     @Test func myudpCorePeerEngineOwnsQueueReceiveControlAndEpochReset() throws {
         let sender = ObstacleBridgeMyUDPPeerEngine(maximumInFlight: 2)
         try sender.enqueueApplicationRecord(Data("core-peer".utf8), nowNanoseconds: 1)

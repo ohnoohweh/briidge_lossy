@@ -59,6 +59,25 @@ struct ObstacleBridgeWebSocketOverlayRuntimeTests {
         #expect(events.contains { $0.0 == .warning && $0.1 == "secure_link_transport_disconnected" })
     }
 
+    @Test func secureLinkDiagnosticLevelFilterSkipsPerFrameDebugRecords() throws {
+        var events: [(ObstacleBridgeRuntimeDiagnosticLevel, String)] = []
+        let client = ObstacleBridgeSecureLinkPskTransportAdapter(
+            runtime: .init(clientMode: true, psk: "adapter-psk"),
+            diagnosticSink: { level, event, _ in events.append((level, event)) },
+            diagnosticEnabled: { $0 == .warning }
+        )
+        let server = ObstacleBridgeSecureLinkPskRuntime(clientMode: false, psk: "adapter-psk")
+        let hello = try client.handleTransportConnected(sessionID: 97, clientNonce: Data(repeating: 6, count: 32))
+        let serverHello = server.handleInboundFrame(hello.emittedFrames[0])
+        let proof = client.handleInboundFrame(serverHello.emittedFrames[0])
+        let acknowledgement = server.handleInboundFrame(proof.emittedFrames[0])
+        _ = client.handleInboundFrame(acknowledgement.emittedFrames[0])
+        client.handleTransportDisconnected()
+
+        #expect(!events.contains { $0.0 == .debug && $0.1 == "secure_link_frame_received" })
+        #expect(events.contains { $0.0 == .warning && $0.1 == "secure_link_transport_disconnected" })
+    }
+
     @Test func secureLinkTimeThresholdProducesAnAutomaticRekeyFrame() throws {
         var now: TimeInterval = 0
         let client = ObstacleBridgeSecureLinkPskTransportAdapter(
@@ -193,6 +212,20 @@ struct ObstacleBridgeWebSocketOverlayRuntimeTests {
 
         #expect(effect.writtenBuffers.count == 1)
         #expect(try ObstacleBridgeOverlayEnvelope.decodeTCP(effect.writtenBuffers[0]) == .application(Data("quic-core".utf8)))
+    }
+
+    @Test func streamEarlyBuffersBoundAndReleaseOnConnection() {
+        let quic = ObstacleBridgeQuicOverlayRuntime(earlyMax: 12)
+        _ = quic.sendApp(payload: Data("first".utf8), writerPresent: false, peerConfigured: true)
+        let quicBuffered = quic.sendApp(payload: Data("second".utf8), writerPresent: false, peerConfigured: true)
+        #expect(quicBuffered.earlyBufBytes <= 12)
+        #expect(!quic.connectionOpened(host: "127.0.0.1", port: 443, socketPresent: true).isEmpty)
+
+        let tcp = ObstacleBridgeTcpOverlayRuntime(earlyMax: 12)
+        _ = tcp.sendApp(payload: Data("first".utf8), writerPresent: false, peerConfigured: true)
+        let tcpBuffered = tcp.sendApp(payload: Data("second".utf8), writerPresent: false, peerConfigured: true)
+        #expect(tcpBuffered.earlyBufBytes <= 12)
+        #expect(!tcp.connectionOpened(host: "127.0.0.1", port: 443, socketPresent: true).isEmpty)
     }
 
     @Test func proxyConnectRequestPreservesIPv6AuthorityAndAuthorization() throws {

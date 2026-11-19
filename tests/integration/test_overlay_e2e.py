@@ -85,6 +85,7 @@ from obstacle_bridge.bridge import (
     SecureLinkPskSession,
 )
 from obstacle_bridge.core import ObstacleBridgeClient
+from obstacle_bridge.bridge_tun_helper_client import TunHelperClient
 
 log = logging.getLogger()
 
@@ -2603,6 +2604,12 @@ def _swift_runner_binary(log_dir: Path) -> Path:
 
 
 def _linux_swift_runner_binary() -> Path:
+    configured_binary = os.environ.get('OBSTACLEBRIDGE_LINUX_RUNNER_BINARY', '').strip()
+    if configured_binary:
+        binary_path = Path(configured_binary)
+        if not binary_path.is_file() or not os.access(binary_path, os.X_OK):
+            raise AssertionError(f'configured Linux Swift runner is unavailable or not executable: {binary_path}')
+        return binary_path
     binary_path = ROOT / 'build' / 'linux' / 'ObstacleBridgeLinux'
     if binary_path.exists():
         return binary_path
@@ -8105,6 +8112,157 @@ def test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip(
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_linux_swift_address_sanitizer_reports_no_leaks(tmp_path: Path) -> None:
+    """Run a real Python↔Swift overlay exchange and require a clean LSan exit.
+
+    The dedicated CI lane supplies an AddressSanitizer-built native runner.
+    LeakSanitizer runs when that process exits, so this must invoke the product
+    directly instead of retaining it as a long-lived shared test fixture.
+    """
+    if not sys.platform.startswith('linux'):
+        pytest.skip('LeakSanitizer qualification requires Linux')
+    if os.environ.get('OBSTACLEBRIDGE_LSAN_REQUIRED') != '1':
+        pytest.skip('set OBSTACLEBRIDGE_LSAN_REQUIRED=1 with an ASan-built runner')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-lsan-e2e-psk'
+    payload = b'linux-swift-address-sanitizer-overlay-e2e'
+    peer = LinuxSwiftSecureLinkPeer('myudp', psk)
+    try:
+        config_path = tmp_path / 'linux_swift_lsan_runtime.json'
+        config_path.write_text(json.dumps({
+            'runner': {'overlay_transport': 'myudp'},
+            'udp_session': {'udp_peer': '127.0.0.1', 'udp_peer_port': peer.port},
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+        }), encoding='utf-8')
+        environment = os.environ.copy()
+        environment['ASAN_OPTIONS'] = 'detect_leaks=1:halt_on_error=1'
+        environment['LSAN_OPTIONS'] = 'detect_leaks=1:exitcode=23'
+        completed = subprocess.run(
+            [
+                str(binary_path), '--runtime-config', str(config_path),
+                '--runtime-probe', base64.b64encode(payload).decode('ascii'),
+            ],
+            cwd=str(ROOT), env=environment, capture_output=True, text=True,
+            timeout=30.0, check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert 'LeakSanitizer' not in completed.stderr
+        assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
+    finally:
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_linux_swift_address_sanitizer_webadmin_and_logging_report_no_leaks(tmp_path: Path) -> None:
+    """Qualify foreground WebAdmin and local diagnostic logging under LSan."""
+    if not sys.platform.startswith('linux'):
+        pytest.skip('LeakSanitizer qualification requires Linux')
+    if os.environ.get('OBSTACLEBRIDGE_LSAN_REQUIRED') != '1':
+        pytest.skip('set OBSTACLEBRIDGE_LSAN_REQUIRED=1 with an ASan-built runner')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-lsan-webadmin-psk'
+    peer = LinuxSwiftSecureLinkPeer('tcp', psk, keep_open=True)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        admin_port = int(reservation.getsockname()[1])
+    config_path = tmp_path / 'linux_swift_lsan_webadmin_runtime.json'
+    config_path.write_text(json.dumps({
+        'runner': {'overlay_transport': 'tcp'},
+        'tcp_session': {'tcp_peer': '127.0.0.1', 'tcp_peer_port': peer.port},
+        'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+        # Exercise the foreground process's bounded local diagnostic ring.
+        # Native log-worker supervision has its own lifecycle qualification;
+        # Foundation's Process implementation retains internal bookkeeping at
+        # process exit, which would obscure ownership defects in this LSan
+        # product-process probe.
+        'channel_mux': {'log_channel_mux': 'DEBUG'},
+    }), encoding='utf-8')
+    proc = start_proc(
+        'linux_swift_lsan_webadmin',
+        [str(binary_path), '--runtime-config', str(config_path), '--run', '--admin-port', str(admin_port), '--hold-sec', '45'],
+        tmp_path,
+        env_extra={
+            'ASAN_OPTIONS': 'detect_leaks=1:halt_on_error=1',
+            'LSAN_OPTIONS': 'detect_leaks=1:exitcode=23',
+        },
+        admin_port=admin_port,
+    )
+    try:
+        assert wait_admin_up(admin_port, timeout=20)['ok'] is True
+        _, status = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=2)
+        assert status['logging_worker']['state'] == 'off'
+        _, metadata = fetch_json(f'http://127.0.0.1:{admin_port}/api/meta', timeout=2)
+        assert metadata['app'] == 'ObstacleBridgeLinux'
+        assert metadata['dashboard_enabled'] is True
+        _, logs = fetch_json(f'http://127.0.0.1:{admin_port}/api/logs?limit=20', timeout=2)
+        assert logs['available'] is True
+        assert logs['source'] == 'local'
+        assert any('runtime.lifecycle' in line for line in logs['lines'])
+        _, live = fetch_json(f'http://127.0.0.1:{admin_port}/api/live?topic=status', timeout=2)
+        assert live['app'] == 'ObstacleBridgeLinux'
+    finally:
+        stop_proc(proc)
+        peer.close()
+    return_code = proc.popen.wait(timeout=15)
+    process_log = proc.log_path.read_text(errors='replace')
+    assert return_code == 0, process_log
+    assert 'LeakSanitizer' not in process_log
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_linux_swift_address_sanitizer_tun_helper_reports_no_leaks(tmp_path: Path) -> None:
+    """Qualify the Linux Swift helper's authenticated IPC lifecycle under LSan."""
+    if not sys.platform.startswith('linux'):
+        pytest.skip('LeakSanitizer qualification requires Linux')
+    if os.environ.get('OBSTACLEBRIDGE_LSAN_REQUIRED') != '1':
+        pytest.skip('set OBSTACLEBRIDGE_LSAN_REQUIRED=1 with an ASan-built runner')
+    binary_path = _linux_swift_runner_binary()
+    socket_path = tmp_path / 'linux_swift_lsan_tun_helper.sock'
+    session_token = 'linux-swift-lsan-tun-helper-token'
+    proc = start_proc(
+        'linux_swift_lsan_tun_helper',
+        [str(binary_path), '--tun-helper-server', str(socket_path), session_token, '--idle-sec', '5'],
+        tmp_path,
+        env_extra={
+            'ASAN_OPTIONS': 'detect_leaks=1:halt_on_error=1',
+            'LSAN_OPTIONS': 'detect_leaks=1:exitcode=23',
+        },
+    )
+    try:
+        deadline = time.monotonic() + 10.0
+        while not socket_path.exists() and time.monotonic() < deadline:
+            assert_running(proc)
+            time.sleep(0.05)
+        assert socket_path.exists(), proc.log_path.read_text(errors='replace')
+
+        async def snapshot_then_stop() -> dict[str, Any]:
+            client = TunHelperClient(socket_path=str(socket_path), session_token=session_token, response_timeout_s=3.0)
+            await client.connect()
+            try:
+                snapshot = await client.snapshot()
+                stopped = await client.request('STOP')
+                assert stopped.op == 'STOP_OK'
+                return snapshot
+            finally:
+                await client.close()
+
+        snapshot = asyncio.run(snapshot_then_stop())
+        assert snapshot['backend'] == 'linux-swift-native'
+    finally:
+        # STOP is protocol-owned above. Retain a safety net for a failed
+        # handshake so this test cannot strand a process in developer runs.
+        if proc.popen.poll() is None:
+            stop_proc(proc)
+    return_code = proc.popen.wait(timeout=15)
+    process_log = proc.log_path.read_text(errors='replace')
+    assert return_code == 0, process_log
+    assert 'LeakSanitizer' not in process_log
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_repeated_dropped_application_data(tmp_path: Path) -> None:
     """The foreground Linux executable drives Core retransmission after repeated loss."""
     if not sys.platform.startswith('linux'):
@@ -8670,6 +8828,18 @@ def test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys(tmp_path: Path, 
         pytest.skip('Linux Swift process E2E coverage requires Linux')
     if client_runtime == 'swift' and not shutil.which('swift'):
         pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
+    lsan_enabled = (
+        client_runtime == 'swift'
+        and os.environ.get('OBSTACLEBRIDGE_LSAN_REQUIRED') == '1'
+    )
+    sanitizer_env = (
+        {
+            'ASAN_OPTIONS': 'detect_leaks=1:halt_on_error=1',
+            'LSAN_OPTIONS': 'detect_leaks=1:exitcode=23',
+        }
+        if lsan_enabled
+        else None
+    )
 
     with secure_link_test_lock():
         binary_path = _linux_swift_runner_binary() if client_runtime == 'swift' else None
@@ -8753,6 +8923,7 @@ def test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys(tmp_path: Path, 
                 ]
             client_proc = start_proc(
                 f'linux_{client_runtime}_myudp_ten_rekeys_client', client_command, tmp_path, admin_port=swift_admin,
+                env_extra=sanitizer_env,
             )
 
             end = time.time() + 12.0
@@ -8869,16 +9040,41 @@ def test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys(tmp_path: Path, 
             )
             _code, peers = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=1.0)
             secure = dict((first_active_secure_link_row(peers, transport='myudp').get('secure_link') or {}))
-            assert secure.get('last_event') == 'rekey_completed'
-            assert secure.get('last_rekey_trigger') == 'time_threshold'
+            # Fresh status can supersede event/trigger labels while this final
+            # Admin snapshot is collected.  The completed counter is the
+            # stable proof of every configured time-threshold rekey.
+            assert int(secure.get('rekeys_completed_total') or 0) >= 10
         finally:
             if client_proc is not None and client_proc.popen.poll() is None:
-                os.killpg(client_proc.popen.pid, signal.SIGTERM)
-                assert client_proc.popen.wait(timeout=5.0) in (0, 143)
+                if lsan_enabled:
+                    # LeakSanitizer only reports process-exit ownership after
+                    # the runtime has drained its own shutdown path.  Do not
+                    # terminate the ASan process before its Admin shutdown
+                    # handler releases transports and service owners.
+                    try:
+                        code, body = post_json(
+                            f'http://127.0.0.1:{swift_admin}/api/shutdown', timeout=2.0,
+                        )
+                        assert code == 200 and body.get('ok') is True
+                        # Do not use stop_proc here: its eight-second fallback
+                        # SIGTERM can interrupt the sanitizer's exit sweep.
+                        assert client_proc.popen.wait(timeout=60.0) == 0
+                    finally:
+                        if client_proc.popen.poll() is None:
+                            os.killpg(client_proc.popen.pid, signal.SIGTERM)
+                            client_proc.popen.wait(timeout=15.0)
+                else:
+                    os.killpg(client_proc.popen.pid, signal.SIGTERM)
+                    assert client_proc.popen.wait(timeout=5.0) in (0, 143)
             if server_proc is not None and server_proc.popen.poll() is None:
                 os.killpg(server_proc.popen.pid, signal.SIGTERM)
                 assert server_proc.popen.wait(timeout=5.0) in (0, 143)
             bounce.stop()
+        if lsan_enabled:
+            assert client_proc is not None
+            process_log = client_proc.log_path.read_text(errors='replace')
+            assert client_proc.popen.returncode == 0, process_log
+            assert 'LeakSanitizer' not in process_log
 
 
 @pytest.mark.integration

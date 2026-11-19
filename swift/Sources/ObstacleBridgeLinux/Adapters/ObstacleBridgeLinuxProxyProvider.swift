@@ -1,5 +1,6 @@
 import Dispatch
 import Foundation
+import ObstacleBridgeCore
 #if os(Linux)
 import Glibc
 #endif
@@ -33,8 +34,11 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
         private var remoteRead: DispatchSourceRead?
         private var clientWrite: DispatchSourceWrite?
         private var remoteWrite: DispatchSourceWrite?
-        private var toClient = Data()
-        private var toRemote = Data()
+        // OBSTACLEBRIDGE-CONCURRENCY: actor; test=ObstacleBridgeLinuxProxyProviderTests
+        private var activeToClient = Data()
+        private var activeToRemote = Data()
+        private let pendingToClient = ObstacleBridgeBoundedDataFIFO(limits: .init(maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60))
+        private let pendingToRemote = ObstacleBridgeBoundedDataFIFO(limits: .init(maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60))
         private var clientInputOpen = true
         private var remoteInputOpen = true
         private var stopped = false
@@ -64,8 +68,7 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
                 var buffer = [UInt8](repeating: 0, count: 16 * 1024)
                 let count = recv(source, &buffer, buffer.count, Int32(MSG_DONTWAIT))
                 if count > 0 {
-                    if fromClient { toRemote.append(buffer, count: Int(count)); flush(toClient: false) }
-                    else { toClient.append(buffer, count: Int(count)); flush(toClient: true) }
+                    enqueue(Data(buffer.prefix(Int(count))), toClient: !fromClient)
                     continue
                 }
                 if count < 0, errno == EINTR { continue }
@@ -82,23 +85,40 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
         }
 
         private func flush(toClient: Bool) {
-            var pending = toClient ? self.toClient : toRemote
+            // OBSTACLEBRIDGE-NETWORK-SEND-BOUNDS: inflight=1; queue=bounded FIFO; test=ObstacleBridgeLinuxProxyProviderTests
             let destination = toClient ? client : remote
-            while !pending.isEmpty {
-                let count = pending.withUnsafeBytes { send(destination, $0.baseAddress, pending.count, Int32(MSG_NOSIGNAL | MSG_DONTWAIT)) }
-                if count > 0 { pending.removeFirst(Int(count)); continue }
+            while true {
+                if toClient, activeToClient.isEmpty, let next = pendingToClient.popFirst() { activeToClient = next }
+                if !toClient, activeToRemote.isEmpty, let next = pendingToRemote.popFirst() { activeToRemote = next }
+                let active = toClient ? activeToClient : activeToRemote
+                guard !active.isEmpty else { break }
+                let count = active.withUnsafeBytes { send(destination, $0.baseAddress, active.count, Int32(MSG_NOSIGNAL | MSG_DONTWAIT)) }
+                if count > 0 {
+                    if toClient { activeToClient.removeFirst(Int(count)) } else { activeToRemote.removeFirst(Int(count)) }
+                    continue
+                }
                 if count < 0, errno == EINTR { continue }
                 if count < 0, errno == EAGAIN || errno == EWOULDBLOCK {
-                    if toClient { self.toClient = pending; installWrite(toClient: true) }
-                    else { self.toRemote = pending; installWrite(toClient: false) }
+                    installWrite(toClient: toClient)
                     return
                 }
                 finish(failed: true)
                 return
             }
-            if toClient { self.toClient = pending; clientWrite?.cancel(); clientWrite = nil }
-            else { self.toRemote = pending; remoteWrite?.cancel(); remoteWrite = nil }
+            if toClient { clientWrite?.cancel(); clientWrite = nil }
+            else { remoteWrite?.cancel(); remoteWrite = nil }
             finishIfDrained()
+        }
+
+        private func enqueue(_ bytes: Data, toClient: Bool) {
+            if toClient {
+                if activeToClient.isEmpty { activeToClient = bytes }
+                else if !pendingToClient.append(bytes) { finish(failed: true); return }
+            } else {
+                if activeToRemote.isEmpty { activeToRemote = bytes }
+                else if !pendingToRemote.append(bytes) { finish(failed: true); return }
+            }
+            flush(toClient: toClient)
         }
 
         private func installWrite(toClient: Bool) {
@@ -111,13 +131,15 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
         }
 
         private func finishIfDrained() {
-            guard !clientInputOpen, !remoteInputOpen, toClient.isEmpty, toRemote.isEmpty else { return }
+            guard !clientInputOpen, !remoteInputOpen, activeToClient.isEmpty, activeToRemote.isEmpty, pendingToClient.isEmpty, pendingToRemote.isEmpty else { return }
             finish(failed: false)
         }
 
         private func finish(failed: Bool) {
             guard !stopped else { return }
             stopped = true
+            activeToClient.removeAll(keepingCapacity: false); activeToRemote.removeAll(keepingCapacity: false)
+            pendingToClient.removeAll(); pendingToRemote.removeAll()
             clientRead?.cancel(); remoteRead?.cancel(); clientWrite?.cancel(); remoteWrite?.cancel()
             clientRead = nil; remoteRead = nil; clientWrite = nil; remoteWrite = nil
             _ = close(client); _ = close(remote)

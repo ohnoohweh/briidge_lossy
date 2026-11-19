@@ -105,6 +105,24 @@ if [ "${DIFF_SHA}" = "e3b0c44298fc" ]; then
   DIFF_SHA=""
 fi
 BUILD_TIMESTAMP_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+BUILD_INFO_SWIFT_PATH="${REPO_ROOT}/swift/Sources/ObstacleBridgeLinux/ObstacleBridgeLinuxBuildInfo.swift"
+BUILD_INFO_SWIFT_BACKUP="$(mktemp "${REPO_ROOT}/.ObstacleBridgeLinuxBuildInfo.XXXXXX")"
+cp -p "${BUILD_INFO_SWIFT_PATH}" "${BUILD_INFO_SWIFT_BACKUP}"
+restore_build_info_swift() {
+  mv -f "${BUILD_INFO_SWIFT_BACKUP}" "${BUILD_INFO_SWIFT_PATH}"
+}
+trap restore_build_info_swift EXIT
+cat > "${BUILD_INFO_SWIFT_PATH}" <<EOF
+import Foundation
+
+/// Generated only while packaging; the executable, not a mutable sidecar,
+/// answers the helper identity protocol.
+enum ObstacleBridgeLinuxBuildInfo {
+    static func json() -> String {
+        #"{"artifact":"ObstacleBridgeLinux","build_timestamp_utc":"${BUILD_TIMESTAMP_UTC}","commit":"${COMMIT}","diff_sha":"${DIFF_SHA}","dirty":${DIRTY},"source":"embedded-build-info"}"#
+    }
+}
+EOF
 echo "[build_linux_app] compiling ${CONFIGURATION} Linux Swift artifact"
 SWIFT_BUILD_ARGS=(
   --package-path "${REPO_ROOT}"
@@ -155,6 +173,7 @@ cp "${BINARY_SOURCE}" "${BINARY_STAGING_PATH}"
 chmod 755 "${BINARY_STAGING_PATH}"
 mv -f "${BINARY_STAGING_PATH}" "${BINARY_PATH}"
 trap - EXIT
+restore_build_info_swift
 cp "${SCRATCH_DIR}/${CONFIGURATION}/ObstacleBridgeProxyWorker" "${OUTPUT_DIR}/ObstacleBridgeProxyWorker"
 cp "${SCRATCH_DIR}/${CONFIGURATION}/ObstacleBridgeLogCollector" "${OUTPUT_DIR}/ObstacleBridgeLogCollector"
 mkdir -p "${ADMIN_WEB_OUTPUT_DIR}"

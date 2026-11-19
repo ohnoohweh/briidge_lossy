@@ -28,3 +28,5 @@ done
 ./scripts/build_linux_app.sh
 export OBSTACLEBRIDGE_LINUX_TEST_HELPER_EXECUTABLE="$(pwd)/build/linux/ObstacleBridgeLinux"
 swift test --package-path swift --filter ObstacleBridgeLinuxTunHelperAdapterTests
+python3 -m pytest -vv --timeout=180 --run-linux-elevated \
+  tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_swift_tun_helper_udp_tcp_webadmin_rekey_traffic

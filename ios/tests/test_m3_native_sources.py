@@ -159,6 +159,10 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "tailNativeProviderLog" in provider
     assert "packetBridgeDiagnosticEventSink" in provider
     assert "nativeChannelMuxDiagnosticsEnabled" in provider
+    assert "nativeRuntimeDiagnosticEnabled" in provider
+    assert "recordNativeRuntimeDiagnostic" in provider
+    assert "diagnosticEnabled: { level in" in provider
+    assert "ObstacleBridgeRuntimeConfig.nativeRuntimeDiagnosticEnabled" in provider
     assert "eventSink: packetBridgeDiagnosticEventSink()" in provider
     assert "the transport owner never constructs per-frame diagnostic fields" in provider
     assert "ObstacleBridgeAdminAPI" in provider
@@ -169,6 +173,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "startTunnel_completed_swift_simple_udp" in provider
     assert "handleAppMessage" in provider
     assert "packet_pump_forwarded_packets" in provider
+    packet_pump = provider[provider.index("private func readPackets()"):provider.index("private static func stopReasonText")]
+    assert "updateProviderState(" not in packet_pump
+    assert "(self.heartbeatTickCount % 30) == 0" in provider
     assert "ipserver-native-provider-state.json" in provider
     assert "ipserver-runtime-health-v1.json" in provider
     assert "ObstacleBridgeRuntimeHealthRing" in provider
@@ -179,7 +186,17 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "resident_size" in provider
     assert "phys_footprint" in provider
     assert "task_vm_info_kern_return" in provider
+    assert "malloc_zone_statistics(malloc_default_zone(), &mallocStats)" in provider
+    assert '"memory_diagnostics"' in provider
+    assert '"size_in_use": mallocStats.size_in_use' in provider
     assert "SwiftSimpleUDPPeerBridge" in provider
+    assert "private static let maximumSocketDrainPackets = 64" in provider
+    assert "private static let maximumSocketDrainBytes = 512 * 1024" in provider
+    assert "packets.count < Self.maximumSocketDrainPackets" in provider
+    assert "totalBytes < Self.maximumSocketDrainBytes" in provider
+    xcode_patcher = (ROOT / "ios" / "scripts" / "patch_ios_xcode_project.py").read_text(encoding="utf-8")
+    assert r"ObstacleBridgeBufferCounters\.swift" in xcode_patcher
+    assert "Remove every reference left by the temporary memory-counter experiment" in xcode_patcher
     assert "ObstacleBridgeUdpOverlayTransportOwner" in provider
     assert "ObstacleBridgeTcpOverlayTransportOwner" in provider
     assert "ObstacleBridgeWebSocketOverlayTransportOwner" in provider
@@ -319,6 +336,10 @@ def test_native_packet_flow_bridge_source_exists() -> None:
     assert "incoming_pcap_path" in bridge
     assert "outgoing_pcap_path" in bridge
     assert "packetflow_pcap" in bridge
+    assert '"queued_bytes": incomingPackets.byteCount' in bridge
+    assert "ObstacleBridgeBoundedFIFO<PacketRecord>" in bridge
+    assert "maximumBytes: 8 * 1_024 * 1_024" in bridge
+    assert '"outgoing_queued_bytes": outgoingPendingPackets.byteCount' in bridge
     assert "guard enabled else" in bridge
     assert "maximumPendingPackets = 64" in bridge
     assert "bytesWritten - lastSyncBytes >= 1_024 * 1_024" in bridge
@@ -347,6 +368,8 @@ def test_ios_native_provider_log_reads_are_bounded_and_tail_chunked() -> None:
     assert "nativeProviderLogMaximumPendingWrites = ObstacleBridgeRuntimeConfig.nativeProviderDiagnosticLogMaximumPendingWrites" in provider
     assert "nativeProviderDiagnosticLogMaximumPendingWrites = 64" in shared
     assert "nativeProviderLogQueue.async" in provider
+    log_writer = provider[provider.index("private func writeNativeProviderLog"):]
+    assert log_writer.index("nativeProviderLogPendingWrites += 1") < log_writer.index("JSONSerialization.data(withJSONObject: payload")
     assert "rotateNativeProviderLog(at: logURL" in provider
     assert "nativeProviderLogQueue.sync" in provider
     assert "private var nativeProviderManagedLog: ObstacleBridgeManagedLogFile?" in provider
@@ -389,11 +412,14 @@ def test_ios_runtime_status_projects_shared_runtime_metrics() -> None:
     assert "private var cachedRuntimeMetricsSnapshot: [String: Any] = [:]" in provider
     assert "let snapshot = await ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()" in provider
     assert '"runtime_fifos"' in provider
-    assert "ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics()" in provider
+    assert "ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics(" in provider
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=projectsPythonCompatibleBoundedMemoryMetrics" in provider
     assert "enum ObstacleBridgeAppleRuntimeMetricsSampler" in shared
     assert "task_info(mach_task_self_" in shared
-    assert "recordMemorySample(processMemoryBytes: UInt64(info.resident_size), measurementKind: .resident)" in shared
+    assert "memoryMeasurement: .physicalFootprint" in provider
+    assert "physicalFootprintTerminationRiskBytes: UInt64 = 50 * 1_024 * 1_024" in provider
+    assert "measurementKind: .physicalFootprint" in shared
+    assert "UInt64(info.phys_footprint)" in shared
     assert "packetFlowPCAPDefaultMaximumBytes" in shared
     assert "packetFlowPCAPDefaultRetentionFiles" in shared
     assert "runtimeHealthRecordsPayload" in provider
@@ -615,6 +641,8 @@ def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
 
     assert host_runner.count("startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in") == 4
     assert provider.count("startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in") == 4
+    assert provider.count("startupMuxFrames: self.startupMuxFrames.snapshot(),") == 4
+    assert "startupMuxFrames: startupMuxFrames.snapshot()," not in provider
 
 
 def test_channel_mux_udp_runtime_source_exists() -> None:
@@ -1755,7 +1783,7 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
     assert "ObstacleBridgeCompressLayerRuntime" in provider
     assert "ObstacleBridgeSecureLinkPskRuntime" in provider
     assert "diagnosticSink: { [weak self] level, event, fields in" in provider
-    assert 'fields.merging(["log_level": level.name])' in provider
+    assert "recordNativeRuntimeDiagnostic(level: level, event: event, fields: fields)" in provider
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics" in provider
     assert "ObstacleBridgePeerAddressProtocolRuntime" in provider
     assert "ObstacleBridgeWebSocketOverlayRuntime" in provider
@@ -1991,20 +2019,34 @@ def test_overlay_connection_drivers_keep_callbacks_on_owner_queue() -> None:
 def test_native_proxy_connections_keep_callbacks_on_owner_queue() -> None:
     source = (SHARED_NATIVE_DIR / "ObstacleBridgeNativeProxyConnections.swift").read_text(encoding="utf-8")
 
-    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue") == 2
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue") == 3
     assert "final class ObstacleBridgeTCPProxyConnection: @unchecked Sendable" in source
     assert "final class ObstacleBridgeUDPProxyConnection: @unchecked Sendable" in source
     assert "localConnection.start(queue: queue)" in source
     assert "remoteConnection.start(queue: queue)" in source
+    assert "final class ObstacleBridgeBoundedConnectionDataSender" in source
+    assert "maximumItems: Int = 128, maximumBytes: Int = 2 * 1_024 * 1_024" in source
+    assert "private lazy var localSender = ObstacleBridgeBoundedConnectionDataSender" in source
+    assert "private lazy var remoteSender = ObstacleBridgeBoundedConnectionDataSender" in source
 
 
 def test_web_admin_server_callbacks_keep_owner_queue() -> None:
     source = (SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift").read_text(encoding="utf-8")
 
-    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue") == 2
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_web_admin_server_callbacks_keep_owner_queue") == 3
     assert "final class ObstacleBridgeWebAdminServer: @unchecked Sendable" in source
     assert "private final class LiveSession: @unchecked Sendable" in source
+    assert "private actor HTTPRequestReceiveState" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: actor; test=test_web_admin_server_callbacks_keep_owner_queue" in source
     assert "listener.start(queue: queue)" in source
+    assert "private var outboundSendInFlight = false" in source
+    assert "private let pendingOutboundFrames = ObstacleBridgeBoundedKeyedDataStore<String>" in source
+    assert "guard !outboundSendInFlight else" in source
+    assert "pendingOutboundFrames.replace(frame, for: coalescingKey)" in source
+    assert "self.submitOutboundFrame(next)" in source
+    assert "private func shouldBuildLiveFrame(coalescingKey: String) -> Bool" in source
+    assert "guard shouldBuildLiveFrame(coalescingKey: coalescingKey) else" in source
+    assert "self.stop()" in source
 
 
 def test_tun_helper_xpc_reachability_state_is_synchronous_and_owned() -> None:
@@ -2055,7 +2097,7 @@ def test_websocket_overlay_owner_serializes_public_and_delegate_callbacks() -> N
 def test_proxy_server_sessions_stay_on_owner_queue() -> None:
     source = (SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift").read_text(encoding="utf-8")
 
-    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue") == 2
+    assert source.count("OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_proxy_server_sessions_stay_on_owner_queue") == 3
     assert "ObstacleBridgeProxyServer: @unchecked Sendable" in source
     assert "ProxySession: @unchecked Sendable" in source
     assert "private func withOwnerQueue<T>" in source

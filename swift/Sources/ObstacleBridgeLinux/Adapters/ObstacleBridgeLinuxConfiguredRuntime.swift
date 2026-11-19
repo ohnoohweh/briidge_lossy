@@ -87,7 +87,10 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// while the client is still completing the lower peer-address exchange.
     /// Keep that frame until the single receive owner is active rather than
     /// treating it as handshake-only traffic.
-    private var handshakeDeliveredPayloads: [Data] = []
+    // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests
+    private let handshakeDeliveredPayloads = ObstacleBridgeBoundedDataFIFO(limits: .init(
+        maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
+    ))
     /// The resource owner supplies measured request/reply latency. The Core
     /// lifecycle decides whether sustained delay retires the epoch.
     public var onTransportLivenessSample: ((Double) -> Void)?
@@ -407,6 +410,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     public func close() {
         overlayAdapter?.handleTransportDisconnected()
         lowerSession.close()
+        requestLock.lock()
+        handshakeDeliveredPayloads.removeAll()
+        requestLock.unlock()
         if snapshot.state != "failed" {
             snapshot = .init(transport: snapshot.transport, state: "disconnected", attempts: snapshot.attempts, failureReason: nil)
         }
@@ -423,7 +429,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         let delivered = try exchangeAdapterFrames(try overlayAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce).emittedFrames)
         if !delivered.isEmpty {
             requestLock.lock()
-            handshakeDeliveredPayloads.append(contentsOf: delivered)
+            for payload in delivered { _ = handshakeDeliveredPayloads.append(payload) }
             requestLock.unlock()
         }
         guard overlayAdapter.secureLinkProtocolState()?.authenticated == true else {
@@ -434,8 +440,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     private func takeHandshakeDeliveredPayload() -> Data? {
         requestLock.lock()
         defer { requestLock.unlock() }
-        guard !handshakeDeliveredPayloads.isEmpty else { return nil }
-        return handshakeDeliveredPayloads.removeFirst()
+        return handshakeDeliveredPayloads.popFirst()
     }
 
     private func exchangeAdapterFrames(_ initialFrames: [Data]) throws -> [Data] {

@@ -152,8 +152,8 @@ Current product-status summary:
 
 - ObstacleBridge on iPhone has now crossed from "prototype packet tunnel host" into "initial full-blown VPN client".
 - The app can install and manage the VPN profile, onboard from invite/config material, run the extension-hosted WebAdmin, and route real traffic through the tunnel.
-- The earlier sudden-crash class that interrupted active tunnel sessions has been substantially reduced by the current Swift/native hardening work around the extension boundary and shared runtime integration.
-- The remaining observed weakness is different: the Network Extension can still disappear after the phone sleeps, after prolonged idle time, or after long periods without traffic, which points more toward iOS lifecycle/background policy, idle-session handling, or missing keepalive strategy than toward the original crash defect.
+- The earlier hot-path state-persistence and diagnostic work substantially reduced avoidable traffic-path allocation pressure, but it did not remove traffic-linked Network Extension termination.
+- Device experiments show that termination is associated with the extension's `phys_footprint` approaching roughly 50 MiB. Sleep, idle, and background-lifecycle behavior remain separate resilience concerns.
 
 ### Outcome 1: BeeWare Is Useful For The Containing App, Not For Replacing Network Extension
 
@@ -628,41 +628,44 @@ Design impact:
 - tunnel identity can evolve with config updates instead of requiring code edits
 - dual-stack support should be treated as part of the main design, not as a future appendix
 
-### Outcome 9: The Original Sudden-Crash Problem Is No Longer The Primary Risk
+### Outcome 9: Traffic-Linked Termination Is Physical-Footprint Pressure
 
-The earlier "tunnel is working and then suddenly dies under live traffic" problem was an important design-learning phase, and it drove real changes at the Swift/native boundary. That specific class of failure is no longer the dominant story.
+The earlier "tunnel is working and then suddenly dies under live traffic" problem remains a primary hardening risk, but the relevant memory measure is now clearer.
 
-Observed outcome:
+Device evidence:
 
-- the current Swift-backed extension path no longer presents the same abrupt crash signature as the main day-to-day blocker
-- the extension/runtime integration has matured enough that traffic forwarding, WebAdmin access, invite onboarding, and VPN profile control are all now part of normal product behavior
+- a traffic-driven run ended shortly after a last successful sample of 47.9 MiB `phys_footprint`, 190 MiB resident memory, and 201 MiB default-zone malloc in-use;
+- a separate temporary probe retained touched 5 MiB `Data` blocks every 30 seconds after startup and ended shortly after the 45 MiB retained step, whose last successful sample was 49.1 MiB `phys_footprint`, 117 MiB resident memory, and 57.5 MiB malloc in-use;
+- bounded PacketFlow, SecureLink, mux, and WebAdmin queues were empty or only briefly held a small transient payload during the traffic measurements.
+
+This does not establish an exact Apple quota or prove the operating-system termination reason without a system diagnostic. It does establish that resident size is not the representative control variable: the two failures had very different resident and malloc totals but converged near 50 MiB physical footprint. `TASK_VM_INFO.phys_footprint` is therefore the primary on-device warning and comparison metric for this extension.
 
 Design impact:
 
-- iOS should now be described as an implemented VPN client product slice, not only as a tunnel-hosting experiment
-- Swift's role in lifecycle ownership, packet-boundary control, and runtime hardening is now proven and should be treated as part of the stable architecture
-- future iOS design work should assume that the packet path itself is basically real and concentrate on resilience and lifecycle correctness
+- iOS should now be described as an implemented VPN client product slice with a strict extension-memory budget, not only as a tunnel-hosting experiment;
+- Swift's role in lifecycle ownership, packet-boundary control, and runtime hardening remains proven, while traffic-path allocation attribution is an active requirement;
+- deliberate allocation probes are temporary device diagnostics and must not ship in the provider;
+- future hardening must keep live traffic-path memory below the observed physical-footprint boundary rather than using resident size as a budget proxy.
 
-### Outcome 10: Current Risk Has Shifted From Reachability To Extension Lifecycle Hardening
+### Outcome 10: Current Risk Includes Extension Lifecycle And Memory-Budget Hardening
 
-The most recent failure mode no longer questions whether the tunnel can carry traffic. That part is proven. The remaining risk has moved to robustness across iPhone sleep, idle periods, and extension lifecycle transitions.
+The tunnel can carry traffic, but reliable long-lived operation also requires robustness across iPhone sleep, idle periods, extension lifecycle transitions, and the observed physical-footprint budget.
 
 Observed behavior:
 
 - the Network Extension carries substantial IPv4 and IPv6 traffic successfully while active
-- the extension can still vanish later, especially when the iPhone turns off, sleeps, or appears idle for a while
-- this disappearance does not look like the original foreground-path crash symptom anymore
+- the extension can vanish under sustained traffic when physical footprint approaches the observed boundary, and it can also be affected by sleep or idle lifecycle conditions
 - the resulting user-visible symptom is that the VPN disconnects or silently stops carrying traffic until the runtime is reawakened or restarted
 
 Current interpretation:
 
-- this now points more strongly to extension lifecycle policy, idle handling, missing keepalive behavior, or sleep-aware runtime design than to routing or configuration defects
+- this requires separate investigation of live allocation ownership and extension lifecycle policy; neither routing nor configuration defects explain the controlled memory result
 - if the product should remain connected while the phone sleeps or when traffic is sparse, the runtime likely needs an explicit strategy for idle preservation or reconnect after wake
 - a "sleep mode" in the design sense may be required: reduce noisy work, preserve session identity where possible, and keep enough control traffic alive that iOS does not treat the tunnel as disposable
 
 Design impact:
 
-- the primary engineering goal has changed from "make iOS tunneling work at all" to "make the working tunnel resilient across sleep, idle, and background lifecycle transitions"
+- the primary engineering goal has changed from "make iOS tunneling work at all" to "keep the working tunnel within its memory budget and resilient across sleep, idle, and background lifecycle transitions"
 - observability and rate-aware diagnostics in the packet bridge are now important hardening tools
 - reducing hot-path logging pressure is part of the runtime-stability design, not just a cosmetic cleanup
 - future hardening should explicitly study:
@@ -1660,19 +1663,20 @@ Next hardening work:
 - continue to verify that invite generation/import preserves the same tunnel identity on both sides
 - defend against stale fallback defaults that can silently reintroduce wrong tunnel addresses
 
-### 2. Treat Sleep/Idle Survival As The Primary iOS Runtime Problem
+### 2. Treat Physical-Footprint Budget And Sleep/Idle Survival As Primary iOS Runtime Problems
 
 What is now known:
 
-- the original "sudden crash while forwarding" problem is no longer the main blocker
-- the extension can still disappear later, especially when the iPhone sleeps or when traffic is idle for a while
-- this points more strongly to lifecycle/keepalive handling than to the original packet-path viability question
+- controlled and traffic-driven runs both terminated close to 50 MiB `phys_footprint`, despite materially different resident-memory values
+- the extension can also disappear when the iPhone sleeps or when traffic is idle for a while
+- live allocation ownership and lifecycle/keepalive behavior must be diagnosed independently
 
 Next hardening work:
 
 - define what "connected while idle" should mean for the iOS product
 - decide whether sparse control traffic or explicit keepalive maintenance is required
 - document and test wake/reconnect behavior separately from initial connect behavior
+- add bounded, per-subsystem live-byte counters at packet and frame ownership boundaries, then compare them with physical-footprint growth under representative traffic
 - treat "sleep mode" as a first-class runtime state rather than as an accidental gap
 
 ### 3. Keep Python/Swift Functional Parity Visible

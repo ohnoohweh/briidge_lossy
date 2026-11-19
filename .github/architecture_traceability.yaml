@@ -22,6 +22,9 @@ ARC-CMP-001:
   # The Linux listener service probe consumes the common Admin peer wrapper.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_address_sanitizer_reports_no_leaks
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_address_sanitizer_webadmin_and_logging_report_no_leaks
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_address_sanitizer_tun_helper_reports_no_leaks
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_native_python_myudp_window_pressure
     - tests/integration/test_overlay_e2e.py::test_linux_swift_myudp_reference_peer_waits_for_response_drain
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_repeated_dropped_application_data
@@ -36,6 +39,14 @@ ARC-CMP-001:
     - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_stream_egress_round_robins_one_message_per_source
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxEgressSequencerTests.swift::allMuxMessageTypesSharePersistentSourceTurns
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxEgressSequencerTests.swift::concurrentEnqueueAndDrainProtectsNativeSetStorage
+    - tests/unit/test_swift_memory_safety_guard.py::test_rejects_new_unbounded_persistent_data_queue
+    - tests/unit/test_swift_memory_safety_guard.py::test_rejects_pending_data_field_and_dictionary_value_without_allowlist
+    - tests/unit/test_swift_memory_safety_guard.py::test_rejects_new_network_send_without_bounded_owner_marker
+    - tests/unit/test_swift_memory_safety_guard.py::test_accepts_documented_bounded_network_send
+    - tests/unit/test_swift_memory_safety_guard.py::test_rejects_changed_stored_closure_that_strongly_captures_self
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeBoundedDataFIFOTests.swift::dropNewestKeepsRetainedBytesBoundedAndDrainsInOrder
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeBoundedDataFIFOTests.swift::keyedStoreCoalescesAndRejectsOverfill
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::handoffQueueDropsOverByteLimitAndReleasesOnStop
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayConnectionPolicyTests.swift::projectsAndUpdatesConnectionState
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxChannelIDAllocationTests.swift::splitsMaximumMyUDPRecordAtTheChannelMuxWireBoundary
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebSocketOverlayRuntimeTests.swift::clientLayerAdapterRequestsAndProjectsObservedPublicEndpoint
@@ -605,6 +616,7 @@ ARC-CMP-004:
     - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_myudp_secure_link_remote_tcp_server_reaches_extension_admin_web
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_over_myudp_packet_carry
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_swift_over_myudp_packet_carry
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_swift_tun_helper_udp_tcp_webadmin_rekey_traffic
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_reports_helper_death_during_partial_cleanup
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_repairs_stale_firewall_and_routes_after_helper_loss
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_rolls_back_partial_apply_failure
@@ -635,6 +647,7 @@ ARC-CMP-004:
     - tests/unit/test_runtime_metrics.py::test_memory_metrics_are_bounded_and_report_warning_state
     - tests/unit/test_runtime_metrics.py::test_runner_memory_sampler_projects_rss_and_unavailable_state
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::projectsPythonCompatibleBoundedMemoryMetrics
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::projectsPhysicalFootprintTerminationRiskThreshold
     - tests/unit/test_runtime_metrics.py::test_memory_metrics_report_unavailable_before_a_successful_sample
     - tests/unit/test_config_bootstrap_cli.py::test_runner_memory_warning_limit_is_configurable_in_bytes
     - tests/unit/test_admin_web_component_parity.py::test_runtime_analysis_renders_optional_memory_metrics_without_affecting_older_hosts
@@ -1247,6 +1260,7 @@ ARC-CMP-006:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionReceivesPeerFrameAfterAddressRegistration
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::workerDeliversEpochTaggedFramesAndCancelsBlockingReceive
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::asyncWorkerRearmsAfterEachDeliveredFrame
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::handoffQueueDropsOverByteLimitAndReleasesOnStop
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkReceivesProtectedPeerFrameBeforeLocalSend
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketSecureLinkReceivesProtectedPeerFrameBeforeLocalSend
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkReceivesProtectedPeerFrameBeforeLocalSend
