@@ -20,6 +20,7 @@ final class ObstacleBridgeLinuxQUICSession: @unchecked Sendable {
 
         private let condition = NSCondition()
         private var bytes = Data()
+        private static let maximumBufferedBytes = 1_048_576
         private var inactive = false
         private var asyncHandler: ((Result<Data, Error>) -> Void)?
 
@@ -29,7 +30,16 @@ final class ObstacleBridgeLinuxQUICSession: @unchecked Sendable {
                 let data = Data(received)
                 condition.lock()
                 let handler = asyncHandler
-                if handler == nil { bytes.append(data) }
+                if handler == nil {
+                    guard bytes.count + data.count <= Self.maximumBufferedBytes else {
+                        inactive = true
+                        condition.broadcast()
+                        condition.unlock()
+                        context.close(promise: nil)
+                        return
+                    }
+                    bytes.append(data)
+                }
                 condition.broadcast()
                 condition.unlock()
                 handler?(.success(data))
