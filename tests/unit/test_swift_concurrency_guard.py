@@ -32,6 +32,23 @@ def test_rejects_new_unchecked_sendable_conformance(monkeypatch) -> None:
     assert "forbidden" in errors[0]
 
 
+def test_accepts_audited_serial_network_sender_sendable_conformances(monkeypatch) -> None:
+    guard = _load()
+    path = "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeProxyConnections.swift"
+    monkeypatch.setattr(
+        guard,
+        "changed_lines",
+        lambda _args: {
+            path: [
+                "// OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue",
+                "final class ObstacleBridgeBoundedConnectionDataSender: @unchecked Sendable {",
+                "private struct PendingWrite: @unchecked Sendable {",
+            ]
+        },
+    )
+    assert guard.validate(guard.changed_lines(["--staged"])) == []
+
+
 def test_accepts_lock_marker_with_named_test(monkeypatch) -> None:
     guard = _load()
     monkeypatch.setattr(
@@ -51,6 +68,27 @@ def test_zero_before_sha_uses_the_branch_merge_base(monkeypatch) -> None:
 
     monkeypatch.setattr(guard.subprocess, "run", lambda *_args, **_kwargs: Result())
     assert guard.effective_base(guard.NULL_GIT_SHA) == "merge-base-sha"
+
+
+def test_missing_force_push_before_sha_uses_the_branch_merge_base(monkeypatch) -> None:
+    guard = _load()
+
+    class MissingBefore:
+        returncode = 1
+        stdout = ""
+
+    class MergeBase:
+        returncode = 0
+        stdout = "merge-base-sha\n"
+
+    def run(args, **_kwargs):
+        if args[1:3] == ["rev-parse", "--verify"]:
+            return MissingBefore()
+        assert args == ["git", "merge-base", "HEAD", "origin/main"]
+        return MergeBase()
+
+    monkeypatch.setattr(guard.subprocess, "run", run)
+    assert guard.effective_base("former-force-pushed-tip") == "merge-base-sha"
 
 
 def test_rejects_new_synchronous_primitive_in_legacy_owner(monkeypatch) -> None:

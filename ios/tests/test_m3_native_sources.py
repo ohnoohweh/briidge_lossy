@@ -2024,7 +2024,8 @@ def test_native_proxy_connections_keep_callbacks_on_owner_queue() -> None:
     assert "final class ObstacleBridgeUDPProxyConnection: @unchecked Sendable" in source
     assert "localConnection.start(queue: queue)" in source
     assert "remoteConnection.start(queue: queue)" in source
-    assert "final class ObstacleBridgeBoundedConnectionDataSender" in source
+    assert "final class ObstacleBridgeBoundedConnectionDataSender: @unchecked Sendable" in source
+    assert "private struct PendingWrite: @unchecked Sendable" in source
     assert "maximumItems: Int = 128, maximumBytes: Int = 2 * 1_024 * 1_024" in source
     assert "private lazy var localSender = ObstacleBridgeBoundedConnectionDataSender" in source
     assert "private lazy var remoteSender = ObstacleBridgeBoundedConnectionDataSender" in source

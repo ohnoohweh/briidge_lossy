@@ -3,10 +3,12 @@ import Network
 
 /// Serial-owner Network.framework sender. A connection is permitted one
 /// submitted write and a bounded payload FIFO behind it; Network.framework is
-/// never used as an unbounded application queue.
-final class ObstacleBridgeBoundedConnectionDataSender {
-    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue
-    private struct PendingWrite {
+/// never used as an unbounded application queue. Its public methods and the
+/// `NWConnection` completion run exclusively on the connection's serial owner
+/// queue, established by each proxy connection before any sender is used.
+// OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue
+final class ObstacleBridgeBoundedConnectionDataSender: @unchecked Sendable {
+    private struct PendingWrite: @unchecked Sendable {
         let data: Data
         let completion: (NWError?) -> Void
     }

@@ -152,7 +152,10 @@ set -e
 
 # App Intents metadata extraction emits this informational tool message when a
 # target has no AppIntents dependency. It is not a compiler diagnostic.
-WARNING_COUNT="$(/usr/bin/grep -F 'warning:' "${BUILD_LOG}" | /usr/bin/grep -Fv 'Metadata extraction skipped. No AppIntents.framework dependency found.' | /usr/bin/wc -l | /usr/bin/tr -d ' ' || true)"
+# Xcode may wrap the final "framework dependency found" portion onto a
+# following line, so match the stable warning prefix rather than the complete
+# human-readable sentence.
+WARNING_COUNT="$(/usr/bin/grep -F 'warning:' "${BUILD_LOG}" | /usr/bin/grep -Fv 'warning: Metadata extraction skipped. No AppIntents.' | /usr/bin/wc -l | /usr/bin/tr -d ' ' || true)"
 ERROR_COUNT="$(/usr/bin/grep -cF 'error:' "${BUILD_LOG}" || true)"
 WARNING_COUNT="${WARNING_COUNT:-0}"
 ERROR_COUNT="${ERROR_COUNT:-0}"

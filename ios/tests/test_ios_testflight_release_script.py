@@ -49,5 +49,6 @@ def test_device_build_script_accepts_release_version_and_generic_signing_update(
     assert '-strict-concurrency=complete' in source
     assert 'compiler diagnostics: warnings=${WARNING_COUNT} errors=${ERROR_COUNT}' in source
     assert 'strict-concurrency diagnostics must be zero' in source
+    assert "warning: Metadata extraction skipped. No AppIntents." in source
     assert 'rg ' not in source
     assert '/usr/bin/grep -F' in source
