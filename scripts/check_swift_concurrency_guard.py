@@ -135,9 +135,17 @@ def is_audited_synchronous_owner(path: str, added: list[str]) -> bool:
 
 def effective_base(base_ref: str) -> str:
     # GitHub supplies an all-zero `before` SHA for the first push of a newly
-    # created branch. Resolve that event against its actual common ancestor
-    # instead of passing the sentinel to `git diff` as though it were a ref.
-    if base_ref == NULL_GIT_SHA:
+    # created branch. A force-push can also make the former tip unavailable in
+    # a fresh checkout. Resolve either case against the actual common ancestor
+    # instead of passing an unavailable revision to `git diff`.
+    before_available = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{base_ref}^{{commit}}"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    ).returncode == 0
+    if base_ref == NULL_GIT_SHA or not before_available:
         merge_base = subprocess.run(
             ["git", "merge-base", "HEAD", "origin/main"],
             cwd=ROOT,

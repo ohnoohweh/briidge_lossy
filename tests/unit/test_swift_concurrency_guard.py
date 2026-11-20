@@ -70,6 +70,27 @@ def test_zero_before_sha_uses_the_branch_merge_base(monkeypatch) -> None:
     assert guard.effective_base(guard.NULL_GIT_SHA) == "merge-base-sha"
 
 
+def test_missing_force_push_before_sha_uses_the_branch_merge_base(monkeypatch) -> None:
+    guard = _load()
+
+    class MissingBefore:
+        returncode = 1
+        stdout = ""
+
+    class MergeBase:
+        returncode = 0
+        stdout = "merge-base-sha\n"
+
+    def run(args, **_kwargs):
+        if args[1:3] == ["rev-parse", "--verify"]:
+            return MissingBefore()
+        assert args == ["git", "merge-base", "HEAD", "origin/main"]
+        return MergeBase()
+
+    monkeypatch.setattr(guard.subprocess, "run", run)
+    assert guard.effective_base("former-force-pushed-tip") == "merge-base-sha"
+
+
 def test_rejects_new_synchronous_primitive_in_legacy_owner(monkeypatch) -> None:
     guard = _load()
     monkeypatch.setattr(

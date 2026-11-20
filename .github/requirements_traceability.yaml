@@ -1168,6 +1168,7 @@ REQ-LIFE-010:
     - tests/unit/test_swift_concurrency_guard.py::test_rejects_new_synchronous_primitive_in_legacy_owner
     - tests/unit/test_swift_concurrency_guard.py::test_accepts_lock_marker_with_named_test
     - tests/unit/test_swift_concurrency_guard.py::test_zero_before_sha_uses_the_branch_merge_base
+    - tests/unit/test_swift_concurrency_guard.py::test_missing_force_push_before_sha_uses_the_branch_merge_base
     - tests/unit/test_swift_memory_safety_guard.py::test_rejects_new_unbounded_persistent_data_queue
     - tests/unit/test_swift_memory_safety_guard.py::test_rejects_pending_data_field_and_dictionary_value_without_allowlist
     - tests/unit/test_swift_memory_safety_guard.py::test_rejects_new_network_send_without_bounded_owner_marker
