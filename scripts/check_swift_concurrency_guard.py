@@ -39,6 +39,12 @@ AUDITED_SYNCHRONOUS_OWNERS = (
         "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue",
     ),
     (
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeProxyConnections.swift",
+        "ObstacleBridgeBoundedConnectionDataSender: @unchecked Sendable",
+        "PendingWrite: @unchecked Sendable",
+        "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue",
+    ),
+    (
         "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebAdminServer.swift",
         "ObstacleBridgeWebAdminServer: @unchecked Sendable",
         "LiveSession: @unchecked Sendable",

@@ -1339,6 +1339,7 @@ ARC-IO-001:
     - tests/unit/test_async_io_guards.py::test_swift_guard_rejects_waits_in_every_product_source
     - tests/unit/test_async_io_guards.py::test_python_guard_rejects_new_wait_without_exception
     - tests/unit/test_swift_concurrency_guard.py::test_rejects_new_unchecked_sendable_conformance
+    - tests/unit/test_swift_concurrency_guard.py::test_accepts_audited_serial_network_sender_sendable_conformances
     - tests/unit/test_swift_concurrency_guard.py::test_rejects_new_synchronous_primitive_in_legacy_owner
     - tests/unit/test_swift_concurrency_guard.py::test_accepts_lock_marker_with_named_test
     - tests/unit/test_swift_concurrency_guard.py::test_zero_before_sha_uses_the_branch_merge_base
