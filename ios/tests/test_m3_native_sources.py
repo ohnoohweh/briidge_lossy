@@ -203,18 +203,6 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "ObstacleBridgeQuicOverlayTransportOwner" in provider
     assert "let protocolConnected = connectionLayers.first(where:" in provider
     assert '"connected": protocolConnected' in provider
-
-
-def test_ios_packet_tunnel_probe_exercises_nonterminal_udp_retry_lifecycle() -> None:
-    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
-    udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
-
-    assert "func forceTransportDisconnectForProbe()" in provider
-    assert "bridge.forceTransportDisconnectForProbe()" in provider
-    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects" in provider
-    assert "#if OB_IPSERVER_SWIFT_PROBE" in udp_owner
-    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects" in udp_owner
-    assert 'resetOverlayTransportEpoch(reason: "probe_transport_disconnect")' in udp_owner
     assert "swift_simple_udp" in provider
     assert "swift_udp" in provider
     assert "packetflow_connector_mode_selected" in provider
@@ -323,6 +311,18 @@ def test_ios_packet_tunnel_probe_exercises_nonterminal_udp_retry_lifecycle() -> 
     assert 'let retryBackoffMaxMS = Self.intValue(from: runtimeConfig["secure_link_retry_backoff_max_ms"]) ?? 5000' in host_runner
     assert 'secure_link_recover_after_failure' not in host_runner
     assert 'secure_link_recover_delay_seconds' not in host_runner
+
+
+def test_ios_packet_tunnel_probe_exercises_nonterminal_udp_retry_lifecycle() -> None:
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "func forceTransportDisconnectForProbe()" in provider
+    assert "bridge.forceTransportDisconnectForProbe()" in provider
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects" in provider
+    assert "#if OB_IPSERVER_SWIFT_PROBE" in udp_owner
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects" in udp_owner
+    assert 'resetOverlayTransportEpoch(reason: "probe_transport_disconnect")' in udp_owner
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:

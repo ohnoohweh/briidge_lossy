@@ -8026,7 +8026,11 @@ def test_overlay_e2e_myudp_receive_idle_client_parity(
         server_proc = None
         time.sleep(5.0)
         status = try_get_status(client_proc.admin_port or 0)
-        assert status_state(status) == 'CONNECTED', (
+        # A connected UDP socket can asynchronously report the listener's
+        # ICMP port-unreachable after it is stopped.  Python leaves this in
+        # its established epoch; Swift may immediately request a fresh epoch.
+        # Both are valid only while the enabled client remains retryable.
+        assert status_state(status) not in {'FAILED', 'STOPPED'}, (
             f'{runtime_mode} client entered a terminal state after myUDP receive idleness: {status!r}'
         )
     finally:

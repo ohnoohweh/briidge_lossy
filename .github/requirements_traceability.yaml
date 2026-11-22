@@ -868,7 +868,8 @@ REQ-LIFE-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
     # Runs the same Python-server receive-idle scenario with Python and Linux
-    # Swift clients, which must both remain non-terminal.
+    # Swift clients, which must both remain non-terminal; Swift may rotate to
+    # a fresh retryable epoch after a delayed UDP port-unreachable.
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_receive_idle_client_parity
   unit_tests:
     - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion

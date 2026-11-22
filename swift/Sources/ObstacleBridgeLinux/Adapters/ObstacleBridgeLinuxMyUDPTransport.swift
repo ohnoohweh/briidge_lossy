@@ -25,12 +25,24 @@ public enum ObstacleBridgeLinuxMyUDPError: Error, Equatable, LocalizedError {
 /// records form an ordered stream; CONTROL and IDLE frames are transport
 /// traffic, never application replies.
 public final class ObstacleBridgeLinuxMyUDPTransportSession {
+    /// One delayed ICMP port-unreachable is not a lifecycle failure.  If no
+    /// authenticated inbound datagram arrives during this grace period, retire
+    /// the epoch so a restarted peer receives a fresh SecureLink handshake.
+    private static let peerUnreachableRecoveryGraceNS: UInt64 = 5_500_000_000
+    /// A quiet authenticated UDP receive owner remains connected through the
+    /// configured receive-idle window.  Prolonged silence is instead a
+    /// non-terminal recovery signal, allowing a restarted peer to receive a
+    /// fresh SecureLink handshake without imposing a bounded retry limit.
+    private static let asynchronousReceiveRecoveryGraceNS: UInt64 = 6_000_000_000
     private var descriptor: Int32
     private let peerRuntime: ObstacleBridgeUdpOverlayPeerRuntime
     private let deliveredPayloads = ObstacleBridgeBoundedDataFIFO(limits: .init(
         maximumItems: 256, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
     ))
-    private let stateLock = NSLock()
+    // `execute` sends peer-runtime effects while this lock is held. The
+    // outbound liveness check therefore needs recursive acquisition when an
+    // effect is emitted during bootstrap or a timer turn.
+    private let stateLock = NSRecursiveLock()
     private let receiveLock = NSLock()
     /// POSIX sends share the descriptor between the Core-effect producer and
     /// the readiness timer.  Keep would-block datagrams ordered until the
@@ -40,13 +52,25 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private let pendingOutboundWires = ObstacleBridgeBoundedDataFIFO(limits: .init(
         maximumItems: 512, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
     ))
+    private let peerUnreachableLock = NSLock()
+    private var peerUnreachableRecoveryDeadlineNS: UInt64?
+    private let asyncHandlerLock = NSLock()
+    private var asyncResultHandler: ((Result<Data, Error>) -> Void)?
     private let synchronousReceiveWaitMS: Int32
+    /// Protected by `stateLock`; this is a recovery observation, never a
+    /// receive-call deadline.
+    private var lastAsyncReceiveNS: UInt64 = 0
     /// This is deliberately metadata-only.  myUDP payloads can contain
     /// protected application traffic and must never be copied into a log.
     private let diagnosticSink: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)?
     private let readinessQueue = DispatchQueue(label: "org.obstaclebridge.linux.myudp.readiness")
+    /// This timer deliberately does not share the readiness queue.  A busy or
+    /// repeatedly-readable UDP descriptor must not postpone stale-epoch
+    /// recovery indefinitely after the remote process has restarted.
+    private let inactivityRecoveryQueue = DispatchQueue(label: "org.obstaclebridge.linux.myudp.inactivity")
     private var readSource: DispatchSourceRead?
     private var timerSource: DispatchSourceTimer?
+    private var inactivityRecoveryTimer: DispatchSourceTimer?
 
     /// `nextDataCounter` is an injectable Core seed for deterministic
     /// rollover qualification; normal runtime construction uses `1`.
@@ -256,6 +280,12 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         defer { receiveLock.unlock() }
         guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
         guard readSource == nil else { return }
+        asyncHandlerLock.lock()
+        asyncResultHandler = handler
+        asyncHandlerLock.unlock()
+        stateLock.lock()
+        lastAsyncReceiveNS = DispatchTime.now().uptimeNanoseconds
+        stateLock.unlock()
         let flags = fcntl(descriptor, F_GETFL)
         guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
             throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno)
@@ -269,8 +299,18 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             do { try self.serviceTimers() }
             catch { handler(.failure(error)) }
         }
-        readSource = source; timerSource = timer
-        source.resume(); timer.resume()
+        let inactivityTimer = DispatchSource.makeTimerSource(queue: inactivityRecoveryQueue)
+        inactivityTimer.schedule(
+            deadline: .now() + .milliseconds(100),
+            repeating: .milliseconds(100),
+            leeway: .milliseconds(10)
+        )
+        inactivityTimer.setEventHandler { [weak self] in
+            guard let self, self.consumeAsyncReceiveRecoveryIfDue() else { return }
+            handler(.failure(ObstacleBridgeLinuxMyUDPError.ioFailure(ETIMEDOUT)))
+        }
+        readSource = source; timerSource = timer; inactivityRecoveryTimer = inactivityTimer
+        source.resume(); timer.resume(); inactivityTimer.resume()
     }
 
     private func drainReadyDatagrams(_ handler: @escaping (Result<Data, Error>) -> Void) {
@@ -297,6 +337,9 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                 handler(.failure(socketError(code, operation: "async_receive")))
                 return
             }
+            stateLock.lock()
+            lastAsyncReceiveNS = DispatchTime.now().uptimeNanoseconds
+            stateLock.unlock()
             do {
                 for payload in try acceptInboundWire(Data(buffer.prefix(Int(received)))) {
                     handler(.success(payload))
@@ -316,7 +359,33 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         }
     }
 
+    private func consumeAsyncReceiveRecoveryIfDue() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard lastAsyncReceiveNS != 0 else { return false }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now >= lastAsyncReceiveNS,
+              now - lastAsyncReceiveNS >= Self.asynchronousReceiveRecoveryGraceNS
+        else { return false }
+        // The coordinator will replace this owner before another timer turn.
+        // Clear the marker so a delayed cancellation cannot produce a second
+        // failure for the same receive epoch.
+        lastAsyncReceiveNS = 0
+        diagnostic(.info, "myudp.receive_inactivity_recovery", diagnosticFields([
+            "grace_ms": String(Self.asynchronousReceiveRecoveryGraceNS / 1_000_000),
+        ]))
+        return true
+    }
+
+    private func reportAsyncReceiveRecovery() {
+        asyncHandlerLock.lock()
+        let handler = asyncResultHandler
+        asyncHandlerLock.unlock()
+        handler?(.failure(ObstacleBridgeLinuxMyUDPError.ioFailure(ETIMEDOUT)))
+    }
+
     private func acceptInboundWire(_ wire: Data) throws -> [Data] {
+        clearPeerUnreachableRecovery()
         stateLock.lock()
         let now = DispatchTime.now().uptimeNanoseconds
         let effect: ObstacleBridgeUdpOverlayPeerRuntime.InboundWireSnapshot
@@ -339,6 +408,10 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     public func close() {
         readSource?.cancel(); readSource = nil
         timerSource?.cancel(); timerSource = nil
+        inactivityRecoveryTimer?.cancel(); inactivityRecoveryTimer = nil
+        asyncHandlerLock.lock()
+        asyncResultHandler = nil
+        asyncHandlerLock.unlock()
         outboundLock.lock()
         pendingOutboundWires.removeAll(keepingCapacity: false)
         outboundLock.unlock()
@@ -355,6 +428,9 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     /// with its own event loop may call this at its selected timer cadence.
     public func serviceTimers() throws {
         guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
+        if peerUnreachableRecoveryIsDue() {
+            throw ObstacleBridgeLinuxMyUDPError.ioFailure(ECONNREFUSED)
+        }
         try drainPendingOutboundWires()
         stateLock.lock()
         defer { stateLock.unlock() }
@@ -433,20 +509,12 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             return true
         }
         let code = errno
-        if sent < 0 && (code == EAGAIN || code == EWOULDBLOCK || code == ECONNREFUSED) {
+        if sent < 0 && (code == EAGAIN || code == EWOULDBLOCK) {
             let fields = diagnosticFields([
                 "errno": String(code),
                 "wire_bytes": String(wire.count),
                 "pending_wire_count": String(pendingOutboundWires.count),
             ])
-            if code == ECONNREFUSED {
-                // Connected UDP reports a delayed ICMP port-unreachable on a
-                // later send. Python keeps the peer lifecycle alive through
-                // this condition; queue the wire and let normal Core timers
-                // drive recovery rather than retiring the epoch.
-                diagnostic(.warning, "myudp.send_transient_error", fields)
-                return false
-            }
             // Warn on the transition into congestion.  Timer retries remain
             // visible at debug without turning sustained local pressure into
             // a warning flood.
@@ -454,6 +522,30 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             return false
         }
         throw socketError(code, operation: "send", wireBytes: wire.count, sentBytes: max(0, sent))
+    }
+
+    private func schedulePeerUnreachableRecovery() {
+        peerUnreachableLock.lock()
+        defer { peerUnreachableLock.unlock() }
+        guard peerUnreachableRecoveryDeadlineNS == nil else { return }
+        peerUnreachableRecoveryDeadlineNS = DispatchTime.now().uptimeNanoseconds
+            &+ Self.peerUnreachableRecoveryGraceNS
+    }
+
+    private func clearPeerUnreachableRecovery() {
+        peerUnreachableLock.lock()
+        peerUnreachableRecoveryDeadlineNS = nil
+        peerUnreachableLock.unlock()
+    }
+
+    private func peerUnreachableRecoveryIsDue() -> Bool {
+        peerUnreachableLock.lock()
+        defer { peerUnreachableLock.unlock() }
+        guard let deadline = peerUnreachableRecoveryDeadlineNS else { return false }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now >= deadline else { return false }
+        peerUnreachableRecoveryDeadlineNS = nil
+        return true
     }
 
     private func enqueueDeferredWireLocked(_ wire: Data, reason: String) {
