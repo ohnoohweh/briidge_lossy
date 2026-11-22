@@ -677,6 +677,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     /// disconnect.  This exists only in the packet-tunnel probe build so CI
     /// can prove the Apple UDP owner retains an enabled client's lifecycle
     /// after repeated recovery attempts.
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects
     func forceTransportDisconnectForProbe() {
         withOwnerQueue {
             guard started else { return }
