@@ -31,6 +31,8 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         maximumItems: 256, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
     ))
     private let stateLock = NSLock()
+    /// Accessed while `stateLock` is held by Core-effect execution.
+    private var servicingTimerEffects = false
     private let receiveLock = NSLock()
     /// POSIX sends share the descriptor between the Core-effect producer and
     /// the readiness timer.  Keep would-block datagrams ordered until the
@@ -358,6 +360,8 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         try drainPendingOutboundWires()
         stateLock.lock()
         defer { stateLock.unlock() }
+        servicingTimerEffects = true
+        defer { servicingTimerEffects = false }
         let effects = try peerRuntime.tick(nowNS: DispatchTime.now().uptimeNanoseconds)
         if !effects.isEmpty {
             diagnostic(.debug, "myudp.timer_emitted_frames", diagnosticFields([
@@ -443,6 +447,18 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             // visible at debug without turning sustained local pressure into
             // a warning flood.
             diagnostic(pendingOutboundWires.isEmpty ? .warning : .debug, "myudp.send_deferred", fields)
+            return false
+        }
+        if sent < 0, code == ECONNREFUSED, servicingTimerEffects {
+            // Linux reports a delayed ICMP error against the next write of a
+            // connected UDP socket. Core timer traffic is not evidence that
+            // an authenticated application session has failed; retain it and
+            // let a real application send initiate recovery if necessary.
+            diagnostic(.warning, "myudp.send_transient_error", diagnosticFields([
+                "errno": String(code),
+                "wire_bytes": String(wire.count),
+                "pending_wire_count": String(pendingOutboundWires.count),
+            ]))
             return false
         }
         throw socketError(code, operation: "send", wireBytes: wire.count, sentBytes: max(0, sent))
