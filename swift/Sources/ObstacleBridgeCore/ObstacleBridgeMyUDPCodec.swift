@@ -602,13 +602,17 @@ public final class ObstacleBridgeMyUDPStreamReceiveState {
     public private(set) var missing: Set<UInt16> = []
     private var pendingHighest: UInt16?
     private var streamBuffer = Data()
+    /// Bytes before this offset were already delivered.  Keeping an offset
+    /// avoids repeatedly shifting a `Data` buffer, while `compactStreamBuffer`
+    /// prevents Foundation from retaining every consumed prefix as capacity.
+    private var streamReadOffset = 0
     private var expectedRecordLength: Int?
 
     public init() {}
 
     public func reset() {
         expected = 1; pending.removeAll(); missing.removeAll(); pendingHighest = nil
-        streamBuffer.removeAll(); expectedRecordLength = nil
+        clearStreamBuffer(); expectedRecordLength = nil
     }
 
     public func process(_ chunk: ObstacleBridgeMyUDPStreamChunk) -> (accepted: Bool, completedRecords: [Data])? {
@@ -671,25 +675,53 @@ public final class ObstacleBridgeMyUDPStreamReceiveState {
         // A partial record may retain at most its protocol-declared payload
         // plus the fixed header.  Reject instead of accumulating malformed
         // stream fragments indefinitely.
-        guard streamBuffer.count + bytes.count <= ObstacleBridgeMyUDPCodec.maximumStreamRecordSize + ObstacleBridgeMyUDPCodec.streamRecordHeaderSize else {
-            streamBuffer.removeAll(); expectedRecordLength = nil
+        guard unreadStreamByteCount + bytes.count <= ObstacleBridgeMyUDPCodec.maximumStreamRecordSize + ObstacleBridgeMyUDPCodec.streamRecordHeaderSize else {
+            clearStreamBuffer(); expectedRecordLength = nil
             return false
         }
         streamBuffer.append(bytes)
         while true {
             if expectedRecordLength == nil {
-                guard streamBuffer.count >= ObstacleBridgeMyUDPCodec.streamRecordHeaderSize else { return true }
-                let header = Data(streamBuffer.prefix(ObstacleBridgeMyUDPCodec.streamRecordHeaderSize))
+                guard unreadStreamByteCount >= ObstacleBridgeMyUDPCodec.streamRecordHeaderSize else { return true }
+                let headerEnd = streamReadOffset + ObstacleBridgeMyUDPCodec.streamRecordHeaderSize
+                let header = Data(streamBuffer[streamReadOffset..<headerEnd])
                 guard let length = try? ObstacleBridgeMyUDPCodec.decodeStreamRecordLength(header) else {
-                    streamBuffer.removeAll(); return false
+                    clearStreamBuffer(); return false
                 }
-                streamBuffer.removeFirst(ObstacleBridgeMyUDPCodec.streamRecordHeaderSize)
+                streamReadOffset = headerEnd
                 expectedRecordLength = length
             }
-            guard let length = expectedRecordLength, streamBuffer.count >= length else { return true }
-            completed.append(Data(streamBuffer.prefix(length)))
-            streamBuffer.removeFirst(length); expectedRecordLength = nil
+            guard let length = expectedRecordLength, unreadStreamByteCount >= length else {
+                compactStreamBufferIfNeeded()
+                return true
+            }
+            let recordEnd = streamReadOffset + length
+            completed.append(Data(streamBuffer[streamReadOffset..<recordEnd]))
+            streamReadOffset = recordEnd; expectedRecordLength = nil
+            compactStreamBufferIfNeeded()
         }
+    }
+
+    private var unreadStreamByteCount: Int { streamBuffer.count - streamReadOffset }
+
+    /// Retain at most one record plus a small consumed prefix.  `Data` can
+    /// retain backing capacity after prefix removal, which allowed a long-lived
+    /// stream receiver to grow resident memory even though its logical payload
+    /// count was capped.  Rebase after 32 KiB of consumption; a fully consumed
+    /// record receives fresh empty storage immediately.
+    private func compactStreamBufferIfNeeded() {
+        guard streamReadOffset > 0 else { return }
+        if streamReadOffset == streamBuffer.count {
+            clearStreamBuffer()
+        } else if streamReadOffset >= 32 * 1_024 {
+            streamBuffer = Data(streamBuffer[streamReadOffset...])
+            streamReadOffset = 0
+        }
+    }
+
+    private func clearStreamBuffer() {
+        streamBuffer = Data()
+        streamReadOffset = 0
     }
 
     private func identifyMissing() {

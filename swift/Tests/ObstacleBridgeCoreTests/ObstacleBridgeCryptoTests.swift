@@ -127,6 +127,28 @@ struct ObstacleBridgeCryptoTests {
         #expect(try #require(state.process(.init(counter: 1, payload: split))).completedRecords == [Data("ack".utf8)])
         #expect(state.acknowledgement == .init(lastInOrder: 2, highestReceived: 2, missing: []))
     }
+    @Test func myudpCoreStreamReceiveStateRebasesConsumedBufferAcrossManyRecords() throws {
+        let state = ObstacleBridgeMyUDPStreamReceiveState()
+        let payload = Data(repeating: 0x5a, count: 48 * 1_024)
+
+        // Repeatedly fragment complete records. This exercises the long-lived
+        // receive buffer that previously retained consumed Data capacity after
+        // each prefix removal.
+        for index in 0..<128 {
+            let record = try ObstacleBridgeMyUDPCodec.encodeStreamRecord(payload)
+            let split = 1_024 + (index % 97)
+            let first = Data(record.prefix(split))
+            let second = Data(record.dropFirst(split))
+            let firstResult = try #require(state.process(.init(counter: UInt16((index * 2) + 1), payload: first)))
+            #expect(firstResult.completedRecords.isEmpty)
+            let secondResult = try #require(state.process(.init(counter: UInt16((index * 2) + 2), payload: second)))
+            #expect(secondResult.completedRecords == [payload])
+        }
+
+        #expect(state.expected == 257)
+        #expect(state.pending.isEmpty)
+        #expect(state.missing.isEmpty)
+    }
     @Test func myudpCoreStreamReceiveStateUsesTheWireDerivedMissingLimit() throws {
         let state = ObstacleBridgeMyUDPStreamReceiveState()
         let beyondWindow = UInt16(ObstacleBridgeMyUDPCodec.maximumControlMissingCount + 2)
