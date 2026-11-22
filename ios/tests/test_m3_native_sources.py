@@ -203,6 +203,16 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "ObstacleBridgeQuicOverlayTransportOwner" in provider
     assert "let protocolConnected = connectionLayers.first(where:" in provider
     assert '"connected": protocolConnected' in provider
+
+
+def test_ios_packet_tunnel_probe_exercises_nonterminal_udp_retry_lifecycle() -> None:
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "func forceTransportDisconnectForProbe()" in provider
+    assert "bridge.forceTransportDisconnectForProbe()" in provider
+    assert "#if OB_IPSERVER_SWIFT_PROBE" in udp_owner
+    assert 'resetOverlayTransportEpoch(reason: "probe_transport_disconnect")' in udp_owner
     assert "swift_simple_udp" in provider
     assert "swift_udp" in provider
     assert "packetflow_connector_mode_selected" in provider

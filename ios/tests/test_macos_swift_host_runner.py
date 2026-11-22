@@ -1978,6 +1978,15 @@ def test_swift_peer_address_protocol_normalizes_ipv4_mapped_ipv6() -> None:
     assert "private static func encodePort(_ port: Int) -> Data" in runtime
 
 
+def test_macos_shared_udp_retry_policy_remains_nonterminal() -> None:
+    coordinator = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayCoordinator.swift").read_text(encoding="utf-8")
+    udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "maximumAttempts: Int = .max" in coordinator
+    assert "handleTransportDisconnected()" in udp_owner
+    assert "resetOverlayTransportEpoch(reason:" in udp_owner
+
+
 def test_swift_peer_resolution_probe_keeps_ipv4_fallback_for_prefer_ipv6(tmp_path: Path) -> None:
     source_path = tmp_path / "PeerResolutionProbe.swift"
     binary_path = tmp_path / "peer-resolution-probe"

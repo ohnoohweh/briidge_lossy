@@ -5204,6 +5204,10 @@ final class PacketTunnelProviderSwiftUDPBridgeProbe {
         bridge.snapshot()
     }
 
+    func forceTransportDisconnectForProbe() {
+        bridge.forceTransportDisconnectForProbe()
+    }
+
     func secureLinkStatus() -> [String: Any] {
         bridge.secureLinkStatusForProbe()
     }

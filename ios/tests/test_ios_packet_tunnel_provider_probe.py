@@ -1830,6 +1830,90 @@ def test_ios_packet_tunnel_provider_probe_rotates_to_next_peer_candidate_after_i
     assert payload["resolved_peer_host"] != "::1"
 
 
+def test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects(tmp_path: Path) -> None:
+    source_path = tmp_path / "PacketTunnelProviderRetryableUDPClientProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-retryable-udp-client-probe"
+    bind_port = _unused_udp_port()
+    peer_port = _unused_udp_port()
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case invalidArgs
+                case terminalLifecycle(String)
+            }
+
+            @main
+            struct PacketTunnelProviderRetryableUDPClientProbeMain {
+                static func main() throws {
+                    guard CommandLine.arguments.count == 3,
+                          let bindPort = Int(CommandLine.arguments[1]),
+                          let peerPort = Int(CommandLine.arguments[2])
+                    else {
+                        throw ProbeError.invalidArgs
+                    }
+
+                    let bridge = try PacketTunnelProviderSwiftUDPBridgeProbe(
+                        runtimeMode: "swift_udp",
+                        bindHost: "127.0.0.1",
+                        bindPort: bindPort,
+                        peerHost: "127.0.0.1",
+                        peerPort: peerPort,
+                        peerResolveFamily: "ipv4",
+                        mtu: 1400,
+                        tunIfname: "ios-utun",
+                        tunnelAddress: "192.168.106.1",
+                        tcpServiceSpecs: []
+                    )
+
+                    bridge.start()
+                    defer { bridge.stop() }
+                    for _ in 0..<6 {
+                        bridge.forceTransportDisconnectForProbe()
+                        Thread.sleep(forTimeInterval: 0.30)
+                    }
+                    let snapshot = bridge.bridgeSnapshot()
+                    guard let runtime = snapshot["transport_runtime"] as? [String: Any],
+                          let layers = runtime["connection_layers"] as? [[String: Any]],
+                          let lifecycle = layers.last?["lifecycle_state"] as? String
+                    else {
+                        throw ProbeError.terminalLifecycle("missing lifecycle snapshot")
+                    }
+                    guard lifecycle != "failed" else {
+                        throw ProbeError.terminalLifecycle(lifecycle)
+                    }
+                    let payload: [String: Any] = [
+                        "active": snapshot["active"] ?? false,
+                        "lifecycle_state": lifecycle,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path), str(bind_port), str(peer_port)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+    assert payload["active"] is True
+    assert payload["lifecycle_state"] in {"connecting", "reconnecting", "disconnected"}
+
+
 def test_ios_packet_tunnel_provider_probe_immediately_rotates_after_unreachable_ipv6_send_error(tmp_path: Path) -> None:
     source_path = tmp_path / "PacketTunnelProviderImmediatePeerFallbackProbe.swift"
     binary_path = tmp_path / "packet-tunnel-provider-immediate-peer-fallback-probe"

@@ -544,23 +544,24 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         runtime.stop()
     }
 
-    @Test func protectedMyudpReceiveFailureWithdrawsEpochAndUsesBoundedReconnect() throws {
-        try assertProtectedReceiveFailureReconnects(mode: "myudp-securelink-close-after-ack", transport: .myudp)
-    }
-
-    @Test func silentMyudpPeerDeliversReceiveDeadlineFailureToLiveRuntime() throws {
+    @Test func silentMyudpPeerKeepsLiveRuntimeConnectedWhileCoreTimersRun() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-securelink-silent")
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxLiveRuntime(
             configuration: .init(transport: .myudp, host: "127.0.0.1", port: peer.port, secureLinkPSK: Data("linux-swift-psk".utf8), receiveIdleTimeoutMilliseconds: 50),
             policy: .init(initialDelayMilliseconds: 10, maximumDelayMilliseconds: 10, maximumAttempts: 2)
         )
-        let retrying = DispatchSemaphore(value: 0)
-        runtime.onSnapshot = { if $0.state == "reconnecting", $0.nextRetryMilliseconds == 10 { retrying.signal() } }
+        let connected = DispatchSemaphore(value: 0)
+        let failed = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = {
+            if $0.state == "connected" { connected.signal() }
+            if $0.state == "failed" { failed.signal() }
+        }
         runtime.start()
-        #expect(retrying.wait(timeout: .now() + 2) == .success)
-        #expect(runtime.status().peer.lifecycleState == "reconnecting")
-        #expect(runtime.status().peer.nextRetryMilliseconds == 10)
+        #expect(connected.wait(timeout: .now() + 2) == .success)
+        Thread.sleep(forTimeInterval: 0.25)
+        #expect(failed.wait(timeout: .now() + 0.1) == .timedOut)
+        #expect(runtime.status().peer.lifecycleState == "connected")
         runtime.stop()
     }
 
