@@ -31,6 +31,8 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         maximumItems: 256, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
     ))
     private let stateLock = NSLock()
+    /// Accessed while `stateLock` is held by Core-effect execution.
+    private var servicingTimerEffects = false
     private let receiveLock = NSLock()
     /// POSIX sends share the descriptor between the Core-effect producer and
     /// the readiness timer.  Keep would-block datagrams ordered until the
@@ -41,11 +43,6 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         maximumItems: 512, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
     ))
     private let synchronousReceiveWaitMS: Int32
-    private let asynchronousReceiveIdleTimeoutNS: UInt64
-    /// Protected by `stateLock`; this deadline is owned by the readiness
-    /// source rather than a blocking receive call.
-    private var lastAsyncReceiveNS: UInt64 = 0
-    private var asyncReceiveFailureReported = false
     /// This is deliberately metadata-only.  myUDP payloads can contain
     /// protected application traffic and must never be copied into a log.
     private let diagnosticSink: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)?
@@ -64,7 +61,6 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     ) throws {
         peerRuntime = .init(nextCounter: Int(nextDataCounter))
         synchronousReceiveWaitMS = Int32(max(1, min(Int(Int32.max), timeoutMilliseconds)))
-        asynchronousReceiveIdleTimeoutNS = UInt64(max(1, timeoutMilliseconds)) * 1_000_000
         self.diagnosticSink = diagnosticSink
         // Configured IPv6 literals commonly retain URI brackets. `getaddrinfo`
         // accepts the literal itself, not its URI presentation.
@@ -262,10 +258,6 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         defer { receiveLock.unlock() }
         guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
         guard readSource == nil else { return }
-        stateLock.lock()
-        lastAsyncReceiveNS = DispatchTime.now().uptimeNanoseconds
-        asyncReceiveFailureReported = false
-        stateLock.unlock()
         let flags = fcntl(descriptor, F_GETFL)
         guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
             throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno)
@@ -276,10 +268,6 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         timer.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100), leeway: .milliseconds(10))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            if self.consumeAsyncReceiveDeadlineFailureIfDue() {
-                handler(.failure(ObstacleBridgeLinuxMyUDPError.ioFailure(ETIMEDOUT)))
-                return
-            }
             do { try self.serviceTimers() }
             catch { handler(.failure(error)) }
         }
@@ -311,9 +299,6 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                 handler(.failure(socketError(code, operation: "async_receive")))
                 return
             }
-            stateLock.lock()
-            lastAsyncReceiveNS = DispatchTime.now().uptimeNanoseconds
-            stateLock.unlock()
             do {
                 for payload in try acceptInboundWire(Data(buffer.prefix(Int(received)))) {
                     handler(.success(payload))
@@ -331,20 +316,6 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
                 return
             }
         }
-    }
-
-    private func consumeAsyncReceiveDeadlineFailureIfDue() -> Bool {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        guard !asyncReceiveFailureReported, lastAsyncReceiveNS != 0 else { return false }
-        let now = DispatchTime.now().uptimeNanoseconds
-        guard now >= lastAsyncReceiveNS,
-              now - lastAsyncReceiveNS >= asynchronousReceiveIdleTimeoutNS else { return false }
-        asyncReceiveFailureReported = true
-        diagnostic(.warning, "myudp.receive_idle_timeout", diagnosticFields([
-            "timeout_ms": String(asynchronousReceiveIdleTimeoutNS / 1_000_000),
-        ]))
-        return true
     }
 
     private func acceptInboundWire(_ wire: Data) throws -> [Data] {
@@ -389,6 +360,8 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         try drainPendingOutboundWires()
         stateLock.lock()
         defer { stateLock.unlock() }
+        servicingTimerEffects = true
+        defer { servicingTimerEffects = false }
         let effects = try peerRuntime.tick(nowNS: DispatchTime.now().uptimeNanoseconds)
         if !effects.isEmpty {
             diagnostic(.debug, "myudp.timer_emitted_frames", diagnosticFields([
@@ -454,9 +427,9 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         }
     }
 
-    /// Returns false only for nonblocking UDP back-pressure.  That condition
-    /// is recoverable: Core retains its reliability state and the readiness
-    /// timer retries the same wire datagram in FIFO order.
+    /// Returns false for recoverable nonblocking pressure or an asynchronous
+    /// ICMP peer-not-ready indication. Core retains its reliability state and
+    /// the readiness timer retries the same wire datagram in FIFO order.
     private func sendWireLocked(_ wire: Data) throws -> Bool {
         let sent = wire.withUnsafeBytes { Glibc.send(descriptor, $0.baseAddress, wire.count, 0) }
         if sent == wire.count {
@@ -474,6 +447,18 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             // visible at debug without turning sustained local pressure into
             // a warning flood.
             diagnostic(pendingOutboundWires.isEmpty ? .warning : .debug, "myudp.send_deferred", fields)
+            return false
+        }
+        if sent < 0, code == ECONNREFUSED, servicingTimerEffects {
+            // Linux reports a delayed ICMP error against the next write of a
+            // connected UDP socket. Core timer traffic is not evidence that
+            // an authenticated application session has failed; retain it and
+            // let a real application send initiate recovery if necessary.
+            diagnostic(.warning, "myudp.send_transient_error", diagnosticFields([
+                "errno": String(code),
+                "wire_bytes": String(wire.count),
+                "pending_wire_count": String(pendingOutboundWires.count),
+            ]))
             return false
         }
         throw socketError(code, operation: "send", wireBytes: wire.count, sentBytes: max(0, sent))

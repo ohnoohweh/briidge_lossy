@@ -431,7 +431,7 @@ REQ-AUT-008:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimePublishesBoundedRetryWindow
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::peerProjectionCoversConnectedReconnectingFailedAndStoppedStates
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::silentProtectedPythonPeersUseDeadlineRetryFreshReadinessAndRejectRetiredEpoch
-    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::silentMyudpPeerDeliversReceiveDeadlineFailureToLiveRuntime
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::silentMyudpPeerKeepsLiveRuntimeConnectedWhileCoreTimersRun
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::stopCancelsStalledPythonSecureLinkHandshakeWithoutWaitingForReceiveTimeout
 REQ-AUT-009:
   # The supported admin surface for SecureLink remains the peer-scoped summary
@@ -867,12 +867,17 @@ REQ-LIFE-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
+    # Runs the same Python-server receive-idle scenario with Python and Linux
+    # Swift clients, which must both remain non-terminal; Swift may rotate to
+    # a fresh retryable epoch after a delayed UDP port-unreachable.
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_receive_idle_client_parity
   unit_tests:
     - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
     - tests/unit/test_channel_mux_listener_mode.py::test_reconnect_reannounces_tun_open_when_first_epoch_open_is_lost
     - tests/unit/test_channel_mux_listener_mode.py::test_transport_epoch_tun_recovery_reopens_after_delayed_app_readiness
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayChannelAdapterTests.swift::lostReconnectTunOpenIsReannouncedWithoutAllocatingAnotherChannel
     - ios/tests/test_m3_native_sources.py::test_swift_tun_reconnect_open_replay_is_owned_by_udp_and_linux_runtime
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects
     - tests/unit/test_peer_resolution.py::test_udp_session_rotation_rebuilds_client_socket
     - ios/tests/test_m3_native_sources.py::test_udp_overlay_peer_rotation_rebuilds_the_native_socket
     - tests/unit/test_stream_peer_rotation.py::test_tcp_reconnect_cleanup_survives_stopped_event_loop
@@ -925,7 +930,7 @@ REQ-LIFE-005:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedReceiveFailureWithdrawsEpochAndUsesBoundedReconnect
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedWebSocketReceiveFailureWithdrawsEpochAndUsesBoundedReconnect
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::webSocketHandshakeFailureUsesBoundedCoreRetryLifecycle
-    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedMyudpReceiveFailureWithdrawsEpochAndUsesBoundedReconnect
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::silentMyudpPeerKeepsLiveRuntimeConnectedWhileCoreTimersRun
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedPeerInitiatedCatalogReachesLiveServiceOwner
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeOwnsAuthenticatedSessionAndStops
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeReportsRetryExhaustionAndCancelsItOnStop

@@ -313,6 +313,18 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'secure_link_recover_delay_seconds' not in host_runner
 
 
+def test_ios_packet_tunnel_probe_exercises_nonterminal_udp_retry_lifecycle() -> None:
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "func forceTransportDisconnectForProbe()" in provider
+    assert "bridge.forceTransportDisconnectForProbe()" in provider
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects" in provider
+    assert "#if OB_IPSERVER_SWIFT_PROBE" in udp_owner
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects" in udp_owner
+    assert 'resetOverlayTransportEpoch(reason: "probe_transport_disconnect")' in udp_owner
+
+
 def test_native_packet_flow_bridge_source_exists() -> None:
     bridge = (IOS_SWIFT_DIR / "ObstacleBridgePacketFlowBridge.swift").read_text(encoding="utf-8")
 

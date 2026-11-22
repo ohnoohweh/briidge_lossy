@@ -20,6 +20,7 @@ ARC-CMP-001:
   # The focused native pressure case keeps TCP DATA frames inside the myUDP
   # record cap by segmenting at the shared ChannelMux envelope boundary.
   # The Linux listener service probe consumes the common Admin peer wrapper.
+  # Receive-idle coverage keeps a delayed UDP port-unreachable retryable.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_address_sanitizer_reports_no_leaks
@@ -31,6 +32,7 @@ ARC-CMP-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_reassembles_reordered_reply
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delayed_reply
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_and_control_idle
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_receive_idle_client_parity
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_myudp_python_tcp_service_survives_ten_rekeys_with_two_clients
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
@@ -39,6 +41,9 @@ ARC-CMP-001:
     - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_stream_egress_round_robins_one_message_per_source
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxEgressSequencerTests.swift::allMuxMessageTypesSharePersistentSourceTurns
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxEgressSequencerTests.swift::concurrentEnqueueAndDrainProtectsNativeSetStorage
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayCoordinatorTests.swift::defaultRetryPolicyDoesNotTerminallyExhaustAnEnabledClient
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::silentMyudpPeerKeepsLiveRuntimeConnectedWhileCoreTimersRun
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects
     - tests/unit/test_swift_memory_safety_guard.py::test_rejects_new_unbounded_persistent_data_queue
     - tests/unit/test_swift_memory_safety_guard.py::test_rejects_pending_data_field_and_dictionary_value_without_allowlist
     - tests/unit/test_swift_memory_safety_guard.py::test_rejects_new_network_send_without_bounded_owner_marker
@@ -1269,7 +1274,7 @@ ARC-CMP-006:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedReceiveFailureWithdrawsEpochAndUsesBoundedReconnect
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedWebSocketReceiveFailureWithdrawsEpochAndUsesBoundedReconnect
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::webSocketHandshakeFailureUsesBoundedCoreRetryLifecycle
-    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedMyudpReceiveFailureWithdrawsEpochAndUsesBoundedReconnect
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::silentMyudpPeerKeepsLiveRuntimeConnectedWhileCoreTimersRun
   integration_tests:
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_carries_secure_mux_traffic_and_owner_loss
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle

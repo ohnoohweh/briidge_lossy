@@ -7947,6 +7947,100 @@ def test_overlay_e2e_python_server_linux_native_client_myudp_basic(tmp_path: Pat
     )
 
 
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    'runtime_mode',
+    [
+        pytest.param('python-python', id='python-client'),
+        pytest.param('python-server-linux-native-client', id='linux-swift-client'),
+    ],
+)
+def test_overlay_e2e_myudp_receive_idle_client_parity(
+    runtime_mode: str,
+    tmp_path: Path,
+) -> None:
+    """A myUDP client must not terminally fail after receive-side idleness.
+
+    This deliberately executes the same Python-server case with either the
+    Python or foreground Linux Swift client, including the Linux-native
+    receive-idle configuration surface.
+    """
+    if runtime_mode == 'python-server-linux-native-client':
+        if not sys.platform.startswith('linux'):
+            pytest.skip('Linux Swift process E2E coverage requires Linux')
+        if not shutil.which('swift'):
+            pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
+
+    case_index = 620
+    base_case = CASES['case04_tcp_over_own_udp_clients_ipv4']
+    client_args = list(base_case.bridge_client_args)
+    if runtime_mode == 'python-server-linux-native-client':
+        # This is presently a Linux-native-only test surface. Python has no
+        # corresponding receive-idle disconnect knob and simply stays up.
+        client_args += ['--secure-link-receive-idle-timeout-ms', '750']
+    case = replace(
+        base_case,
+        name=f'{base_case.name}_quiet_connected_client_parity',
+        bridge_client_args=client_args,
+    )
+    case = materialize_case_ports(case, case_index)
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=tmp_path / f'{case.name}_bounce.log',
+    )
+    server_proc: Optional[Proc] = None
+    client_proc: Optional[Proc] = None
+    try:
+        bounce.start()
+        server_spec, client_spec = build_commands(
+            case,
+            tmp_path,
+            case_index,
+            enable_admin=True,
+            runtime_mode=runtime_mode,
+        )
+        server_name, server_cmd, server_env, server_admin = server_spec
+        client_name, client_cmd, client_env, client_admin = client_spec
+        server_proc = start_proc(
+            f'{case.name}_{server_name}', server_cmd, tmp_path,
+            env_extra=server_env, admin_port=server_admin,
+        )
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        client_proc = start_proc(
+            f'{case.name}_{client_name}', client_cmd, tmp_path,
+            env_extra=client_env, admin_port=client_admin,
+        )
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        server_proc, client_proc = wait_both_connected(
+            server_proc, client_proc, tmp_path, timeout=20.0,
+        )
+
+        # Remove the peer after a successful connection. The parity contract
+        # is that an enabled myUDP client remains non-terminal while its Core
+        # timers handle an idle receive path.
+        stop_proc(server_proc)
+        server_proc = None
+        time.sleep(5.0)
+        status = try_get_status(client_proc.admin_port or 0)
+        # A connected UDP socket can asynchronously report the listener's
+        # ICMP port-unreachable after it is stopped.  Python leaves this in
+        # its established epoch; Swift may immediately request a fresh epoch.
+        # Both are valid only while the enabled client remains retryable.
+        assert status_state(status) not in {'FAILED', 'STOPPED'}, (
+            f'{runtime_mode} client entered a terminal state after myUDP receive idleness: {status!r}'
+        )
+    finally:
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        bounce.stop()
+
+
 MIXED_RUNTIME_MYUDP_DELAY_LOSS_CASES = [
     'tc1a_drop_first_data_client_to_server',
     'tc5a_small_records_batched_and_recovered',

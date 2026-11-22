@@ -10,8 +10,8 @@ public enum ObstacleBridgeOverlayLifecycleState: String, Equatable, Sendable {
     case failed
 }
 
-/// Bounded retry policy for one logical overlay peer. The policy makes no
-/// assumptions about a socket implementation or scheduler.
+/// Retry policy for one logical overlay peer. The policy makes no assumptions
+/// about a socket implementation or scheduler.
 public struct ObstacleBridgeOverlayReconnectPolicy: Equatable, Sendable {
     public let initialDelayMilliseconds: Int
     public let maximumDelayMilliseconds: Int
@@ -20,7 +20,7 @@ public struct ObstacleBridgeOverlayReconnectPolicy: Equatable, Sendable {
     public init(
         initialDelayMilliseconds: Int = 250,
         maximumDelayMilliseconds: Int = 5_000,
-        maximumAttempts: Int = 5
+        maximumAttempts: Int = .max
     ) {
         self.initialDelayMilliseconds = max(1, initialDelayMilliseconds)
         self.maximumDelayMilliseconds = max(self.initialDelayMilliseconds, maximumDelayMilliseconds)

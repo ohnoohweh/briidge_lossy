@@ -116,6 +116,24 @@ struct ObstacleBridgeOverlayCoordinatorTests {
         #expect(terminal.snapshot.nextRetryMilliseconds == nil)
     }
 
+    @Test func defaultRetryPolicyDoesNotTerminallyExhaustAnEnabledClient() {
+        let coordinator = ObstacleBridgeOverlayCoordinator(candidateCount: 2)
+        _ = coordinator.handle(.start)
+
+        for attempt in 1...6 {
+            let failed = coordinator.handle(.transportFailed(epoch: UInt64(attempt), reason: "unreachable"))
+            #expect(failed.snapshot.state == .reconnecting)
+            guard case .scheduleRetry(let token, _) = failed.effects.last else {
+                Issue.record("default retry policy did not schedule attempt \(attempt + 1)")
+                return
+            }
+            _ = coordinator.handle(.retryTimerFired(token: token))
+        }
+
+        #expect(coordinator.snapshot.state == .connecting)
+        #expect(coordinator.snapshot.attempts == 7)
+    }
+
     @Test func resolvedCandidateCountKeepsRotationInCore() {
         let coordinator = ObstacleBridgeOverlayCoordinator(candidateCount: 1)
         coordinator.configureCandidateCount(3)

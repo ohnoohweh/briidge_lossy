@@ -672,6 +672,20 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         }
     }
 
+    #if OB_IPSERVER_SWIFT_PROBE
+    /// Exercises the same epoch-withdrawal path used for a native lower-layer
+    /// disconnect.  This exists only in the packet-tunnel probe build so CI
+    /// can prove the Apple UDP owner retains an enabled client's lifecycle
+    /// after repeated recovery attempts.
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects
+    func forceTransportDisconnectForProbe() {
+        withOwnerQueue {
+            guard started else { return }
+            resetOverlayTransportEpoch(reason: "probe_transport_disconnect")
+        }
+    }
+    #endif
+
     @discardableResult
     func acceptLocalTCPConnection(
         _ connection: NWConnection,
