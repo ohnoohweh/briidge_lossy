@@ -310,8 +310,11 @@ def test_patch_pbxproj_text_accepts_quoted_generated_target_name() -> None:
     assert "app_packages/bin" in patched
     assert "_testcapi _testclinic" in patched
     assert "_remote_debugging xxlimited" in patched
-    assert "Repair stale Python extension frameworks missing required bundle metadata." in patched
+    assert "Ensure Python extension framework metadata and code-sign identifiers agree." in patched
     assert 'PYTHON_DYLIB_INFO_TEMPLATE="$PROJECT_DIR/Support/Python.xcframework/build/iOS-dylib-Info-template.plist"' in patched
+    assert '--identifier "$framework_bundle_id"' in patched
+    assert '--preserve-metadata=entitlements,flags' in patched
+    assert '--preserve-metadata=identifier,entitlements,flags' not in patched
     assert "org.python.$(echo $FULL_MODULE_NAME" not in patched
     assert "Process Python libraries for IPServer" not in patched
     assert "ObstacleBridgePythonBridge.m" not in patched
