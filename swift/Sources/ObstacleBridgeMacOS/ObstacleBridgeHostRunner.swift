@@ -235,6 +235,8 @@ extension ObstacleBridgeUdpOverlayTransportOwner: ObstacleBridgeOverlayTransport
 // callbacks do not need to capture mutable local proxies or dispatch an
 // additional unsafe handoff.
 final class ObstacleBridgeHostRunner: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_host_runner_projects_shared_runtime_metrics
+    // Runtime metrics are current-only; persistent lifecycle health is not an Admin contract.
     typealias MacOSTunHelperClientFactory = (
         DispatchQueue,
         @escaping (Data) -> Void,

@@ -54,6 +54,7 @@ private final class PacketTunnelSettingsSnapshot: @unchecked Sendable {
 // NetworkExtension serializes provider lifecycle callbacks; private queues own
 // the independently scheduled telemetry, snapshot, and health state.
 class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_runtime_status_projects_shared_runtime_metrics
     static let defaultTunnelAddress = "192.168.106.1"
     static let defaultTunnelPrefix = 30
     static let defaultIncludedRoutes = ["0.0.0.0/0"]

@@ -177,6 +177,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "updateProviderState(" not in packet_pump
     assert "(self.heartbeatTickCount % 30) == 0" in provider
     assert "ipserver-native-provider-state.json" in provider
+    assert "ObstacleBridgeRuntimeHealthRing" not in provider
+    assert '"runtime_health_recent_records"' not in provider
     assert "updateProviderState(" in provider
     assert "bridge_state" in provider
     assert "processMemorySnapshot()" in provider

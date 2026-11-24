@@ -157,6 +157,7 @@ private final class ObstacleBridgeLinuxWebSocketLifecycleOwner: ObstacleBridgeLi
 /// shutdown work is serialized here so lower transport callbacks cannot revive
 /// a stopped runtime or retain a stale SecureLink epoch.
 public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests
     // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests (transport subclasses inherit this owner)
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
     public var onDiagnostic: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)?
