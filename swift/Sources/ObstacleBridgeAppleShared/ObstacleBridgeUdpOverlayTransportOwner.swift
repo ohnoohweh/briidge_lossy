@@ -391,8 +391,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             }
             eventSink?("udp_overlay_socket_rebuilt", [
                 "candidate_index": peerCandidateIndex,
-                "peer_host": currentPeerAddress?.host ?? NSNull(),
-                "peer_port": currentPeerAddress?.port ?? NSNull(),
+                "peer_host": currentPeerHostValue(),
+                "peer_port": currentPeerPortValue(),
             ])
             return true
         } catch {
@@ -1044,9 +1044,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         if !wasConnected && overlayConnected {
             ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportLifecycle) {
                 eventSink?("udp_overlay_connected", [
-                    "peer_host": currentPeerAddress?.host ?? NSNull(),
-                    "peer_port": currentPeerAddress?.port ?? NSNull(),
-                    "resolved_peer_family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
+                    "peer_host": currentPeerHostValue(),
+                    "peer_port": currentPeerPortValue(),
+                    "resolved_peer_family": currentPeerFamilyValue(),
                 ])
                 maybePrimeSecureLinkHandshake()
                 maybeSendStartupMuxFrames()
@@ -1188,15 +1188,31 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             "nw_state": overlayConnected ? "ready" : "waiting",
             "candidate": [
                 "index": peerCandidateIndex,
-                "host": currentPeerAddress?.host ?? NSNull(),
-                "port": currentPeerAddress?.port ?? NSNull(),
-                "family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
+                "host": currentPeerHostValue(),
+                "port": currentPeerPortValue(),
+                "family": currentPeerFamilyValue(),
             ],
             "local_udp_port": localUDPSocketPort() ?? NSNull(),
             "last_rx_age_ms": lastRXAgeMS,
             "retransmit_count": Int(stats["retransmitted_chunks"] as? Int ?? 0),
             "inflight": Int(stats["inflight"] as? Int ?? 0),
         ]
+    }
+
+    /// Converts the optional peer family to the concrete value required by
+    /// heterogeneous diagnostic payloads. Keeping the optional handling out
+    /// of the dictionary literal avoids implicitly boxing `Any?` as `Any`.
+    private func currentPeerFamilyValue() -> Any {
+        guard let currentPeerAddress else { return NSNull() }
+        return ObstacleBridgePeerAddressResolver.familyName(currentPeerAddress.family)
+    }
+
+    private func currentPeerHostValue() -> Any {
+        currentPeerAddress?.host ?? NSNull()
+    }
+
+    private func currentPeerPortValue() -> Any {
+        currentPeerAddress?.port ?? NSNull()
     }
 
     private func localUDPSocketPort() -> Int? {
@@ -1743,9 +1759,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         eventSink?("udp_overlay_peer_candidate_rotated", [
             "reason": reason,
             "candidate_index": peerCandidateIndex,
-            "peer_host": currentPeerAddress?.host ?? NSNull(),
-            "peer_port": currentPeerAddress?.port ?? NSNull(),
-            "peer_family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
+            "peer_host": currentPeerHostValue(),
+            "peer_port": currentPeerPortValue(),
+            "peer_family": currentPeerFamilyValue(),
         ])
         sendInitialIdleProbe()
     }
