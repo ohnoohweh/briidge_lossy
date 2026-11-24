@@ -533,6 +533,12 @@ on a candidate the operating system has already declared unreachable. Apple
 native socket selection follows the same Core-owned candidate epoch, so its
 socket and retry selectors cannot diverge.
 
+Before a `prefer-ipv6` myUDP client selects its first peer, Python and Apple
+native runtimes require evidence of a global IPv6 source address when an IPv4
+candidate is also available. Loopback, link-local, and ULA-only IPv6 state
+therefore selects IPv4 immediately; `ipv6` remains the explicit force-IPv6
+operator choice.
+
 This policy applies uniformly to `myudp`, WebSocket, QUIC, and TCP. A transport
 may recover a short-lived break internally, but it must ultimately report a
 definitive `disconnected` lifecycle event when it cannot recover, so the upper

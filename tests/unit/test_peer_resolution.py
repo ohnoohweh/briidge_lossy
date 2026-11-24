@@ -7,6 +7,7 @@ import socket
 import pytest
 
 from obstacle_bridge.bridge import _resolve_peer_endpoint
+import obstacle_bridge.bridge_transport_common as transport_common
 from obstacle_bridge.bridge_transport_udp import SendPort, UdpSession
 
 
@@ -86,7 +87,19 @@ def test_resolve_non_localhost_propagates_resolution_failure(monkeypatch: pytest
         _resolve_peer_endpoint("example.invalid", 443, resolve_mode="ipv4", socktype=socket.SOCK_STREAM)
 
 
-def test_resolve_multi_peer_prefers_ipv6_literal_when_available() -> None:
+def test_resolve_multi_peer_prefers_ipv4_without_a_global_ipv6_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(transport_common, "_has_global_ipv6_interface_address", lambda: False)
+    host, port, family = _resolve_peer_endpoint(
+        "192.0.2.10,[2001:db8::10]",
+        443,
+        resolve_mode="prefer-ipv6",
+        socktype=socket.SOCK_DGRAM,
+    )
+    assert (host, port, family) == ("192.0.2.10", 443, socket.AF_INET)
+
+
+def test_resolve_multi_peer_prefers_ipv6_with_a_global_ipv6_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(transport_common, "_has_global_ipv6_interface_address", lambda: True)
     host, port, family = _resolve_peer_endpoint(
         "192.0.2.10,[2001:db8::10]",
         443,

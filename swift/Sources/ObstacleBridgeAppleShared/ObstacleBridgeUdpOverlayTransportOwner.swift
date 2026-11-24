@@ -1860,12 +1860,17 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
            !peerHost.isEmpty,
            let peerPort,
            peerPort > 0 {
-            resolvedPeers = try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
+            let resolved = try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
                 host: peerHost,
                 port: peerPort,
                 resolveFamily: peerResolveFamily,
                 bindHost: bindHost,
                 errorDomain: "ObstacleBridge.UdpOverlayTransportOwner"
+            )
+            // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_peer_rotation_rebuilds_the_native_socket
+            resolvedPeers = ObstacleBridgePeerAddressResolver.candidatesUsableOnCurrentNetwork(
+                resolved,
+                resolveFamily: peerResolveFamily
             )
         } else {
             resolvedPeers = []

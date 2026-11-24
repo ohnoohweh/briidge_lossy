@@ -306,4 +306,54 @@ enum ObstacleBridgePeerAddressResolver {
 
         return candidates
     }
+
+    /// `prefer-ipv6` is an ordering preference, not permission to spend a
+    /// connection epoch on an address family with no globally routable source
+    /// address.  A link-local or ULA address cannot reach a public IPv6 peer.
+    static func candidatesUsableOnCurrentNetwork(
+        _ candidates: [ObstacleBridgeResolvedAddress],
+        resolveFamily: String
+    ) -> [ObstacleBridgeResolvedAddress] {
+        let mode = ResolveMode(rawValue: resolveFamily)
+        guard mode == .preferIPv6,
+              candidates.contains(where: { $0.family == AF_INET }),
+              candidates.contains(where: { $0.family == AF_INET6 }),
+              !hasGlobalIPv6InterfaceAddress()
+        else {
+            return candidates
+        }
+        return candidates.sorted { lhs, rhs in
+            if lhs.family == rhs.family { return false }
+            return lhs.family == AF_INET
+        }
+    }
+
+    private static func hasGlobalIPv6InterfaceAddress() -> Bool {
+        var interfaces: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfaces) == 0, let first = interfaces else {
+            return false
+        }
+        defer { freeifaddrs(first) }
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        while let entry = cursor {
+            defer { cursor = entry.pointee.ifa_next }
+            guard let address = entry.pointee.ifa_addr,
+                  address.pointee.sa_family == sa_family_t(AF_INET6)
+            else {
+                continue
+            }
+            let ipv6 = UnsafeRawPointer(address).assumingMemoryBound(to: sockaddr_in6.self).pointee.sin6_addr
+            let octets = withUnsafeBytes(of: ipv6) { Array($0) }
+            guard octets.count == 16 else { continue }
+            let isUnspecified = octets.allSatisfy { $0 == 0 }
+            let isLoopback = octets.dropLast().allSatisfy { $0 == 0 } && octets.last == 1
+            let isLinkLocal = octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80
+            let isUniqueLocal = (octets[0] & 0xfe) == 0xfc
+            let isMulticast = octets[0] == 0xff
+            if !isUnspecified && !isLoopback && !isLinkLocal && !isUniqueLocal && !isMulticast {
+                return true
+            }
+        }
+        return false
+    }
 }

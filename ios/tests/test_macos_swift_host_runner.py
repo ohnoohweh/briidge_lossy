@@ -1965,6 +1965,11 @@ def test_swift_peer_resolution_maps_ipv4_fallback_on_ipv6_socket_like_python() -
     assert "setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY" in udp_owner
     assert "EAFNOSUPPORT" in udp_owner
     assert "resolveMode: ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: peerResolveFamily)" in packet_tunnel
+    assert "candidatesUsableOnCurrentNetwork" in resolver
+    assert "hasGlobalIPv6InterfaceAddress" in resolver
+    assert "isLinkLocal" in resolver
+    assert "isUniqueLocal" in resolver
+    assert "candidatesUsableOnCurrentNetwork(try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(" in packet_tunnel
 
 
 def test_swift_peer_address_protocol_normalizes_ipv4_mapped_ipv6() -> None:

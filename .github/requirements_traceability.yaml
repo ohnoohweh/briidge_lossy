@@ -131,7 +131,8 @@ REQ-OVL-007:
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv4_uses_loopback_fallback_on_gaierror
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv6_uses_loopback_fallback_on_gaierror
     - tests/unit/test_ws_payload_mode.py::test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight
-    - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
+    - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv4_without_a_global_ipv6_source
+    - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_with_a_global_ipv6_source
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePeerAddressPolicyTests.swift::parsesConfiguredHostsAndNormalizesLiterals
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePeerAddressPolicyTests.swift::ordersAndFiltersCandidatesWithoutSocketTypes

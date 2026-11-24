@@ -4944,18 +4944,17 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
         peerPort: Int,
         peerResolveFamily: String
     ) throws -> (socketFamily: Int32, peerCandidates: [ResolvedAddress], peerAddress: ResolvedAddress) {
-        let resolvedCandidates = try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_swift_peer_resolution_maps_ipv4_fallback_on_ipv6_socket_like_python
+        let resolvedCandidates = ObstacleBridgePeerAddressResolver.candidatesUsableOnCurrentNetwork(try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
             host: peerHost,
             port: peerPort,
             resolveFamily: peerResolveFamily,
             bindHost: bindHost,
             errorDomain: "ObstacleBridge.IPServer"
-        )
+        ), resolveFamily: peerResolveFamily)
         let socketFamily: Int32
         if let bindFamily = ObstacleBridgePeerAddressResolver.bindFamilyConstraint(bindHost) {
             socketFamily = bindFamily
-        } else if resolvedCandidates.contains(where: { $0.family == AF_INET6 }) {
-            socketFamily = AF_INET6
         } else {
             socketFamily = resolvedCandidates[0].family
         }

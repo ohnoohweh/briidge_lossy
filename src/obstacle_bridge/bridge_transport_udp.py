@@ -10,6 +10,7 @@ from .bridge_transport_common import (
     _bind_family_constraint,
     _family_preference_rank,
     _listener_family_for_host,
+    _order_candidates_for_current_network,
     _peer_resolve_mode,
     _resolve_peer_candidates,
     _resolve_cli_peer,
@@ -2866,7 +2867,7 @@ class UdpSession(ISession):
         for candidate in candidates:
             if candidate not in deduped:
                 deduped.append(candidate)
-        deduped.sort(key=lambda item: _family_preference_rank(item[2], resolve_mode))
+        deduped = _order_candidates_for_current_network(deduped, resolve_mode)
         bind_family = _bind_family_constraint(bind_host)
         if bind_family is not None:
             matching = [item for item in deduped if item[2] == bind_family]

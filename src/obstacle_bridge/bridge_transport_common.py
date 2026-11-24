@@ -147,6 +147,46 @@ def _family_preference_rank(family: int, resolve_mode: str) -> int:
     return 0
 
 
+def _has_global_ipv6_interface_address() -> bool:
+    """Return whether this host has evidence of a usable global IPv6 source.
+
+    `prefer-ipv6` must not select a public IPv6 peer merely because an
+    interface has loopback, link-local, or ULA addressing. Linux exposes the
+    authoritative local-interface list through procfs. Other Python hosts use
+    the conservative result: an operator can still select IPv6 explicitly.
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        with open("/proc/net/if_inet6", "r", encoding="ascii") as fh:
+            for row in fh:
+                raw = row.split()[0] if row.split() else ""
+                if len(raw) != 32:
+                    continue
+                address = ipaddress.IPv6Address(int(raw, 16))
+                if address.is_global:
+                    return True
+    except (OSError, ValueError):
+        return False
+    return False
+
+
+def _order_candidates_for_current_network(
+    candidates: List[Tuple[str, int, int]], resolve_mode: str
+) -> List[Tuple[str, int, int]]:
+    ordered = list(candidates)
+    ordered.sort(key=lambda item: _family_preference_rank(item[2], resolve_mode))
+    mode = (resolve_mode or "").strip().lower()
+    if (
+        mode == "prefer-ipv6"
+        and any(item[2] == socket.AF_INET for item in ordered)
+        and any(item[2] == socket.AF_INET6 for item in ordered)
+        and not _has_global_ipv6_interface_address()
+    ):
+        ordered.sort(key=lambda item: 0 if item[2] == socket.AF_INET else 1)
+    return ordered
+
+
 def _resolve_peer_candidates(
     host: str,
     port: int,
@@ -243,7 +283,7 @@ def _resolve_peer_endpoint(
         if not candidates:
             raise RuntimeError(f"Could not resolve overlay peer {host!r}")
 
-    candidates.sort(key=lambda item: _family_preference_rank(item[2], resolve_mode))
+    candidates = _order_candidates_for_current_network(candidates, resolve_mode)
 
     bind_family = _bind_family_constraint(bind_host)
     if bind_family is not None:

@@ -1698,6 +1698,7 @@ def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
     assert "overlayLayerTransportAdapter.handleTransportDisconnected()" in owner
     assert "Core owns candidate rotation for the shared Apple runtime" in owner
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_shared_udp_retry_policy_remains_nonterminal" in owner
+    assert "candidatesUsableOnCurrentNetwork" in owner
     assert 'snapshot["tun_mux_frame_counters"] = tunMuxFrameCounters' in owner
     assert 'snapshot["shared_tun"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? [:]' in owner
     assert 'tunMuxFrameCounters["data_delivered", default: 0] += 1' in owner
