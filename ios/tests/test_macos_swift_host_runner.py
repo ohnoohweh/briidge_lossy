@@ -248,16 +248,6 @@ def test_macos_build_includes_mtls_telemetry_transport() -> None:
     assert "session.invalidateAndCancel()" in source
 
 
-def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
-    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
-
-    assert ".ObstacleBridgeHostRunner.runtime-health-v1.json" in source
-    assert "ObstacleBridgeRuntimeHealthPersistence.load" in source
-    assert "ObstacleBridgeRuntimeHealthPersistence.save" in source
-    assert "runtimeHealthRing = previous ?? .init()" in source
-    assert '"runtime_health_recent_records"' in source
-
-
 def test_macos_host_runner_projects_shared_runtime_metrics() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert '"runtime_metrics": runtimeMetricsSnapshot()' in source
@@ -265,8 +255,8 @@ def test_macos_host_runner_projects_shared_runtime_metrics() -> None:
     assert "let snapshot = await ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()" in source
     assert "ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics()" in source
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=projectsPythonCompatibleBoundedMemoryMetrics" in source
-    assert 'appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)' in source
-    assert '"previous_runtime_lifetime_ended_cleanly"' in source
+    assert "ObstacleBridgeRuntimeHealthRing" not in source
+    assert '"runtime_health_recent_records"' not in source
 
 
 def test_macos_runtime_metrics_keep_atomic_leaf_boundaries() -> None:

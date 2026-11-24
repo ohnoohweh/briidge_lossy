@@ -320,6 +320,8 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_ws_runtime_http_preflight_404_matches_python
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_buffer_connect_then_data_matches_python
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_connect_then_local_data_matches_python
+    # The EOF fixture is task-order independent when timeout wrappers insert
+    # work between dialing and the local receive worker.
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_then_local_eof_matches_python
     - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_tcp_backpressure_is_demand_driven_and_cancelled_on_close
     - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_tcp_inbound_channels_are_scoped_to_authenticated_peer
@@ -651,6 +653,8 @@ ARC-CMP-004:
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate
     - tests/unit/test_runtime_metrics.py::test_linux_memory_sampler_reads_current_rss_in_bytes
+    - tests/unit/test_runtime_metrics.py::test_windows_memory_sampler_uses_psapi_working_set
+    - tests/unit/test_runtime_metrics.py::test_darwin_memory_sampler_uses_mach_resident_size
     - tests/unit/test_runtime_metrics.py::test_memory_metrics_are_bounded_and_report_warning_state
     - tests/unit/test_runtime_metrics.py::test_runner_memory_sampler_projects_rss_and_unavailable_state
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::projectsPythonCompatibleBoundedMemoryMetrics
@@ -988,14 +992,7 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_proxy_page_renders_private_worker_lifecycle
     # Proxy observability keeps rates as plain fields and stacks listener cards.
     - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput
-    - tests/unit/test_runtime_health.py::test_record_uses_portable_redacted_schema
-    - tests/unit/test_runtime_health.py::test_ring_is_bounded_and_classifies_only_the_last_lifecycle_marker
-    - tests/unit/test_runtime_health.py::test_runner_lifecycle_persists_and_reports_redacted_health
-    - tests/unit/test_runtime_qualification_capture.py::test_preflight_requires_health_counters_and_ready_secure_link
     - tests/unit/test_runtime_qualification_capture.py::test_capture_writes_redacted_admin_snapshots_and_delta
-    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::recordUsesPortableRedactedSchema
-    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::ringIsBoundedAndClassifiesOnlyTheLastLifecycleMarker
-    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::persistenceKeepsOnlyCompleteRedactedRing
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::canonicalVectorRoundTripsThroughThePortableContract
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::adminStatusEnvelopeOwnsSharedDashboardFields
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::rejectsNonAllowlistedAndMalformedEvents
@@ -1005,8 +1002,6 @@ ARC-CMP-005:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::unavailableSpoolDirectoryFailsAtSetupNotOnEmitterPath
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::uploadPolicyScopesBatchAcknowledgementsAndBackoff
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::uploadPolicyRejectsPlainHTTPAndOverBudgetRequests
-    - ios/tests/test_m3_native_sources.py::test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence
-    - ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_persists_portable_runtime_health_evidence
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_preserves_connection_failure_fields
     - tests/unit/test_admin_web_payloads.py::test_meta_payload_suppresses_runtime_dependency_warnings_on_ios
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows

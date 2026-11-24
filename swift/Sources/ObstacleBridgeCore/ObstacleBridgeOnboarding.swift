@@ -12,6 +12,13 @@ enum ObstacleBridgeOnboarding {
             return nil
         }
 
+        static func doubleValue(from value: Any?) -> Double? {
+            if let value = value as? Double { return value }
+            if let value = value as? NSNumber { return value.doubleValue }
+            if let value = value as? String { return Double(value) }
+            return nil
+        }
+
         static func boolValue(from value: Any?) -> Bool? {
             if let value = value as? Bool { return value }
             if let number = value as? NSNumber { return number.boolValue }
@@ -114,6 +121,11 @@ enum ObstacleBridgeOnboarding {
         for key in ["mux_tcp_bp_threshold", "mux_tcp_bp_latency_ms", "mux_tcp_bp_poll_interval_ms", "channelmux_transport_delay_threshold_ms", "channelmux_transport_delay_rotation_delay_ms"] {
             if let value = ObstacleBridgeRuntimeConfig.intValue(from: requestPayload[key]) {
                 effective[key] = value
+            }
+        }
+        for key in ["mux_tcp_connect_timeout_s", "mux_tcp_read_timeout_s", "mux_tcp_send_timeout_s"] {
+            if let value = ObstacleBridgeRuntimeConfig.doubleValue(from: requestPayload[key]) {
+                effective[key] = max(0, value)
             }
         }
         if let proxyProvider = sanitizeProxyProvider(requestPayload["proxy_provider"]), !proxyProvider.isEmpty {
@@ -359,6 +371,9 @@ enum ObstacleBridgeOnboarding {
             "mux_tcp_bp_threshold": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["mux_tcp_bp_threshold"]) ?? 1,
             "mux_tcp_bp_latency_ms": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["mux_tcp_bp_latency_ms"]) ?? 300,
             "mux_tcp_bp_poll_interval_ms": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["mux_tcp_bp_poll_interval_ms"]) ?? 50,
+            "mux_tcp_connect_timeout_s": ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["mux_tcp_connect_timeout_s"]) ?? 60,
+            "mux_tcp_read_timeout_s": ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["mux_tcp_read_timeout_s"]) ?? 60,
+            "mux_tcp_send_timeout_s": ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["mux_tcp_send_timeout_s"]) ?? 60,
             "channelmux_transport_delay_threshold_ms": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["channelmux_transport_delay_threshold_ms"]) ?? 5000,
             "channelmux_transport_delay_rotation_delay_ms": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]) ?? 30000,
             "proxy_provider": proxyProvider,
@@ -447,6 +462,11 @@ enum ObstacleBridgeOnboarding {
         for key in ["mux_tcp_bp_threshold", "mux_tcp_bp_latency_ms", "mux_tcp_bp_poll_interval_ms", "channelmux_transport_delay_threshold_ms", "channelmux_transport_delay_rotation_delay_ms"] {
             if let value = ObstacleBridgeRuntimeConfig.intValue(from: payload[key]) {
                 updates[key] = value
+            }
+        }
+        for key in ["mux_tcp_connect_timeout_s", "mux_tcp_read_timeout_s", "mux_tcp_send_timeout_s"] {
+            if let value = ObstacleBridgeRuntimeConfig.doubleValue(from: payload[key]) {
+                updates[key] = max(0, value)
             }
         }
         if let proxyProvider = sanitizeProxyProvider(payload["proxy_provider"]), !proxyProvider.isEmpty {

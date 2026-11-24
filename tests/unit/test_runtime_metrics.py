@@ -157,6 +157,24 @@ def test_linux_memory_sampler_reads_current_rss_in_bytes(monkeypatch):
     assert sample_process_resident_memory_bytes(status_reader=lambda: "VmRSS:\tbad kB\n") is None
 
 
+def test_windows_memory_sampler_uses_psapi_working_set(monkeypatch):
+    monkeypatch.setattr("obstacle_bridge.memory_monitoring.sys.platform", "win32")
+    monkeypatch.setattr(
+        "obstacle_bridge.memory_monitoring._sample_windows_process_resident_memory_bytes",
+        lambda: 456_789,
+    )
+    assert sample_process_resident_memory_bytes() == 456_789
+
+
+def test_darwin_memory_sampler_uses_mach_resident_size(monkeypatch):
+    monkeypatch.setattr("obstacle_bridge.memory_monitoring.sys.platform", "darwin")
+    monkeypatch.setattr(
+        "obstacle_bridge.memory_monitoring._sample_darwin_process_resident_memory_bytes",
+        lambda: 987_654,
+    )
+    assert sample_process_resident_memory_bytes() == 987_654
+
+
 def test_memory_metrics_are_bounded_and_report_warning_state():
     metrics = RuntimeMemoryMetrics(warning_limit_bytes=200)
     assert metrics.record(100, timestamp_ns=0)

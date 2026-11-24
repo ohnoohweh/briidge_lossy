@@ -44,8 +44,6 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let peersProvider: () -> [(identity: String, snapshot: ObstacleBridgeLinuxPeerSnapshot)]
     private let connectionsProvider: () -> [String: Any]
     private let peerTrafficRates = ObstacleBridgeAdminPeerTrafficRateSampler()
-    private let runtimeHealthProvider: () -> (count: Int, previousClean: Bool?)
-    private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
     private let resourceHealthProvider: () -> [String: Any]
     private let tunRoutingProvider: () -> [String: Any]
     private let tunRoutingControlHandler: ((Bool) -> [String: Any])?
@@ -76,8 +74,6 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
         self.connectionsProvider = connectionsProvider
-        self.runtimeHealthProvider = { (0, nil) }
-        self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
         self.tunRoutingProvider = tunRoutingProvider
         self.tunRoutingControlHandler = tunRoutingControlHandler
@@ -98,8 +94,6 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.statusProvider = { liveRuntime.status() }
         self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
         self.connectionsProvider = { liveRuntime.connectionsForAdmin() }
-        self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
-        self.runtimeHealthRecordsProvider = { liveRuntime.runtimeHealthRecentRecordsForAdmin() }
         self.resourceHealthProvider = { liveRuntime.resourceHealthForAdmin() }
         self.tunRoutingProvider = { liveRuntime.tunRoutingForAdmin() }
         self.tunRoutingControlHandler = { liveRuntime.requestTunEnabled($0) }
@@ -122,8 +116,6 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             myudpListenerRuntime.peers().map { ($0.identity, $0.snapshot) }
         }
         self.connectionsProvider = { ["tcp": [], "udp": [], "tun": []] }
-        self.runtimeHealthProvider = { (0, nil) }
-        self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
         self.tunRoutingProvider = { ["ok": true, "configured": false, "enabled": false] }
         self.tunRoutingControlHandler = nil
@@ -734,11 +726,6 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         }
         let status = statusProvider()
         let configuration = ObstacleBridgeRuntimeConfigPort.flatten(adminConfigurationProvider())
-        let health = runtimeHealthProvider()
-        let healthRecords = runtimeHealthRecordsProvider().compactMap { record -> [String: Any]? in
-            guard let data = try? JSONEncoder().encode(record) else { return nil }
-            return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        }
         let transportRuntime = ObstacleBridgeAdminSnapshotSupport.transportRuntimeEnvelope(
             kind: status.transport,
             status: status.state,
@@ -756,9 +743,6 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             "app_ready": status.appReady,
             "failure_reason": status.failureReason as Any,
             "transport_runtime": transportRuntime,
-            "runtime_health_record_count": health.count,
-            "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
-            "runtime_health_recent_records": healthRecords,
             "resource_health": resourceHealthProvider(),
             // Keep the common desktop Admin status contract: `/api/logs` is
             // backed by this supervisor, and operators also need its

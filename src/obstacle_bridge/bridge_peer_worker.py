@@ -256,10 +256,6 @@ class PeerStackWorker:
                 command.extend(["--log-fd", str(log_fd)])
                 inherited.append(log_fd)
             environment = os.environ.copy()
-            # The supervisor owns the runtime-health file; the peer must not
-            # concurrently write the same durable state through an inherited
-            # path override.
-            environment.pop("OBSTACLEBRIDGE_RUNTIME_HEALTH_PATH", None)
             process = await asyncio.create_subprocess_exec(
                 *command, pass_fds=tuple(inherited), env=environment,
                 stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,

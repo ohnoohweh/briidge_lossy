@@ -8,8 +8,6 @@ public struct ObstacleBridgeLinuxLiveRuntimeSnapshot: Equatable, Sendable {
     public let attempts: Int
     public let failureReason: String?
     public let nextRetryMilliseconds: Int?
-    public let runtimeHealthRecordCount: Int
-    public let previousRuntimeLifetimeEndedCleanly: Bool?
 }
 
 public enum ObstacleBridgeLinuxLiveRuntimeError: Error, Equatable, LocalizedError {
@@ -158,12 +156,8 @@ private final class ObstacleBridgeLinuxWebSocketLifecycleOwner: ObstacleBridgeLi
 /// Foreground owner for one admitted overlay epoch. All session, retry, and
 /// shutdown work is serialized here so lower transport callbacks cannot revive
 /// a stopped runtime or retain a stale SecureLink epoch.
-public enum ObstacleBridgeLinuxShutdownSignal: String, Sendable {
-    case interrupt = "SIGINT"
-    case terminate = "SIGTERM"
-}
-
 public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests
     // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxLiveRuntimeTests (transport subclasses inherit this owner)
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
     public var onDiagnostic: ((ObstacleBridgeRuntimeDiagnosticLevel, String, [String: String]) -> Void)?
@@ -198,13 +192,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private let remoteCatalogStore = ObstacleBridgeLinuxServiceCatalogStore()
     private let catalogInstanceID: UInt64
     private var stopped = true
-    private let runtimeHealthURL: URL?
     private let loggingWorker: ObstacleBridgeLogWorkerSupervisor?
-    private let runtimeHealthLock = NSLock()
-    private var runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
-    private var runtimeHealthSequence: UInt64 = 0
-    private var previousRuntimeLifetimeEndedCleanly: Bool?
-    private var runtimeHealthTimer: DispatchSourceTimer?
     private var livenessProbeTimer: DispatchSourceTimer?
     // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxOverlayChannelAdapterTests
     // The timer and adapter are both confined to `queue`.
@@ -214,10 +202,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// Listener-owned child sessions are retired by their shared listener;
     /// they must never turn a peer close into an outbound reconnect attempt.
     private var inboundOnly = false
-    private var liveSnapshotProjection = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil, runtimeHealthRecordCount: 0, previousRuntimeLifetimeEndedCleanly: nil)
-    private(set) public var snapshot = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil, runtimeHealthRecordCount: 0, previousRuntimeLifetimeEndedCleanly: nil)
+    private var liveSnapshotProjection = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil)
+    private(set) public var snapshot = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil)
 
-    public init(configuration: ObstacleBridgeLinuxRuntimeConfiguration, policy: ObstacleBridgeLinuxReconnectPolicy = .init(), runtimeHealthURL: URL? = nil, loggingWorker: ObstacleBridgeLogWorkerSupervisor? = nil) {
+    public init(configuration: ObstacleBridgeLinuxRuntimeConfiguration, policy: ObstacleBridgeLinuxReconnectPolicy = .init(), loggingWorker: ObstacleBridgeLogWorkerSupervisor? = nil) {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: configuration)
         self.configuredRuntime = runtime
         switch configuration.transport {
@@ -232,7 +220,6 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         }
         self.statusProjection = runtime.status()
         self.coordinator = .init(candidateCount: configuration.peerCandidates.count, policy: policy)
-        self.runtimeHealthURL = runtimeHealthURL
         self.loggingWorker = loggingWorker
         var generator = SystemRandomNumberGenerator()
         self.catalogInstanceID = UInt64.random(in: 1...UInt64.max, using: &generator)
@@ -325,7 +312,6 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public func start() {
         queue.async { [weak self] in
             guard let self else { return }
-            self.beginRuntimeHealthLifetime()
             self.stopped = false
             do {
                 let config = self.configuredRuntime.configuration.proxyProvider
@@ -349,7 +335,6 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 return
             }
             self.apply(self.coordinator.handle(.start))
-            self.startRuntimeHealthHeartbeat()
             self.startLivenessProbes()
             self.startTunOpenReplayTimer()
         }
@@ -424,20 +409,11 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             muxEgressScheduler.removeAll()
             muxEgressDrainScheduled = false
             apply(coordinator.handle(.stop))
-            stopRuntimeHealthHeartbeat()
+            stopTunOpenReplayTimer()
+            stopLivenessProbes()
             proxyProvider?.stop(); proxyProvider = nil
             statusLock.lock(); let worker = proxyWorker; proxyWorker = nil; statusLock.unlock()
             worker?.stop()
-            appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)
-        }
-    }
-
-    /// Records the externally observed shutdown cause without accepting
-    /// arbitrary process data into the persisted Admin health projection.
-    public func recordShutdownSignal(_ signal: ObstacleBridgeLinuxShutdownSignal) {
-        queue.sync {
-            guard !stopped else { return }
-            appendRuntimeHealth(event: "shutdown_signal:\(signal.rawValue)")
         }
     }
 
@@ -517,19 +493,6 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// managed deployment; it contains no peer, payload, or secret material.
     public func localServicePorts() -> [UInt16: Int] {
         queue.sync { Dictionary(uniqueKeysWithValues: serviceOwners.map { ($0.specification.serviceID, $0.port) }) }
-    }
-
-    /// Small redacted lifecycle classification for the local Admin surface.
-    public func runtimeHealthMetadataForAdmin() -> (count: Int, previousClean: Bool?) {
-        runtimeHealthMetadata()
-    }
-
-    /// The local Admin server serializes this redacted bounded tail. It exists
-    /// so evidence of an unclean preceding lifetime survives a restart.
-    public func runtimeHealthRecentRecordsForAdmin() -> [ObstacleBridgeRuntimeHealthRecord] {
-        runtimeHealthLock.lock()
-        defer { runtimeHealthLock.unlock() }
-        return Array(runtimeHealthRing.records.suffix(16))
     }
 
     /// Redacted correlation of foreground-owned resource state with lifecycle
@@ -876,9 +839,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     }
 
     private func publish(state: String, attempts: Int, nextRetryMilliseconds: Int?, failureReason: String?) {
-        appendRuntimeHealth(event: "lifecycle")
-        let health = runtimeHealthMetadata()
-        let value = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: state, attempts: attempts, failureReason: failureReason, nextRetryMilliseconds: nextRetryMilliseconds, runtimeHealthRecordCount: health.count, previousRuntimeLifetimeEndedCleanly: health.previousClean)
+        let value = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: state, attempts: attempts, failureReason: failureReason, nextRetryMilliseconds: nextRetryMilliseconds)
         statusLock.lock()
         liveSnapshotProjection = value
         statusLock.unlock()
@@ -893,17 +854,12 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         statusLock.unlock()
     }
 
-    /// Fans a diagnostic out to both the public Admin/log observer and the
-    /// durable runtime-health journal.  The journal must not depend on the
-    /// public callback: the foreground runner installs that callback for the
-    /// Admin log view after this runtime has been constructed.
+    /// Fans a diagnostic out to the public Admin/log observer.
     private func emitDiagnostic(
         _ event: String,
         fields: [String: String],
         level: ObstacleBridgeRuntimeDiagnosticLevel = .info
     ) {
-        let detail = fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
-        appendRuntimeHealth(event: detail.isEmpty ? event : "\(event) \(detail)")
         onDiagnostic?(level, event, fields)
     }
 
@@ -968,7 +924,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             let device = ObstacleBridgeLinuxTunHelperPacketDevice(
                 adapter: helper,
                 packetSink: { packet in runtime.queue.async { runtime.tunChannelAdapter?.receivedPacketFromDevice(packet) } },
-                eventSink: { detail in runtime.appendRuntimeHealth(event: "tun_helper: \(detail)") }
+                eventSink: { detail in runtime.emitDebugDiagnostic("tun_helper.event", ["detail": detail]) }
             )
             let adapter = ObstacleBridgeLinuxOverlayChannelAdapter(
                 interfaceName: configuredRuntime.configuration.tunInterfaceName,
@@ -995,7 +951,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                         }
                     }
                 },
-                diagnosticSink: { event, _ in runtime.appendRuntimeHealth(event: event) }
+                diagnosticSink: { event, _ in runtime.emitDebugDiagnostic(event, [:]) }
             )
             tunDevice = device
             tunHelperPacketDevice = device
@@ -1016,7 +972,6 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             let reason = error.localizedDescription
             let fields = tunFailureFields(stage: setupStage, reason: reason)
             setTunLastError(reason)
-            appendRuntimeHealth(event: "tun_start_failed \(fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " "))")
             emitDiagnostic("packet_tunnel.start_failed", fields: fields, level: .warning)
             stopPacketDevice()
             return false
@@ -1295,25 +1250,6 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         return Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
     }
 
-    private func beginRuntimeHealthLifetime() {
-        runtimeHealthLock.lock()
-        let previous = runtimeHealthURL.flatMap { ObstacleBridgeRuntimeHealthPersistence.load(from: $0) }
-        previousRuntimeLifetimeEndedCleanly = previous?.previousLifetimeEndedCleanly
-        runtimeHealthRing = previous ?? ObstacleBridgeRuntimeHealthRing()
-        runtimeHealthSequence = previous?.records.last?.sequence ?? 0
-        runtimeHealthLock.unlock()
-        appendRuntimeHealth(event: "runtime_started")
-    }
-
-    private func startRuntimeHealthHeartbeat() {
-        stopRuntimeHealthHeartbeat()
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + .seconds(15), repeating: .seconds(15))
-        timer.setEventHandler { [weak self] in self?.appendRuntimeHealth(event: "heartbeat") }
-        runtimeHealthTimer = timer
-        timer.resume()
-    }
-
     private func startLivenessProbes() {
         stopLivenessProbes()
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -1348,59 +1284,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         livenessProbeTimer = nil
     }
 
-    private func stopRuntimeHealthHeartbeat() {
-        runtimeHealthTimer?.setEventHandler {}
-        runtimeHealthTimer?.cancel()
-        runtimeHealthTimer = nil
-        stopTunOpenReplayTimer()
-        stopLivenessProbes()
-    }
-
     private func stopTunOpenReplayTimer() {
         tunOpenReplayTimer?.setEventHandler {}
         tunOpenReplayTimer?.cancel()
         tunOpenReplayTimer = nil
     }
 
-    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests.runtimeHealthPersistsCleanStopAndClassifiesNextLifetime
-    private func appendRuntimeHealth(event: String, controlledStop: Bool = false) {
-        // Diagnostic callbacks may already be queued when `stop()` records
-        // its terminal marker. They belong to the retired lifetime and must
-        // not overwrite that clean-stop classification on disk. Startup
-        // intentionally records while `stopped` is still true, and the
-        // terminal marker is the sole allowed record after shutdown begins.
-        guard !stopped || event == "runtime_started" || controlledStop else { return }
-        let status = configuredRuntime.status()
-        let receive = transportLifecycleOwner.receiveSnapshot()
-        runtimeHealthLock.lock()
-        runtimeHealthSequence += 1
-        runtimeHealthRing.append(.init(
-            sequence: runtimeHealthSequence,
-            timestampUnixMilliseconds: UInt64(Date().timeIntervalSince1970 * 1_000),
-            event: event,
-            controlledStop: controlledStop,
-            packetPumpRunning: receive?.state == "running",
-            overlayState: coordinator.snapshot.state.rawValue,
-            secureLinkState: status.secureLinkState,
-            transportEpoch: status.receiveEpoch,
-            incomingQueuedPackets: UInt64(max(0, receive?.queueDepth ?? 0)),
-            incomingDroppedPackets: UInt64(max(0, receive?.droppedFrames ?? 0)),
-            packetsFromSystem: UInt64(max(0, receive?.receivedFrames ?? 0))
-        ))
-        let ring = runtimeHealthRing
-        let url = runtimeHealthURL
-        runtimeHealthLock.unlock()
-        if let url { try? ObstacleBridgeRuntimeHealthPersistence.save(ring, to: url) }
-    }
-
-    private func runtimeHealthMetadata() -> (count: Int, previousClean: Bool?) {
-        runtimeHealthLock.lock()
-        defer { runtimeHealthLock.unlock() }
-        return (runtimeHealthRing.records.count, previousRuntimeLifetimeEndedCleanly)
-    }
-
     deinit {
-        runtimeHealthTimer?.cancel()
         livenessProbeTimer?.cancel()
         tunOpenReplayTimer?.cancel()
         transportLifecycleOwner.cancelRetry()

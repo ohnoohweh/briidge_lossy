@@ -71,9 +71,6 @@ def secure_link_authenticated(status: Mapping[str, Any]) -> bool:
 
 
 def preflight(status: Mapping[str, Any], *, require_authenticated: bool) -> dict[str, int]:
-    health_count = status.get("runtime_health_record_count")
-    if not isinstance(health_count, int) or health_count <= 0:
-        raise ValueError("Admin status has no retained runtime-health evidence")
     counters = packet_counters(status)
     if counters is None:
         raise ValueError("Admin status has no owner packet-direction counters")

@@ -177,9 +177,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "updateProviderState(" not in packet_pump
     assert "(self.heartbeatTickCount % 30) == 0" in provider
     assert "ipserver-native-provider-state.json" in provider
-    assert "ipserver-runtime-health-v1.json" in provider
-    assert "ObstacleBridgeRuntimeHealthRing" in provider
-    assert "previous_runtime_lifetime_ended_cleanly" in provider
+    assert "ObstacleBridgeRuntimeHealthRing" not in provider
+    assert '"runtime_health_recent_records"' not in provider
     assert "updateProviderState(" in provider
     assert "bridge_state" in provider
     assert "processMemorySnapshot()" in provider
@@ -409,14 +408,6 @@ def test_linux_tun_failure_keeps_authenticated_overlay_available() -> None:
     assert '"degraded": configured.packetTunnelEnabled && !packetTunnelActive' in runtime
 
 
-def test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence() -> None:
-    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
-
-    assert "runtimeHealthRing = prior ?? ObstacleBridgeRuntimeHealthRing()" in provider
-    assert '"runtime_health_recent_records"' in provider
-    assert '"runtime_health_recent_records": runtimeHealth["runtime_health_recent_records"] ?? []' in provider
-
-
 def test_ios_runtime_status_projects_shared_runtime_metrics() -> None:
     provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     shared = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
@@ -434,7 +425,6 @@ def test_ios_runtime_status_projects_shared_runtime_metrics() -> None:
     assert "UInt64(info.phys_footprint)" in shared
     assert "packetFlowPCAPDefaultMaximumBytes" in shared
     assert "packetFlowPCAPDefaultRetentionFiles" in shared
-    assert "runtimeHealthRecordsPayload" in provider
 
 
 def test_ios_runtime_metrics_include_atomic_leaf_boundaries() -> None:

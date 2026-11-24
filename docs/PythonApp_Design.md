@@ -41,7 +41,7 @@ state:
 | Concern | Owner | Rule |
 | --- | --- | --- |
 | Application code, WebAdmin assets, generated build stamp | deployment artifact | Replace atomically on upgrade; do not edit in place. |
-| Configuration, certificates, PSKs, logs, runtime-health record | operator/service owner | Keep outside the extracted application directory and back up according to the deployment's security policy. |
+| Configuration, certificates, PSKs, and logs | operator/service owner | Keep outside the extracted application directory and back up according to the deployment's security policy. |
 | Python dependencies | virtual environment or package wrapper | Pin/install per deployment revision; do not rely on a developer's global environment. |
 | Service lifecycle | systemd, DSM, or explicit foreground shell | Stop the old process before replacing its executable source tree; preserve the configured runtime user and required privilege boundary. |
 

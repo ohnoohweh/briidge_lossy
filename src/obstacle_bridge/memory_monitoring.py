@@ -19,16 +19,98 @@ RECENT_MEMORY_WINDOW_NS = 2 * NANOSECONDS_PER_SECOND
 RECENT_MEMORY_SAMPLE_CAPACITY = 3
 
 
+def _sample_windows_process_resident_memory_bytes() -> Optional[int]:
+    """Return the current process working set via the Windows PSAPI.
+
+    ``WorkingSetSize`` is the Windows counterpart of Linux's current RSS.
+    Keep the ctypes imports local: this module must remain importable on every
+    supported platform without an optional monitoring dependency.
+    """
+    try:
+        import ctypes
+
+        class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+            _fields_ = [
+                ("cb", ctypes.c_ulong),
+                ("PageFaultCount", ctypes.c_ulong),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+                ("PrivateUsage", ctypes.c_size_t),
+            ]
+
+        counters = PROCESS_MEMORY_COUNTERS_EX()
+        counters.cb = ctypes.sizeof(counters)
+        process = ctypes.windll.kernel32.GetCurrentProcess()
+        ok = ctypes.windll.psapi.GetProcessMemoryInfo(
+            process, ctypes.byref(counters), counters.cb
+        )
+        value = int(counters.WorkingSetSize) if ok else -1
+        return value if value >= 0 else None
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _sample_darwin_process_resident_memory_bytes() -> Optional[int]:
+    """Return current process resident bytes through the Mach task API."""
+    try:
+        import ctypes
+
+        class TimeValue(ctypes.Structure):
+            _fields_ = [("seconds", ctypes.c_int32), ("microseconds", ctypes.c_int32)]
+
+        class MachTaskBasicInfo(ctypes.Structure):
+            _fields_ = [
+                ("virtual_size", ctypes.c_uint64),
+                ("resident_size", ctypes.c_uint64),
+                ("user_time", TimeValue),
+                ("system_time", TimeValue),
+                ("policy", ctypes.c_int32),
+                ("suspend_count", ctypes.c_int32),
+            ]
+
+        libsystem = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+        libsystem.mach_task_self.restype = ctypes.c_uint
+        libsystem.task_info.argtypes = [
+            ctypes.c_uint,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_uint),
+        ]
+        libsystem.task_info.restype = ctypes.c_int
+        info = MachTaskBasicInfo()
+        count = ctypes.c_uint(ctypes.sizeof(info) // ctypes.sizeof(ctypes.c_int))
+        result = libsystem.task_info(
+            libsystem.mach_task_self(),
+            20,  # MACH_TASK_BASIC_INFO
+            ctypes.cast(ctypes.byref(info), ctypes.POINTER(ctypes.c_int)),
+            ctypes.byref(count),
+        )
+        value = int(info.resident_size) if result == 0 else -1
+        return value if value >= 0 else None
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
 def sample_process_resident_memory_bytes(
     *,
     status_reader: Optional[Callable[[], str]] = None,
 ) -> Optional[int]:
-    """Return current Linux process RSS in bytes, or ``None`` if unavailable.
+    """Return current process RSS/working-set bytes, or ``None`` if unavailable.
 
     ``/proc/self/status`` provides a current process-local measurement.  This
     deliberately does not use ``ru_maxrss``, which is a platform-dependent
     high-water value rather than a current resident-memory reading.
     """
+    if sys.platform.startswith("win"):
+        return _sample_windows_process_resident_memory_bytes()
+    if sys.platform == "darwin":
+        return _sample_darwin_process_resident_memory_bytes()
     if not sys.platform.startswith("linux"):
         return None
     try:

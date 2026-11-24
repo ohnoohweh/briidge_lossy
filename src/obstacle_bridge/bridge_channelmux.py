@@ -413,6 +413,15 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if not _has('--mux-tcp-bp-poll-interval-ms'):
             p.add_argument('--mux-tcp-bp-poll-interval-ms', type=int, default=50,
                            help='Mux TCP: polling interval for time-based backpressure (ms).')
+        if not _has('--mux-tcp-connect-timeout-s'):
+            p.add_argument('--mux-tcp-connect-timeout-s', type=float, default=60.0,
+                           help='Mux TCP: local target connection timeout in seconds; 0 disables (default 60).')
+        if not _has('--mux-tcp-read-timeout-s'):
+            p.add_argument('--mux-tcp-read-timeout-s', type=float, default=60.0,
+                           help='Mux TCP: maximum idle time between local TCP reads in seconds; 0 disables (default 60).')
+        if not _has('--mux-tcp-send-timeout-s'):
+            p.add_argument('--mux-tcp-send-timeout-s', type=float, default=60.0,
+                           help='Mux TCP: maximum time waiting for a local TCP write drain in seconds; 0 disables (default 60).')
         if not _has('--channelmux-transport-delay-threshold-ms'):
             p.add_argument(
                 '--channelmux-transport-delay-threshold-ms', type=float,
@@ -505,6 +514,9 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         except Exception: mux._tcp_bp_latency_ms = 300
         try: mux._tcp_bp_poll_interval_s = float(getattr(args, 'mux_tcp_bp_poll_interval_ms', 50)) / 1000.0
         except Exception: mux._tcp_bp_poll_interval_s = 0.05
+        mux._tcp_connect_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_connect_timeout_s', 60.0), 60.0)
+        mux._tcp_read_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_read_timeout_s', 60.0), 60.0)
+        mux._tcp_send_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_send_timeout_s', 60.0), 60.0)
         try:
             mux._transport_delay_threshold_ms = max(0.0, float(getattr(
                 args, 'channelmux_transport_delay_threshold_ms', mux.DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS,
@@ -768,6 +780,11 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._tcp_drain_threshold: int = 1
         self._tcp_bp_latency_ms: int = 300
         self._tcp_bp_poll_interval_s: float = 0.05
+        # These defaults intentionally match NGINX's proxy timeout defaults.
+        # Zero disables a timeout for long-lived, intentionally silent streams.
+        self._tcp_connect_timeout_s: float = 60.0
+        self._tcp_read_timeout_s: float = 60.0
+        self._tcp_send_timeout_s: float = 60.0
         self._tcp_ingress_throttle_poll_s: float = 0.05
 
         # Stream overlays hand all mux records to a single lower-layer send
@@ -2805,6 +2822,26 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         raw = getattr(self.args, "channel_mux_egress", None) if self.args is not None else None
         return dict(raw) if isinstance(raw, Mapping) else {}
 
+    @staticmethod
+    def _timeout_seconds(value: Any, default: float) -> float:
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            return default
+
+    async def _tcp_read(self, reader: asyncio.StreamReader, size: int) -> bytes:
+        timeout = self._tcp_read_timeout_s
+        if timeout <= 0:
+            return await reader.read(size)
+        return await asyncio.wait_for(reader.read(size), timeout=timeout)
+
+    async def _tcp_drain(self, writer: asyncio.StreamWriter) -> None:
+        timeout = self._tcp_send_timeout_s
+        if timeout <= 0:
+            await writer.drain()
+            return
+        await asyncio.wait_for(writer.drain(), timeout=timeout)
+
     def _channel_mux_egress_mode(self) -> str:
         return str(self._channel_mux_egress_config().get("mode") or "system").strip().lower()
 
@@ -2852,7 +2889,10 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
     async def _open_tcp_target_connection(self, host: str, port: int) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         upstream_proxy = self._resolve_channel_mux_egress_proxy(host, int(port))
         if upstream_proxy is None:
-            return await asyncio.open_connection(host=host, port=int(port))
+            connect = asyncio.open_connection(host=host, port=int(port))
+            if self._tcp_connect_timeout_s <= 0:
+                return await connect
+            return await asyncio.wait_for(connect, timeout=self._tcp_connect_timeout_s)
 
         sock = await asyncio.to_thread(
             open_http_connect_tunnel,
@@ -2866,7 +2906,10 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             user_agent="ObstacleBridge-channelmux/1.0",
         )
         try:
-            return await asyncio.open_connection(sock=sock)
+            connect = asyncio.open_connection(sock=sock)
+            if self._tcp_connect_timeout_s <= 0:
+                return await connect
+            return await asyncio.wait_for(connect, timeout=self._tcp_connect_timeout_s)
         except Exception:
             sock.close()
             raise
@@ -7140,7 +7183,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 try:
                     while True:
                         await self._wait_for_local_tcp_ingress(chan)
-                        data = await reader.read(self._tcp_overlay_read_size())
+                        data = await self._tcp_read(reader, self._tcp_overlay_read_size())
                         if not data:
                             break
 
@@ -7312,7 +7355,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                         break
                 if pending:
                     try:
-                        await writer.drain()
+                        await self._tcp_drain(writer)
                         if local_chan not in self._tcp_pending_drain_logged:
                             self._tcp_pending_drain_logged.add(local_chan)
                             pending_bytes = sum(len(buf) for buf in pending)
@@ -7337,7 +7380,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                                 wire_chan=wire_chan,
                                 peer_id=peer_key,
                             )
-                            buf = await reader.read(self._tcp_overlay_read_size())
+                            buf = await self._tcp_read(reader, self._tcp_overlay_read_size())
                             if not buf:
                                 break
                             try:
@@ -7542,7 +7585,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     if do_drain:
                         try:
                             t0 = time.perf_counter()
-                            await writer.drain()
+                            await self._tcp_drain(writer)
                             dt = (time.perf_counter() - t0) * 1000.0
                             self.log.debug("[TCP/BP] chan=%s drain in %.2f ms; %s", chan, dt, reason)
                         except Exception as e:

@@ -1579,6 +1579,9 @@ class AdminWebUI:
             "mux_tcp_bp_threshold",
             "mux_tcp_bp_latency_ms",
             "mux_tcp_bp_poll_interval_ms",
+            "mux_tcp_connect_timeout_s",
+            "mux_tcp_read_timeout_s",
+            "mux_tcp_send_timeout_s",
         ):
             if key in payload:
                 with contextlib.suppress(Exception):
@@ -1726,6 +1729,15 @@ class AdminWebUI:
         selected_mux_tcp_bp_poll_interval_ms = int(
             req.get("mux_tcp_bp_poll_interval_ms", getattr(self.args, "mux_tcp_bp_poll_interval_ms", 50)) or 50
         )
+        selected_mux_tcp_connect_timeout_s = float(
+            req.get("mux_tcp_connect_timeout_s", getattr(self.args, "mux_tcp_connect_timeout_s", 60.0)) or 0.0
+        )
+        selected_mux_tcp_read_timeout_s = float(
+            req.get("mux_tcp_read_timeout_s", getattr(self.args, "mux_tcp_read_timeout_s", 60.0)) or 0.0
+        )
+        selected_mux_tcp_send_timeout_s = float(
+            req.get("mux_tcp_send_timeout_s", getattr(self.args, "mux_tcp_send_timeout_s", 60.0)) or 0.0
+        )
         selected_proxy_provider = self._sanitize_onboarding_proxy_provider(
             req.get("proxy_provider", self._onboarding_proxy_provider_from_args(self.args))
         )
@@ -1748,6 +1760,9 @@ class AdminWebUI:
             "mux_tcp_bp_threshold": selected_mux_tcp_bp_threshold,
             "mux_tcp_bp_latency_ms": selected_mux_tcp_bp_latency_ms,
             "mux_tcp_bp_poll_interval_ms": selected_mux_tcp_bp_poll_interval_ms,
+            "mux_tcp_connect_timeout_s": max(0.0, selected_mux_tcp_connect_timeout_s),
+            "mux_tcp_read_timeout_s": max(0.0, selected_mux_tcp_read_timeout_s),
+            "mux_tcp_send_timeout_s": max(0.0, selected_mux_tcp_send_timeout_s),
             "proxy_provider": selected_proxy_provider,
             "admin_auth_recommended": True,
             "own_servers": own_services,
