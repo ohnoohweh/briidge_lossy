@@ -172,11 +172,9 @@ struct ObstacleBridgeTelemetryTests {
         #expect(status["peer"] is NSNull)
         let live = ObstacleBridgeAdminSnapshotSupport.liveStatusEnvelope(status.merging([
             "runtime_metrics": ["history": Array(repeating: 1, count: 32)],
-            "runtime_health_recent_records": [["state": "connected"]],
         ], uniquingKeysWith: { _, supplied in supplied }))
         #expect(live["overlay_transport"] as? String == "myudp")
         #expect((live["runtime_metrics"] as? [String: Any])?["history"] as? [Int] == Array(repeating: 1, count: 32))
-        #expect(live["runtime_health_recent_records"] == nil)
     }
 
     private func vectorEvent() throws -> ObstacleBridgeTelemetryEvent {

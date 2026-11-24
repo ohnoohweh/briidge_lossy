@@ -609,7 +609,7 @@ exactly this one.
 
 ### Swift/macOS implementation status
 
-The Apple source tree has runtime-health snapshots and local `NSLog` calls. It
+The Apple source tree has local `NSLog` calls. It
 does not expose the private UDP logging protocol or operate the Python
 collector/helper processes. `ObstacleBridgeTelemetry` in the portable Swift core provides the
 `telemetry/v1` event and batch contract. It applies the same field allowlist,
@@ -633,8 +633,8 @@ host-runner and Packet Tunnel queues. The queues create telemetry only after a
 valid HTTPS endpoint, installation identifier, and Keychain identity are
 available; they drain on a five-second timer outside service and packet-flow
 work. Shutdown persists its final marker and cancels any request in progress.
-The provider emits compact lifecycle and runtime-health evidence, including
-heartbeat, memory, backlog, and drop counters.
+The provider emits compact lifecycle telemetry, including heartbeat, memory,
+backlog, and drop counters.
 
 The macOS host target builds successfully. No iPhone-to-collector transfer has
 yet been observed. The Python bridge peer process is not a collector: an

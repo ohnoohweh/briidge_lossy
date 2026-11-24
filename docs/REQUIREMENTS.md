@@ -617,23 +617,12 @@ Implementation note: [ARCHITECTURE.md](ARCHITECTURE.md) now also defines the ove
   Python source-checkout,
   Linux, macOS, and iOS products use that same display format. A reusable
   embedded host reports `available=false` rather than inventing an identity.
-  Implementation note: the portable runtime-health record and bounded ring are
-  implemented in Python and Swift Core. The Python Runner persists its ring
-  beside the effective configuration (or at its explicit environment-selected
-  path), records start, heartbeat, and controlled stop, and publishes the
-  preceding lifetime's classification, retained-record count, and redacted
-  bounded record tail in `/api/status`; the Linux Swift foreground runtime stores the same evidence
-  beside its runtime configuration, the macOS Swift host runner stores it in
-  its runtime-config directory, and the iOS packet-tunnel provider uses its
-  App Group. Packet contents, credentials, keys, nonces, and peer traffic
-  detail are not retained. A new runtime lifetime retains the bounded prior
-  evidence before appending its start marker. `scripts/capture_runtime_qualification.py`
-  captures only those existing redacted Admin projections for a physical-load
-  evidence bundle. It requires the build identifier, controlled traffic-source
-  identifier, and external platform termination-report location, records the
-  repository revision and owner packet-counter delta, and rejects missing
-  retained health evidence, owner counters, or an authenticated ready
-  SecureLink. Physical-device load-threshold qualification remains open.
+  `scripts/capture_runtime_qualification.py` captures redacted Admin
+  projections for a physical-load evidence bundle. It requires the build
+  identifier, controlled traffic-source identifier, and external platform
+  termination-report location, records the repository revision and owner
+  packet-counter delta, and rejects missing owner counters or an authenticated
+  ready SecureLink. Physical-device load-threshold qualification remains open.
 - Implementation note (desktop Admin worker): the Python runner offers opt-in Python or host-native children. Each uses private inherited, bounded runner RPC; a native selection resolves only an explicit host-local executable, deployment override, or platform executable on PATH, and receives only control/lifetime/log descriptors. The supervisor services the native child’s required bootstrap status RPC before it awaits readiness. Its lifetime follows the owner, and worker loss is observable without silent in-process fallback. Required Linux CI launches the packaged native child, serves status, kills it, and verifies same-port supervisor recovery. The packaged macOS child owns authenticated browser asset delivery, redacted read-only Admin documents and live status/peer/connection reads, Core-owned invitation generation and PSK-masked preview through the dedicated inherited invite source, plus one-time password-confirmed configuration updates with a refreshed redacted snapshot; privileged-control parity remains pending. Python Admin and Python/native proxy children can send bounded, best-effort records through a producer-only inherited channel to either selected logging child; collector replacement does not grant children query access. macOS-native recovery qualification, remaining worker log integration and native-host supervision remain open; embedded restart callbacks are unsupported in this mode.
 
   The Linux native Admin child normalizes its private collector reply through

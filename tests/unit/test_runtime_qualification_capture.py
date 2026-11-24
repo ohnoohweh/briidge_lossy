@@ -18,7 +18,6 @@ SPEC.loader.exec_module(capture_tool)
 
 def _status(*, authenticated: bool = True) -> dict[str, object]:
     return {
-        "runtime_health_record_count": 4,
         "swift_udp_bridge_state": {
             "packets_from_system": 10,
             "packets_to_system": 20,
@@ -33,12 +32,10 @@ def _status(*, authenticated: bool = True) -> dict[str, object]:
     }
 
 
-def test_preflight_requires_health_counters_and_ready_secure_link() -> None:
+def test_preflight_requires_ready_secure_link() -> None:
     assert capture_tool.preflight(_status(), require_authenticated=True) == {"from_owner": 10, "to_owner": 20}
     with pytest.raises(ValueError, match="authenticated"):
         capture_tool.preflight(_status(authenticated=False), require_authenticated=True)
-    with pytest.raises(ValueError, match="runtime-health"):
-        capture_tool.preflight({"swift_udp_bridge_state": {}}, require_authenticated=False)
 
 
 def test_capture_writes_redacted_admin_snapshots_and_delta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

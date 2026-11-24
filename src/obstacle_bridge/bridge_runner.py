@@ -24,7 +24,6 @@ from .bridge_swift_tun_helper import ensure_darwin_swift_tun_helper, ensure_linu
 from .bridge_telemetry import TelemetryEmitter, TelemetryRuntimeSettings, TelemetrySpool
 from .bridge_telemetry_credentials import client_certificate_paths
 from .bridge_telemetry_uploader import TelemetryUploader
-from .runtime_health import RuntimeHealthRecord, RuntimeHealthStore
 from .memory_monitoring import RuntimeMemoryMetrics, sample_process_resident_memory_bytes
 from .runtime_metrics import NANOSECONDS_PER_SECOND, RuntimeMetricAccumulator, bounded_runtime_scope
 
@@ -258,11 +257,6 @@ class Runner:
         self._last_disconnected_monotonic: Optional[float] = None
         self._last_connection_lifecycle_monotonic: Optional[float] = None
         self._client_restart_watchdog_task: Optional[asyncio.Task] = None
-        self._runtime_health_store: Optional[RuntimeHealthStore] = self._make_runtime_health_store()
-        self._runtime_health_previous_lifetime_ended_cleanly: Optional[bool] = None
-        self._runtime_health_sequence = 0
-        self._runtime_health_task: Optional[asyncio.Task] = None
-        self._runtime_health_last_error = ""
         # One runner-owned monitor task samples process CPU, memory, and event
         # loop lateness without placing collection on the forwarding path.
         self._runtime_metrics_task: Optional[asyncio.Task] = None
@@ -723,67 +717,6 @@ class Runner:
         self._telemetry_uploader = None
         self._telemetry_client_flush_task = None
 
-    def _make_runtime_health_store(self) -> Optional[RuntimeHealthStore]:
-        configured = str(os.environ.get("OBSTACLEBRIDGE_RUNTIME_HEALTH_PATH") or "").strip()
-        if not configured:
-            config_path = str(getattr(self.args, "_config_path", "") or getattr(self.args, "config", "")).strip()
-            if not config_path:
-                return None
-            path = Path(config_path).expanduser()
-            configured = str(path.with_name(f".{path.stem}.runtime-health-v1.json"))
-        try:
-            return RuntimeHealthStore(configured)
-        except (OSError, ValueError) as exc:
-            self.log.warning("[RUNNER] runtime-health store disabled path=%s error=%s", configured, type(exc).__name__)
-            return None
-
-    def _record_runtime_health(self, event: str, *, controlled_stop: bool = False) -> None:
-        store = self._runtime_health_store
-        if store is None:
-            return
-        connected = any(self._session_app_ready(session) for session in self._sessions)
-        secure_link_state = None
-        for session in self._sessions:
-            getter = getattr(session, "get_secure_link_status_snapshot", None)
-            if callable(getter):
-                with contextlib.suppress(Exception):
-                    state = str(dict(getter() or {}).get("state") or "").strip()
-                    if state:
-                        secure_link_state = state
-                        break
-        self._runtime_health_sequence += 1
-        try:
-            store.append(RuntimeHealthRecord(
-                sequence=self._runtime_health_sequence,
-                timestamp_unix_milliseconds=int(time.time() * 1_000),
-                event=event,
-                controlled_stop=controlled_stop,
-                packet_pump_running=connected,
-                overlay_state=STATE_CONNECTED if connected else STATE_DISCONNECTED,
-                securelink_state=secure_link_state,
-            ))
-            self._runtime_health_last_error = ""
-        except OSError as exc:
-            self._runtime_health_last_error = type(exc).__name__
-            self.log.warning("[RUNNER] runtime-health persist failed event=%s error=%s", event, type(exc).__name__)
-
-    def _begin_runtime_health_lifetime(self) -> None:
-        store = self._runtime_health_store
-        if store is None:
-            return
-        try:
-            self._runtime_health_previous_lifetime_ended_cleanly = store.begin_lifetime()
-            self._runtime_health_sequence = store.ring.records[-1].sequence if store.ring.records else 0
-            self._record_runtime_health("runner_started")
-        except OSError as exc:
-            self._runtime_health_last_error = type(exc).__name__
-            self.log.warning("[RUNNER] runtime-health startup failed error=%s", type(exc).__name__)
-
-    async def _runtime_health_heartbeat(self) -> None:
-        while True:
-            await asyncio.sleep(15.0)
-            self._record_runtime_health("heartbeat")
-
     def _sample_runtime_cpu(self, *, monotonic_ns: Optional[int] = None, process_cpu_ns: Optional[int] = None) -> Optional[float]:
         """Record one process-CPU delta; the first sample establishes a baseline."""
         wall_now = time.monotonic_ns() if monotonic_ns is None else int(monotonic_ns)
@@ -858,15 +791,6 @@ class Runner:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
-
-    def _runtime_health_status_fields(self) -> dict[str, Any]:
-        store = self._runtime_health_store
-        return {
-            "runtime_health_record_count": len(store.ring.records) if store is not None else 0,
-            "previous_runtime_lifetime_ended_cleanly": self._runtime_health_previous_lifetime_ended_cleanly,
-            "runtime_health_recent_records": [record.as_payload() for record in (store.ring.records[-16:] if store is not None else ())],
-            "runtime_health_last_error": self._runtime_health_last_error or None,
-        }
 
     def _runtime_metrics_status_fields(self) -> dict[str, Any]:
         now = time.monotonic_ns()
@@ -1795,7 +1719,6 @@ class Runner:
             available_crypto_extract(),
         )
         self._ensure_runtime_events()
-        self._begin_runtime_health_lifetime()
         self._start_runtime_metrics_monitor()
         from .bridge_debug_logging import set_runtime_timing_callback
         set_runtime_timing_callback(self.record_runtime_duration)
@@ -1839,7 +1762,6 @@ class Runner:
                     await self.stop(reason="peer-worker-start-failed")
                 raise
             self._peer_stack_task = asyncio.create_task(self._supervise_peer_stack(peer_config), name="peer-stack-supervisor")
-            self._runtime_health_task = asyncio.create_task(self._runtime_health_heartbeat())
             return
 
         loop = asyncio.get_running_loop()
@@ -1887,7 +1809,6 @@ class Runner:
         self._client_restart_watchdog_task = asyncio.create_task(
             self._client_restart_watchdog()
         )
-        self._runtime_health_task = asyncio.create_task(self._runtime_health_heartbeat())
 
     async def run(self):
         self.log.debug("[SERVER] Run entered")
@@ -1968,11 +1889,6 @@ class Runner:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._client_restart_watchdog_task
             self._client_restart_watchdog_task = None
-        if self._runtime_health_task is not None:
-            self._runtime_health_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._runtime_health_task
-            self._runtime_health_task = None
         await self._stop_runtime_metrics_monitor()
         from .bridge_debug_logging import set_runtime_timing_callback
         set_runtime_timing_callback(None)
@@ -2002,7 +1918,6 @@ class Runner:
         self.log.debug("[RUNNER] stop: entering _session_obj")
         for idx, session in enumerate(reversed(self._sessions)):
             await _run_stop_step(f"session.stop[{idx}]", session.stop(), timeout_s=5.0)
-        self._record_runtime_health("runner_stopped", controlled_stop=True)
         self.log.info("[RUNNER] stop leaving reason=%s", stop_reason)
 
     @staticmethod
@@ -2516,7 +2431,6 @@ class Runner:
 
         runtime_metrics_started_ns = time.monotonic_ns()
         payload["runtime_metrics"] = self._runtime_metrics_status_fields()
-        payload.update(self._runtime_health_status_fields())
         self.record_runtime_duration(
             "runtime_metrics_projection", time.monotonic_ns() - runtime_metrics_started_ns
         )
@@ -2527,7 +2441,6 @@ class Runner:
             if snapshot is not None:
                 child_status = snapshot["bundle"]["status"]
                 parent_fields = {"proxy_provider", "admin_web_worker", "telemetry", "tun_helper"}
-                parent_fields.update(self._runtime_health_status_fields())
                 payload.update(copy.deepcopy({key: value for key, value in child_status.items() if key not in parent_fields}))
             worker = self._peer_stack_worker
             process = worker.process if worker is not None else None

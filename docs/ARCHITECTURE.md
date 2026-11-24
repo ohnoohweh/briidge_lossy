@@ -172,7 +172,7 @@ standard-error sink.
 This is a Python-supervised, single-outbound-TCP slice. Its child can be Python
 on macOS or Linux, or the native macOS host runner / Linux executable. The native child receives
 only the inherited control descriptor: it starts neither Admin, proxy,
-telemetry, runtime-health persistence nor TUN helper; it rejects TUN catalogs
+telemetry, persistent lifecycle history nor TUN helper; it rejects TUN catalogs
 and shared desktop-service settings. It returns generation-fenced status,
 connections and peer snapshots, exits on control-owner loss, and is replaced
 by the existing Python supervisor after failure. Native peer control requests

@@ -32,7 +32,7 @@ Their actor/serial-asynchronous conversion order and acceptance criteria are in
 | `ObstacleBridgeNativeAdminWorker.ParentRPC` | `NSLock` serializes request/reply and failure state | `ObstacleBridgeWorkerIPCTests` | Interleaved parent RPC frames or stale reply state |
 | `ObstacleBridgeLinuxAdminServer` | private serial dispatch queue owns client maps | `ObstacleBridgeLinuxAdminServerTests` | Concurrent HTTP client source/request-map mutation |
 | `ObstacleBridgeLinuxConfiguredSession` | request and protocol locks protect handoff state | `ObstacleBridgeLinuxLiveRuntimeTests` | Concurrent handshake/reply state mutation during transport callbacks |
-| `ObstacleBridgeLinuxLiveRuntime` | transport queue plus status/runtime-health locks | `ObstacleBridgeLinuxLiveRuntimeTests` | Service-owner/channel map mutation racing shutdown or Admin reads |
+| `ObstacleBridgeLinuxLiveRuntime` | transport queue plus status lock | `ObstacleBridgeLinuxLiveRuntimeTests` | Service-owner/channel map mutation racing shutdown or Admin reads |
 | `ObstacleBridgeLinuxQUICSession` | `NSLock` and condition-owned inbound state | `ObstacleBridgeLinuxOverlayTransportTests` | NIO callback/close races over channel and inbound state |
 | `ObstacleBridgeLinuxServiceSocketOwner` | one private serial dispatch queue owns descriptors and channel maps | `ObstacleBridgeLinuxServiceSocketOwnerTests` | Socket readiness callbacks racing descriptor/channel teardown |
 | `ObstacleBridgeLinuxTLSWebSocketConnection` | `NSLock` and condition-owned TLS state | `ObstacleBridgeLinuxOverlayTransportTests` | TLS/NIO callback racing close or handshake completion |

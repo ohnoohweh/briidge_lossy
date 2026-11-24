@@ -270,10 +270,7 @@ enum ObstacleBridgeLinuxMain {
                 withExtendedLifetime(resources) {}
                 return
             }
-            let healthURL = URL(fileURLWithPath: options.configurationPath)
-                .deletingLastPathComponent()
-                .appendingPathComponent(".ObstacleBridgeLinux.runtime-health-v1.json")
-            let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL, loggingWorker: logWorker)
+            let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, loggingWorker: logWorker)
             runtime.onDiagnostic = { level, event, fields in
                 observability.recordDiagnostic(event, fields: fields, level: level)
             }
@@ -352,7 +349,6 @@ enum ObstacleBridgeLinuxMain {
             let stopped = DispatchSemaphore(value: 0)
             resources.append(contentsOf: installForegroundShutdown(
                 stop: { observability.recordForegroundLifecycle(state: "stopped", transport: configuration.transport.rawValue); observability.stop(); logWorker?.stop(); runtime.stop() },
-                recordSignal: runtime.recordShutdownSignal,
                 admin: admin,
                 holdSeconds: options.holdSeconds,
                 onStopped: { stopped.signal() }
@@ -383,20 +379,18 @@ enum ObstacleBridgeLinuxMain {
 
     private static func installForegroundShutdown(
         stop: @escaping () -> Void,
-        recordSignal: ((ObstacleBridgeLinuxShutdownSignal) -> Void)? = nil,
         admin: ObstacleBridgeLinuxAdminServer?,
         holdSeconds: Int?,
         onStopped: @escaping @Sendable () -> Void = {}
     ) -> [Any] {
         let shutdownLock = NSLock()
         var shutdownStarted = false
-        func shutdown(signal: ObstacleBridgeLinuxShutdownSignal? = nil) {
+        func shutdown() {
             shutdownLock.lock()
             guard !shutdownStarted else { shutdownLock.unlock(); return }
             shutdownStarted = true
             shutdownLock.unlock()
             let shutdownWork = DispatchWorkItem {
-                if let signal { recordSignal?(signal) }
                 stop()
                 admin?.stop()
                 Task {
@@ -411,10 +405,10 @@ enum ObstacleBridgeLinuxMain {
         signal(SIGINT, SIG_IGN)
         signal(SIGTERM, SIG_IGN)
         let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
-        interrupt.setEventHandler { shutdown(signal: .interrupt) }
+        interrupt.setEventHandler { shutdown() }
         interrupt.resume()
         let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
-        terminate.setEventHandler { shutdown(signal: .terminate) }
+        terminate.setEventHandler { shutdown() }
         terminate.resume()
         resources.append(interrupt)
         resources.append(terminate)

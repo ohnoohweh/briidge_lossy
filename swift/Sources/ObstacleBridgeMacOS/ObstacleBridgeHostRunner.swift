@@ -256,7 +256,6 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     private var startedAt = Date()
     private let serviceStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Services")
     private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
-    private let runtimeHealthQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.RuntimeHealth")
     private let macOSTunHelperPackageQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.TunHelperPackage")
     private let controlActionQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.ControlActions")
     private var controlServer: ObstacleBridgeWebAdminServer?
@@ -310,11 +309,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     private var tunProbeLastTimeoutDiag: [String: Any] = [:]
     private var clientRestartWatchdog: DispatchSourceTimer?
     private var adminSnapshotTimer: DispatchSourceTimer?
-    private var runtimeHealthTimer: DispatchSourceTimer?
     private let telemetryState = ObstacleBridgeHostRunnerTelemetryState()
-    private var runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
-    private var runtimeHealthSequence: UInt64 = 0
-    private var previousRuntimeLifetimeEndedCleanly: Bool?
     private let adminSnapshotState = ObstacleBridgeHostRunnerAdminSnapshotState()
     /// Admin requests and the periodic cache publisher can both build a peer
     /// snapshot. Keep rate-history mutation serialized across those queues.
@@ -638,7 +633,6 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
 
     func start() throws {
         configureManagedDiagnosticLog()
-        beginRuntimeHealthLifetime()
         try ensureControlServerStarted()
         prepareSharedOverlayBootstrap()
         var startupFailed = false
@@ -659,7 +653,6 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         }
         startAdminSnapshotPublisher()
         startClientRestartWatchdog()
-        startRuntimeHealthHeartbeat()
         startTelemetryIfConfigured()
         if startupFailed {
             enqueueTelemetryHealth(state: "startup_failed", counter: 0)
@@ -684,16 +677,8 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         stopOwnServers()
         controlServer?.stop()
         controlServer = nil
-        stopRuntimeHealthHeartbeat()
         stopTelemetry()
-        appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)
         stopLoggingWorker()
-    }
-
-    private var runtimeHealthURL: URL {
-        URL(fileURLWithPath: runtimeConfigPath)
-            .deletingLastPathComponent()
-            .appendingPathComponent(".ObstacleBridgeHostRunner.runtime-health-v1.json")
     }
 
     private func startTelemetryIfConfigured() {
@@ -728,42 +713,6 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         telemetryState.enqueueHealth(state: state, counter: counter)
     }
 
-    private func beginRuntimeHealthLifetime() {
-        runtimeHealthQueue.sync {
-            let previous = ObstacleBridgeRuntimeHealthPersistence.load(from: runtimeHealthURL)
-            previousRuntimeLifetimeEndedCleanly = previous?.previousLifetimeEndedCleanly
-            runtimeHealthRing = previous ?? .init()
-            runtimeHealthSequence = previous?.records.last?.sequence ?? 0
-        }
-        appendRuntimeHealth(event: "runtime_started")
-    }
-
-    private func appendRuntimeHealth(event: String, controlledStop: Bool = false) {
-        let overlayState = bootstrapState["startup_status"] as? String
-        let secureLinkState = sharedSecureLinkPskTransportAdapter == nil
-            ? "off"
-            : (overlayCurrentlyConnected() == true ? "authenticated" : "disconnected")
-        let sequence: UInt64 = runtimeHealthQueue.sync {
-            runtimeHealthSequence += 1
-            runtimeHealthRing.append(.init(
-                sequence: runtimeHealthSequence,
-                timestampUnixMilliseconds: UInt64(Date().timeIntervalSince1970 * 1_000),
-                event: event,
-                controlledStop: controlledStop,
-                overlayState: overlayState,
-                secureLinkState: secureLinkState
-            ))
-            try? ObstacleBridgeRuntimeHealthPersistence.save(runtimeHealthRing, to: runtimeHealthURL)
-            return runtimeHealthSequence
-        }
-        enqueueTelemetryHealth(state: event, counter: sequence)
-        if let worker = activeLoggingWorker() {
-            worker.emit(name: "macos.runtime", level: "INFO", levelNumber: 20, message: event)
-        } else {
-            peerWorkerLogProducer?.emit(name: "macos.runtime", level: "INFO", levelNumber: 20, message: event)
-        }
-        appendManagedDiagnosticLog(name: "macos.runtime", level: "INFO", message: event)
-    }
 
     private func activeLoggingWorker() -> ObstacleBridgeLogWorkerSupervisor? {
         loggingWorkerLock.lock(); defer { loggingWorkerLock.unlock() }
@@ -826,34 +775,6 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     private func loggingWorkerSnapshot() -> [String: Any] {
         loggingWorkerLock.lock(); let worker = loggingWorker; let configured = loggingWorkerConfigured; loggingWorkerLock.unlock()
         return worker?.status() ?? ["state": configured ? "unavailable" : "off"]
-    }
-
-    private func runtimeHealthMetadata() -> (count: Int, previousClean: Bool?) {
-        runtimeHealthQueue.sync { (runtimeHealthRing.records.count, previousRuntimeLifetimeEndedCleanly) }
-    }
-
-    private func runtimeHealthRecentRecords() -> [[String: Any]] {
-        runtimeHealthQueue.sync {
-            runtimeHealthRing.records.suffix(16).compactMap { record in
-                guard let data = try? JSONEncoder().encode(record) else { return nil }
-                return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            }
-        }
-    }
-
-    private func startRuntimeHealthHeartbeat() {
-        stopRuntimeHealthHeartbeat()
-        let timer = DispatchSource.makeTimerSource(queue: serviceStateQueue)
-        timer.schedule(deadline: .now() + .seconds(15), repeating: .seconds(15))
-        timer.setEventHandler { [weak self] in self?.appendRuntimeHealth(event: "heartbeat") }
-        runtimeHealthTimer = timer
-        timer.resume()
-    }
-
-    private func stopRuntimeHealthHeartbeat() {
-        runtimeHealthTimer?.setEventHandler {}
-        runtimeHealthTimer?.cancel()
-        runtimeHealthTimer = nil
     }
 
     private func startProxyProviderIfConfigured() throws {
@@ -1692,8 +1613,6 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessMetrics()
         let uptimeMS = Int(Date().timeIntervalSince(startedAt) * 1000)
         let uptimeSec = Int(Date().timeIntervalSince(startedAt))
-        let health = runtimeHealthMetadata()
-        let healthRecords = runtimeHealthRecentRecords()
         return [
             "ok": true,
             "mode": "swift_host_runner",
@@ -1705,9 +1624,6 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
             "admin_url": "http://\(bindHost):\(statusPort)/",
             "uptime_ms": uptimeMS,
             "uptime_sec": uptimeSec,
-            "runtime_health_record_count": health.count,
-            "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
-            "runtime_health_recent_records": healthRecords,
             "runtime_metrics": runtimeMetricsSnapshot(),
             "bootstrap_state": bootstrapState,
             "admin_web_name": Self.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",

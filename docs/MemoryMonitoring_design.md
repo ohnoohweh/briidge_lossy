@@ -173,7 +173,7 @@ intentionally not introduced by this monitoring slice.
 
 `warning_active` is true when a successful current reading is greater than or
 equal to the configured limit. A crossing may add a rate-limited, redacted
-runtime-health or local-log event containing the measurement kind and rounded
+telemetry or local-log event containing the measurement kind and rounded
 byte value. It must not automatically restart the bridge, terminate the
 process, alter packet forwarding, or upload telemetry. Any remediation policy
 needs a separate explicit design because process termination is particularly
