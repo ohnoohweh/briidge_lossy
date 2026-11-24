@@ -809,7 +809,10 @@ its patcher shall also repair earlier four- or six-parent generated paths and
 include both the Core ChannelMux codec definition and its compatibility
 extension in every Apple target that consumes ChannelMux service specifications.
 The generated Python-library phase shall restore required `Info.plist` metadata
-for stale CPython extension frameworks before Xcode validates the app bundle.
+for stale CPython extension frameworks before Xcode validates the app bundle,
+then re-sign every embedded CPython extension framework using its final
+`CFBundleIdentifier` so iOS installation validation sees matching bundle and
+code-sign identifiers.
 
 Cross-runtime service qualification treats authenticated overlay readiness and
 local listener publication as separate observable states; it waits a bounded

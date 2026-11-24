@@ -58,7 +58,7 @@ PYTHON_APP_STORE_CLEANUP_SCRIPT = (
 # on incremental builds.  A stale directory created by an older installer can
 # contain its binary but no Info.plist, which Xcode rejects during app-bundle
 # validation.  Restore the normal framework metadata before final signing.
-PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT = (
+PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT_LEGACY = (
     "\n"
     "# Repair stale Python extension frameworks missing required bundle metadata.\n"
     'PYTHON_DYLIB_INFO_TEMPLATE="$PROJECT_DIR/Support/Python.xcframework/build/iOS-dylib-Info-template.plist"\n'
@@ -73,6 +73,29 @@ PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT = (
     '        plutil -replace CFBundleIdentifier -string "$framework_bundle_id" "$framework_path/Info.plist"\n'
     '        /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" ${OTHER_CODE_SIGN_FLAGS:-} -o runtime --timestamp=none --preserve-metadata=identifier,entitlements,flags --generate-entitlement-der "$framework_path"\n'
     "    fi\n"
+    "done\n"
+)
+
+# Every copied CPython extension framework must be signed under the final
+# bundle identifier in its Info.plist.  Xcode's default re-signing otherwise
+# uses the extension executable name (for example `_zstd`) as the designated
+# identifier, which iOS rejects when it differs from the framework bundle ID.
+PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT = (
+    "\n"
+    "# Ensure Python extension framework metadata and code-sign identifiers agree.\n"
+    'PYTHON_DYLIB_INFO_TEMPLATE="$PROJECT_DIR/Support/Python.xcframework/build/iOS-dylib-Info-template.plist"\n'
+    'for framework_path in "$CODESIGNING_FOLDER_PATH"/Frameworks/*.framework\n'
+    "do\n"
+    '    [ -d "$framework_path" ] || continue\n'
+    '    framework_name="$(basename "$framework_path" .framework)"\n'
+    '    if [ ! -f "$framework_path/Info.plist" ]; then\n'
+    '        cp "$PYTHON_DYLIB_INFO_TEMPLATE" "$framework_path/Info.plist"\n'
+    '        plutil -replace CFBundleExecutable -string "$framework_name" "$framework_path/Info.plist"\n'
+    '        framework_bundle_id=$(echo "$PRODUCT_BUNDLE_IDENTIFIER.$framework_name" | tr "_" "-" | sed "s/\\.-/./g")\n'
+    '        plutil -replace CFBundleIdentifier -string "$framework_bundle_id" "$framework_path/Info.plist"\n'
+    "    fi\n"
+    '    framework_bundle_id="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$framework_path/Info.plist")"\n'
+    '    /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" ${OTHER_CODE_SIGN_FLAGS:-} -o runtime --timestamp=none --identifier "$framework_bundle_id" --preserve-metadata=entitlements,flags --generate-entitlement-der "$framework_path"\n'
     "done\n"
 )
 
@@ -767,6 +790,19 @@ def patch_python_build_script(text: str) -> str:
         PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT,
         PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT.replace("\n", "\\n").replace('"', '\\"'),
     )
+    legacy_info_plist_variants = (
+        PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT_LEGACY,
+        PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT_LEGACY.replace("\n", "\\n").replace('"', '\\"'),
+    )
+    for legacy_info_plist_script in legacy_info_plist_variants:
+        if legacy_info_plist_script in text:
+            replacement = (
+                PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT.replace("\n", "\\n").replace('"', '\\"')
+                if "\\n" in legacy_info_plist_script
+                else PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT
+            )
+            text = text.replace(legacy_info_plist_script, replacement, 1)
+            break
     if not any(info_plist_script in text for info_plist_script in info_plist_variants):
         for cleanup in cleanup_variants:
             if cleanup in text:

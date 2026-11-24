@@ -81,7 +81,8 @@ The active testing focus on this branch is:
   canonical repository-relative depth, are idempotent, and repair stale path
   depths from earlier generated projects; they also pin the paired Core
   ChannelMux codec and compatibility-extension compile inventory, plus the
-  generated repair for stale CPython extension-framework metadata.
+  generated repair for stale CPython extension-framework metadata and matching
+  code-sign identifiers.
 - Linux Swift adapter tests use a Python UDP peer to prove Core-timer recovery
   after dropped DATA and exact-once reassembly of duplicated, out-of-order chunks
 - configuration and hook-contract derivation from `TUN_routing`
