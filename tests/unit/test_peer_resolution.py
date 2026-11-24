@@ -10,6 +10,21 @@ from obstacle_bridge.bridge import _resolve_peer_endpoint
 from obstacle_bridge.bridge_transport_udp import SendPort, UdpSession
 
 
+def test_udp_peer_idle_timeout_defaults_to_30_seconds_and_accepts_override() -> None:
+    parser = argparse.ArgumentParser()
+    UdpSession.register_cli(parser)
+
+    defaults = parser.parse_args([])
+    assert defaults.udp_peer_idle_timeout_s == 30.0
+
+    configured = parser.parse_args(["--udp-peer-idle-timeout-s", "45"])
+    session = UdpSession(configured)
+    assert session._peer_candidate_idle_timeout_s == 45.0
+
+    too_short = parser.parse_args(["--udp-peer-idle-timeout-s", "2"])
+    assert UdpSession(too_short)._peer_candidate_idle_timeout_s == 4.0
+
+
 async def _rotate_client_socket() -> tuple[bool, bool, tuple, tuple]:
     args = argparse.Namespace(
         max_inflight=32,
@@ -133,7 +148,7 @@ def test_resolve_prefer_ipv6_keeps_native_ipv4_literal_until_ipv6_socket_send_ma
     assert transport.sent == [(b"payload", ("::ffff:198.51.100.5", 8080, 0, 0))]
 
 
-def test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error() -> None:
+def test_udp_session_prefer_ipv6_advances_to_ipv4_on_immediate_send_error() -> None:
     args = argparse.Namespace(
         max_inflight=32,
         udp_bind="::",
@@ -176,14 +191,6 @@ def test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error() -> No
 
     session._on_peer_send_error(OSError(errno.ENETUNREACH, "Network is unreachable"))
 
-    assert session._peer_candidate_index == 0
-    assert fake_send_port.peer_addr == ("2001:db8::10", 4433)
-    assert learned == []
-    assert fake_runtime._conn_state is True
-    assert fake_runtime._next_probe_due_ns == 123
-    assert fake_runtime.sent_initial is False
-
-    assert session._rotate_to_next_peer_candidate() is True
     assert session._peer_candidate_index == 1
     assert fake_send_port.peer_addr == ("192.0.2.10", 4433)
     assert learned == [("192.0.2.10", 4433)]

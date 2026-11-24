@@ -3431,7 +3431,6 @@ private struct SwiftSimpleUDPPeerSettings {
 // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
 private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
     private static let queueKey = DispatchSpecificKey<UInt8>()
-    private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
     private static let tunProbeIdentifier: UInt16 = UInt16.random(in: 1...UInt16.max)
     // A socket can remain readable indefinitely under sustained traffic.  The
     // packet-device API takes an owned `[Data]`, so draining until EAGAIN would
@@ -3472,6 +3471,10 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
     private var bytesToSystem = 0
     private var readBatches = 0
     private var writeBatches = 0
+
+    private var peerFallbackIdleNS: UInt64 {
+        UInt64(max(4.0, ObstacleBridgeRuntimeConfig.doubleValue(from: settings.runtimeConfig["udp_peer_idle_timeout_s"]) ?? 30.0) * 1_000_000_000)
+    }
 
     /// High-rate native transport events are opt-in. Returning `nil` means
     /// the transport owner never constructs per-frame diagnostic fields.
@@ -3691,6 +3694,7 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
                     peerHost: settings.peerHost,
                     peerPort: settings.peerPort,
                     peerResolveFamily: settings.peerResolveFamily,
+                    peerIdleTimeoutSeconds: max(4.0, ObstacleBridgeRuntimeConfig.doubleValue(from: settings.runtimeConfig["udp_peer_idle_timeout_s"]) ?? 30.0),
                     sessionMaxAppPayload: sessionMaxAppPayload,
                     maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: settings.runtimeConfig),
                     overlayLayerTransportAdapter: overlayLayerTransportAdapter,
@@ -4581,11 +4585,9 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
             return
         }
         let nowNS = monotonicNowNS()
-        guard lastInboundDatagramNS == 0 || lastInboundDatagramNS < currentPeerSelectedAtNS else {
-            return
-        }
-        guard nowNS >= currentPeerSelectedAtNS,
-              nowNS - currentPeerSelectedAtNS >= Self.peerFallbackIdleNS
+        let idleAnchorNS = max(currentPeerSelectedAtNS, lastInboundDatagramNS)
+        guard nowNS >= idleAnchorNS,
+              nowNS - idleAnchorNS >= peerFallbackIdleNS
         else {
             return
         }

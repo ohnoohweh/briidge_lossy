@@ -148,6 +148,23 @@ struct ObstacleBridgeOverlayCoordinatorTests {
         ])
     }
 
+    @Test func unreachablePreferredCandidateAdvancesToFallbackBeforeAnyRetryExhaustion() {
+        let coordinator = ObstacleBridgeOverlayCoordinator(candidateCount: 2)
+        _ = coordinator.handle(.start)
+
+        let unreachable = coordinator.handle(.transportFailed(epoch: 1, reason: "network_unreachable"))
+        #expect(unreachable.snapshot.state == .reconnecting)
+        #expect(unreachable.snapshot.candidateIndex == 1)
+        guard case .scheduleRetry(let token, _) = unreachable.effects.last else {
+            Issue.record("unreachable preferred candidate did not schedule fallback")
+            return
+        }
+
+        let fallback = coordinator.handle(.retryTimerFired(token: token))
+        #expect(fallback.snapshot.state == .connecting)
+        #expect(fallback.effects.contains(.openTransport(epoch: 2, candidateIndex: 1, attempt: 2)))
+    }
+
     @Test func sustainedTransportDelayIsCoreOwnedAndInvalidatesTheEpoch() {
         let coordinator = ObstacleBridgeOverlayCoordinator(
             candidateCount: 2,

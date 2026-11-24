@@ -42,6 +42,7 @@ ARC-CMP-001:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxEgressSequencerTests.swift::allMuxMessageTypesSharePersistentSourceTurns
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxEgressSequencerTests.swift::concurrentEnqueueAndDrainProtectsNativeSetStorage
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayCoordinatorTests.swift::defaultRetryPolicyDoesNotTerminallyExhaustAnEnabledClient
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayCoordinatorTests.swift::unreachablePreferredCandidateAdvancesToFallbackBeforeAnyRetryExhaustion
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::silentMyudpPeerKeepsLiveRuntimeConnectedWhileCoreTimersRun
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects
     - tests/unit/test_swift_memory_safety_guard.py::test_rejects_new_unbounded_persistent_data_queue
@@ -269,6 +270,8 @@ ARC-CMP-003:
   # The separate RuntimeConfig policy probe compiles its Core service and
   # ChannelMux codec dependencies for portable route and schema checks.
   unit_tests:
+    - tests/unit/test_peer_resolution.py::test_udp_peer_idle_timeout_defaults_to_30_seconds_and_accepts_override
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_udp_candidate_fallback_uses_the_shared_30_second_receive_idle_timeout
     - tests/unit/test_peer_stack_worker.py::test_peer_worker_rejects_remote_tun_before_install_or_hooks
     # Generated iOS project patching keeps embedded CPython framework plist and
     # code-sign identifiers aligned before physical-device installation.
@@ -695,7 +698,7 @@ ARC-CMP-004:
     - tests/unit/test_stream_peer_rotation.py::test_quic_reconnect_cleanup_survives_stopped_event_loop
     - ios/tests/test_m3_native_sources.py::test_proxy_server_source_exists
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference
-    - tests/unit/test_peer_resolution.py::test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error
+    - tests/unit/test_peer_resolution.py::test_udp_session_prefer_ipv6_advances_to_ipv4_on_immediate_send_error
     - tests/unit/test_peer_resolution.py::test_udp_session_rotation_rebuilds_client_socket
     - ios/tests/test_m3_native_sources.py::test_udp_overlay_peer_rotation_rebuilds_the_native_socket
     - tests/unit/test_peer_resolution.py::test_send_port_prefer_ipv6_allows_ipv4_mapped_destination_on_ipv6_socket

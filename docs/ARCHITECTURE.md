@@ -517,6 +517,22 @@ transport-owned and is reset only after a successful connected epoch. The
 Runner performs the restart; neither SecureLink nor ChannelMux directly exits
 or restarts the process.
 
+For a myUDP client, `udp_peer_idle_timeout_s` is the receive
+deadline measured from the latest UDP datagram, including IDLE and control
+traffic; it defaults to 30 seconds. Idle peers send an IDLE probe every two
+seconds, and the receive deadline is clamped to at least two probe intervals
+(four seconds) so a single delayed or lost probe cannot cause candidate
+rotation or socket recreation. On deadline expiry, a multi-candidate client
+advances to its next peer; a single-candidate client recreates its socket and
+retries that same peer.
+
+An explicit UDP route or address failure (for example, IPv6 unavailable on a
+Wi-Fi network) immediately retires only the active candidate and advances to
+the next resolved candidate. `prefer-ipv6` controls ordering, not persistence
+on a candidate the operating system has already declared unreachable. Apple
+native socket selection follows the same Core-owned candidate epoch, so its
+socket and retry selectors cannot diverge.
+
 This policy applies uniformly to `myudp`, WebSocket, QUIC, and TCP. A transport
 may recover a short-lived break internally, but it must ultimately report a
 definitive `disconnected` lifecycle event when it cannot recover, so the upper

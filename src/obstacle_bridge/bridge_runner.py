@@ -2571,6 +2571,7 @@ class Runner:
             "udp_own_port": "udp_session",
             "udp_peer": "udp_session",
             "udp_peer_port": "udp_session",
+            "udp_peer_idle_timeout_s": "udp_session",
             "tcp_bind": "tcp_session",
             "tcp_own_port": "tcp_session",
             "tcp_peer": "tcp_session",

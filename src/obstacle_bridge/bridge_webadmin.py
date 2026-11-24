@@ -31,6 +31,7 @@ class AdminWebUI:
             "udp_bind",
             "udp_own_port",
             "udp_peer_resolve_family",
+            "udp_peer_idle_timeout_s",
             "max_inflight",
         ),
         "tcp": (

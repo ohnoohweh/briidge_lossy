@@ -3403,6 +3403,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
             peerHost: peerHost,
             peerPort: peerPort,
             peerResolveFamily: peerResolveFamily,
+            peerIdleTimeoutSeconds: max(4.0, Self.doubleValue(from: runtimeConfig["udp_peer_idle_timeout_s"]) ?? 30.0),
             sessionMaxAppPayload: ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: runtimeConfig),
             maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: runtimeConfig),
             overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,

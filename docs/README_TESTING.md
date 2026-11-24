@@ -114,6 +114,7 @@ Representative anchors for those areas:
   the adapter probes then exercise only packet-device delivery, including the
   packet-flow lifecycle fence that rejects stale deferred drains.
 - current overlay failover coverage pins ordered-peer rotation, completed candidate cycles, reset-on-connected behavior, and fresh-socket rotation for Python `myudp` clients and the native Swift UDP owner through [tests/unit/test_stream_peer_rotation.py](../tests/unit/test_stream_peer_rotation.py), [tests/unit/test_peer_resolution.py](../tests/unit/test_peer_resolution.py), and [ios/tests/test_m3_native_sources.py](../ios/tests/test_m3_native_sources.py)
+- myUDP receive-idle coverage pins the configurable 30-second default, the two-probe minimum timeout clamp, and the shared Swift owner’s received-datagram deadline through [tests/unit/test_peer_resolution.py](../tests/unit/test_peer_resolution.py) and [tests/unit/test_swift_layer_readiness_parity.py](../tests/unit/test_swift_layer_readiness_parity.py)
 - WebSocket proxy coverage verifies environment and manual endpoint selection,
   `NO_PROXY` bypasses, credential-bearing proxy URIs, and nonblocking
   deadline-bounded CONNECT request/response framing after the isolated

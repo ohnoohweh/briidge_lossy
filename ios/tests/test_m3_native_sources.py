@@ -1685,16 +1685,18 @@ def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
     owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(" in owner
 
-    assert "private func rebuildSocketForPeerRotation() -> Bool" in owner
+    assert "private func rebuildSocketForPeerRotation(installReceiveSource: Bool = true) -> Bool" in owner
     assert "Darwin.close(socketFD)" in owner
     assert "installReadSource()" in owner
     assert "udp_overlay_socket_rebuilt" in owner
-    assert "guard rebuildSocketForPeerRotation() else" in owner
+    assert "guard rebuildSocketForPeerRotation(installReceiveSource: false) else" in owner
     # A peer that completed its initial handshake must still rotate after a
     # later receive outage; anchoring only at selection time permanently
     # suppresses that recovery path.
     assert "let idleAnchorNS = max(currentPeerSelectedAtNS, lastInboundDatagramNS)" in owner
-    assert "nowNS - idleAnchorNS < Self.peerFallbackIdleNS" in owner
+    assert "nowNS - idleAnchorNS < peerIdleTimeoutNS" in owner
+    assert "overlayLayerTransportAdapter.handleTransportDisconnected()" in owner
+    assert "Core owns candidate rotation for the shared Apple runtime" in owner
     assert 'snapshot["tun_mux_frame_counters"] = tunMuxFrameCounters' in owner
     assert 'snapshot["shared_tun"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? [:]' in owner
     assert 'tunMuxFrameCounters["data_delivered", default: 0] += 1' in owner

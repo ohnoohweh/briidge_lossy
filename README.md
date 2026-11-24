@@ -583,6 +583,7 @@ The tables below are generated from the current parser registrations in `bridge.
 | `--udp-own-port` | `4433` | UDP overlay own port |
 | `--udp-peer` | `None` | peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets]) |
 | `--udp-peer-port` | `443` | peer overlay port |
+| `--udp-peer-idle-timeout-s` | `30.0` | Seconds without a received UDP datagram before client socket recreation or peer-candidate advance; values below two 2-second idle-probe intervals clamp to 4 seconds. |
 | `--peer-resolve-family` | `prefer-ipv6` | Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only. |
 | `--max-inflight` | `32767` | max DATA frames allowed in flight (1..32767). Excess frames are queued. |
 
@@ -1848,7 +1849,7 @@ pass over its bounded aggregate set.
 - Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
 - Keep the throttled TCP-overlay fairness case in that flow: four synchronized 100 kB downloads sharing one 10 kB/s relay must expose any channel that monopolizes the aggregate path; the shared Python/Swift persistent per-source round robin schedules every TCP, UDP, TUN, and control mux record.
 - Keep Python TCP, QUIC, and WebSocket reconnect cleanup covered through stopped-event-loop teardown so supervisor restarts do not emit secondary coroutine-close exceptions.
-- Keep UDP multi-peer resolution coverage aligned with dual-stack behavior, including `prefer-ipv6` retention across immediate send errors and IPv4 fallback through IPv4-mapped sends when the active socket is IPv6.
+- Keep UDP multi-peer resolution coverage aligned with dual-stack behavior: `prefer-ipv6` tries IPv6 first, but an immediate route/address error advances to IPv4; IPv4-mapped sends remain supported when the active socket is IPv6.
 - Keep the Python and Swift `prefer-ipv6` peer-resolution contract pinned for native IPv4 literals: resolution should keep the IPv4 host identity intact, while IPv4-mapped notation is reserved for IPv6 socket send compatibility.
 - Keep reconnect waits aligned with expected process self-restarts, so a freshly relaunched peer gets a bounded chance to reconnect before the integration harness reports failure. Linux native foreground restart records its actor-owned restart request before signalling shutdown and consumes it once before relaunch or exit.
 - Keep secure-link multi-peer listener probes gated on authenticated peer state before expecting client-published services to accept traffic.
