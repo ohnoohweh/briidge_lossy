@@ -1296,6 +1296,8 @@ REQ-LST-001:
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_mux_pack_parity
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_buffer_connect_then_data_matches_python
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_connect_then_local_data_matches_python
+    # The EOF fixture drains all scheduled dial/receive work, including any
+    # timeout-wrapper task, before comparing the required CLOSE frame.
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_then_local_eof_matches_python
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
 

@@ -313,6 +313,8 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_ws_runtime_http_preflight_404_matches_python
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_buffer_connect_then_data_matches_python
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_connect_then_local_data_matches_python
+    # The EOF fixture is task-order independent when timeout wrappers insert
+    # work between dialing and the local receive worker.
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_then_local_eof_matches_python
     - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_tcp_backpressure_is_demand_driven_and_cancelled_on_close
     - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_tcp_inbound_channels_are_scoped_to_authenticated_peer

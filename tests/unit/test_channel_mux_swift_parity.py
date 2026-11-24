@@ -2995,7 +2995,12 @@ def _python_channelmux_tcp_client_open_then_local_eof_summary() -> dict[str, obj
             before_close = len(mux.session.sent)
             protocol.eof_received()
             protocol.connection_lost(None)
-            mux.loop.run_until_complete(tasks[1])
+            # The dial is wrapped in asyncio.wait_for when the configured
+            # connect timeout is enabled.  That wrapper may schedule an
+            # implementation task between _dial and the receive worker, so
+            # task position is not a lifecycle contract.  Drain every task
+            # created by this fixture and assert the resulting wire state.
+            mux.loop.run_until_complete(asyncio.gather(*tasks))
         return {
             "open_snapshot": open_snapshot,
             "connect_snapshot": connect_snapshot,

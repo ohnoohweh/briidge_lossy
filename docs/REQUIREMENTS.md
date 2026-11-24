@@ -486,7 +486,10 @@ Current lifecycle implementation note:
   Verification note: the shared Python/Swift Core corpus pins TCP APP
   malformed-record rejection, CKV1 control chunks, O4/O5 OPEN, and RS2/RS3
   catalog bytes, including O4/O5 and RS2/RS3 truncation and trailing-byte
-  rejection; it expands with each migrated codec.
+  rejection; it expands with each migrated codec. Its local-TCP EOF parity
+  fixture drains all scheduled dial and receive work before inspecting the
+  emitted CLOSE, so timeout-wrapper task scheduling cannot mask that teardown
+  contract.
   Linux WebSocket clients parse and advertise all shared payload modes and use
   the matching RFC 6455 text or binary opcode; Python-peer tests prove each
   text-mode negotiation and round trip.
