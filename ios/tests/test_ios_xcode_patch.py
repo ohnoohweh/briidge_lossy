@@ -340,6 +340,23 @@ def test_patch_pbxproj_text_repairs_stale_six_level_swift_source_paths() -> None
     assert 'path = "../../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift";' not in patched
 
 
+def test_patch_pbxproj_text_removes_retired_runtime_health_source() -> None:
+    stale = BASELINE_PROJECT.replace(
+        "/* End PBXBuildFile section */",
+        "\t\tDEADBEEFDEADBEEFDEADBEEF /* ObstacleBridgeRuntimeHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEADBEEFDEADBEEFDEADBEF0 /* ObstacleBridgeRuntimeHealth.swift */; };\n/* End PBXBuildFile section */",
+    ).replace(
+        "/* End PBXFileReference section */",
+        "\t\tDEADBEEFDEADBEEFDEADBEF0 /* ObstacleBridgeRuntimeHealth.swift */ = {isa = PBXFileReference; path = ../../../../../swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeHealth.swift; sourceTree = SOURCE_ROOT; };\n/* End PBXFileReference section */",
+    ).replace(
+        "\t\t\tfiles = (\n\t\t\t);\n\t\t\trunOnlyForDeploymentPostprocessing = 0;\n\t\t};\n/* End PBXSourcesBuildPhase section */",
+        "\t\t\tfiles = (\n\t\t\t\tDEADBEEFDEADBEEFDEADBEEF /* ObstacleBridgeRuntimeHealth.swift in Sources */,\n\t\t\t);\n\t\t\trunOnlyForDeploymentPostprocessing = 0;\n\t\t};\n/* End PBXSourcesBuildPhase section */",
+    )
+
+    patched = patch_pbxproj_text(stale)
+
+    assert "ObstacleBridgeRuntimeHealth.swift" not in patched
+
+
 def test_patch_pbxproj_text_gives_app_and_extension_matching_bundle_defaults() -> None:
     patched = patch_pbxproj_text(BASELINE_PROJECT)
 
