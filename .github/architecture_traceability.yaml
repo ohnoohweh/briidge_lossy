@@ -652,6 +652,7 @@ ARC-CMP-004:
     - tests/unit/test_runtime_metrics.py::test_accumulator_rejects_unbounded_category_definitions
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate
+    - tests/unit/test_runtime_metrics.py::test_runner_runtime_metrics_status_is_bounded_and_redacted
     - tests/unit/test_runtime_metrics.py::test_linux_memory_sampler_reads_current_rss_in_bytes
     - tests/unit/test_runtime_metrics.py::test_windows_memory_sampler_uses_psapi_working_set
     - tests/unit/test_runtime_metrics.py::test_darwin_memory_sampler_uses_mach_resident_size
@@ -1144,6 +1145,7 @@ ARC-CMP-005:
     - tests/unit/test_requirements_unit_gaps.py::test_auth_disabled_reports_authenticated_without_session
     - tests/unit/test_requirements_unit_gaps.py::test_auth_required_rejects_bad_login_and_accepts_challenge_proof
     - tests/unit/test_requirements_unit_gaps.py::test_admin_auth_sessions_are_cookie_scoped_per_client
+    - tests/unit/test_requirements_unit_gaps.py::test_status_snapshot_falls_back_to_cached_payload_when_runner_busy
     - tests/unit/test_requirements_unit_gaps.py::test_listener_peer_snapshot_preserves_distinct_peers_across_listener_transports
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt

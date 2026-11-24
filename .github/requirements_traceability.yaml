@@ -1792,6 +1792,8 @@ REQ-ADM-001:
   # with Python-default status/connection/peer/meta snapshots and bounded TUN on request,
   # including the bounded runtime-metrics projection in every live status
   # envelope so the shared Runtime Analysis page does not clear on Swift hosts.
+  # Python matches that current-only runtime-metrics contract and does not
+  # retain or publish per-task runner async diagnostics.
   # Linux-native myUDP moves post-authenticated receive to nonblocking socket
   # readiness plus a separately scheduled Core timer, so idle `recv` waits do
   # not remain in the runtime receive owner or its work metrics.
@@ -1841,6 +1843,7 @@ REQ-ADM-001:
     - tests/unit/test_runtime_metrics.py::test_accumulator_rejects_unbounded_category_definitions
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate
+    - tests/unit/test_requirements_unit_gaps.py::test_status_snapshot_falls_back_to_cached_payload_when_runner_busy
     - tests/unit/test_runtime_metrics.py::test_linux_memory_sampler_reads_current_rss_in_bytes
     - tests/unit/test_runtime_metrics.py::test_windows_memory_sampler_uses_psapi_working_set
     - tests/unit/test_runtime_metrics.py::test_darwin_memory_sampler_uses_mach_resident_size

@@ -26,7 +26,7 @@ SYNC_METHODS = frozenset({
     "get_config_snapshot", "get_onboarding_config_snapshot", "get_config_schema_snapshot", "replace_remote_services_catalog",
     "update_config", "request_secure_link_rekey", "request_secure_link_reload",
     "request_overlay_reconnect", "request_tun_helper_repair", "request_shutdown", "request_restart",
-    "_restart_requires_delay", "get_async_diagnostics_snapshot", "get_debug_logs",
+    "_restart_requires_delay", "get_debug_logs",
     "get_telemetry_client_snapshot", "fetch_logs",
 })
 ASYNC_METHODS = frozenset({"request_tun_enabled", "probe_tun_connectivity_verification",

@@ -1,7 +1,6 @@
 import unittest
 import asyncio
 import sys
-import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -64,10 +63,6 @@ def _runner_for_metrics_tests():
     runner._runtime_metrics_cpu_peak_overall_contributor = None
     runner._runtime_metrics_cpu_interval_by_category = {}
     runner._runtime_memory_metrics = RuntimeMemoryMetrics()
-    runner._async_diag_lock = threading.Lock()
-    runner._sync_diag = {"last_started_name": "", "last_started_kind": "", "last_started_monotonic": None,
-                        "last_finished_name": "", "last_finished_kind": "", "last_finished_monotonic": None,
-                        "last_failed_name": "", "last_failed_kind": "", "last_failed_monotonic": None, "last_failed_error": ""}
     return runner
 
 
