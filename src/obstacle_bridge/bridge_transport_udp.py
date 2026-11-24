@@ -2880,6 +2880,10 @@ class UdpSession(ISession):
             old_peer[:2],
             new_peer[:2],
         )
+        if old_peer != new_peer:
+            recorder = getattr(self.inner_session, "record_udp_peer_endpoint_change", None)
+            if callable(recorder):
+                recorder()
         self.inner_session.reset_transport_epoch()
         with contextlib.suppress(Exception):
             self._proto_state.rtt_est_ms = 0.0

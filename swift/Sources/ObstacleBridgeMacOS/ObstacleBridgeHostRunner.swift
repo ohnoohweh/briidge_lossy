@@ -2175,6 +2175,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     }
 
     private func secureLinkSnapshot(defaultState: String) -> [String: Any] {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_swift_host_runner
         let enabled = Self.boolValue(from: runtimeConfig["secure_link"]) ?? false
         let mode = Self.stringValue(from: runtimeConfig["secure_link_mode"]) ?? "off"
         guard enabled, let adapter = withServiceStateQueue({ sharedSecureLinkPskTransportAdapter }) else {
@@ -2192,6 +2193,10 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
                 "connected_since_unix_ts": NSNull(),
                 "authenticated_sessions_total": 0,
                 "rekeys_completed_total": 0,
+                "authenticated_session_total": 0,
+                "secure_link_rekey_total": 0,
+                "transport_disconnect_total": 0,
+                "udp_peer_endpoint_change_total": 0,
                 "handshake_attempts_total": 0,
                 "consecutive_failures": 0,
                 "retry_backoff_sec": 0.0,
@@ -2260,6 +2265,10 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
             "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTs ?? nowUnix),
             "authenticated_sessions_total": snapshot.authenticatedSessionsTotal,
             "rekeys_completed_total": snapshot.rekeysCompletedTotal,
+            "authenticated_session_total": snapshot.authenticatedSessionsTotal,
+            "secure_link_rekey_total": snapshot.rekeysCompletedTotal,
+            "transport_disconnect_total": 0,
+            "udp_peer_endpoint_change_total": 0,
             "handshake_attempts_total": snapshot.handshakeAttemptsTotal,
             "consecutive_failures": snapshot.consecutiveFailures,
             "retry_backoff_sec": snapshot.retryBackoffSec,

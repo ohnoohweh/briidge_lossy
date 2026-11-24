@@ -124,6 +124,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     private var lastInboundDatagramNS: UInt64 = 0
     private var lastIdleProbeNS: UInt64 = 0
     private var lastOverlayConnectedState = false
+    private var transportDisconnectTotal: UInt64 = 0
+    private var udpPeerEndpointChangeTotal: UInt64 = 0
+    private var disconnectEventSequence: UInt64 = 0
+    private var lastDisconnectReason: [String: Any] = [:]
     private var batchFlushScheduled = false
     private var secureLinkPayloadDrainScheduled = false
     private var secureLinkPayloadQueuedMax = 0
@@ -553,6 +557,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             snapshot["rtt_est_ms"] = overlayRuntime.rttEstMS
             snapshot["transmit_delay_est_ms"] = overlayRuntime.transmitDelayEstMS
             snapshot["protocol_stats"] = protocolStats
+            // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue
+            snapshot["transport_disconnect_total"] = overlayLayerTransportAdapter?.transportDisconnectCount() ?? transportDisconnectTotal
+            snapshot["udp_peer_endpoint_change_total"] = udpPeerEndpointChangeTotal
+            snapshot["myudp_disconnect_reason"] = lastDisconnectReason
             // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue
             // All payload arrays are owned by `queue`; status only samples
             // their aggregate byte counts while on that same owner.
@@ -1105,6 +1113,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     }
 
     private func resetOverlayTransportEpoch(reason: String) {
+        recordDisconnectReason(reason: reason)
         withdrawRemoteServiceCatalog()
         overlayRuntime.resetTransportEpoch()
         tunRuntime?.resetTransportEpoch()
@@ -1122,6 +1131,63 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)
         }
         eventSink?("udp_overlay_transport_epoch_reset", ["reason": reason])
+    }
+
+    /// Payload-free, monotonic disconnect evidence for field diagnosis.  The
+    /// owner uses a BSD UDP socket rather than NWConnection for the overlay,
+    /// so `nw_state` describes the owner-level readiness state explicitly.
+    private func recordDisconnectReason(reason: String) {
+        let nowNS = monotonicNowNS()
+        let stats = overlayRuntime.protocolStatsSnapshot()
+        disconnectEventSequence &+= 1
+        transportDisconnectTotal &+= 1
+        let lastRXAgeMS: Any = lastInboundDatagramNS == 0 || nowNS < lastInboundDatagramNS
+            ? NSNull()
+            : Int((nowNS - lastInboundDatagramNS) / 1_000_000)
+        lastDisconnectReason = [
+            "reason": reason,
+            "event_sequence": disconnectEventSequence,
+            "socket_state": socketFD >= 0 ? "open" : "closed",
+            "nw_state": overlayConnected ? "ready" : "waiting",
+            "candidate": [
+                "index": peerCandidateIndex,
+                "host": currentPeerAddress?.host ?? NSNull(),
+                "port": currentPeerAddress?.port ?? NSNull(),
+                "family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
+            ],
+            "local_udp_port": localUDPSocketPort() ?? NSNull(),
+            "last_rx_age_ms": lastRXAgeMS,
+            "retransmit_count": Int(stats["retransmitted_chunks"] as? Int ?? 0),
+            "inflight": Int(stats["inflight"] as? Int ?? 0),
+        ]
+    }
+
+    private func localUDPSocketPort() -> Int? {
+        guard socketFD >= 0 else { return nil }
+        var address = sockaddr_storage()
+        var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
+        let result = withUnsafeMutablePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(socketFD, $0, &length)
+            }
+        }
+        guard result == 0 else { return nil }
+        switch Int32(address.ss_family) {
+        case AF_INET:
+            return withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                    Int(UInt16(bigEndian: $0.pointee.sin_port))
+                }
+            }
+        case AF_INET6:
+            return withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
+                    Int(UInt16(bigEndian: $0.pointee.sin6_port))
+                }
+            }
+        default:
+            return nil
+        }
     }
 
     private func withdrawRemoteServiceCatalog() {
@@ -1620,6 +1686,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         }
         peerCandidateIndex = (peerCandidateIndex + 1) % peerCandidates.count
         currentPeerAddress = peerCandidates[peerCandidateIndex]
+        udpPeerEndpointChangeTotal &+= 1
         currentPeerSelectedAtNS = nowNS
         lastInboundDatagramNS = 0
         guard rebuildSocketForPeerRotation() else {

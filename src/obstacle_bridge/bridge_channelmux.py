@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 from collections import deque
 from collections.abc import Mapping
 
@@ -734,6 +735,14 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._svc_tcp_servers: dict[ChannelMux.ServiceKey, asyncio.base_events.Server] = {}
         self._svc_udp_servers: dict[ChannelMux.ServiceKey, asyncio.DatagramTransport] = {}
         self._svc_tun_devices: dict[ChannelMux.ServiceKey, ChannelMux.TunDevice] = {}
+
+        # A remote catalog belongs to one authenticated peer, but its local
+        # listener address belongs to the process.  Applying two catalogs can
+        # therefore otherwise race: both tasks pass their per-service checks,
+        # then one loses bind(2) with EADDRINUSE.  Keep catalog replacement in
+        # one critical section so an endpoint's prior owner is fully closed
+        # before a new owner can bind it.
+        self._peer_listener_catalog_lock = asyncio.Lock()
 
         # Channel id allocators
         self._chan_id_start: int = 1
@@ -3605,6 +3614,19 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 pass
 
     async def _apply_peer_installed_services(self, services: list["ChannelMux.ServiceSpec"], peer_id: Optional[int]) -> None:
+        async with self._peer_listener_catalog_lock:
+            await self._apply_peer_installed_services_serialized(services, peer_id)
+
+    @staticmethod
+    def _peer_listener_endpoint(spec: "ChannelMux.ServiceSpec") -> tuple[str, str, int]:
+        """The process-wide ownership key for a peer-installed listener."""
+        return (
+            str(spec.l_proto or "").strip().lower(),
+            str(spec.l_bind or "").strip().lower(),
+            int(spec.l_port or 0),
+        )
+
+    async def _apply_peer_installed_services_serialized(self, services: list["ChannelMux.ServiceSpec"], peer_id: Optional[int]) -> None:
         owner_peer_id = int(peer_id or 0)
         new_map: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {
             ("peer", owner_peer_id, int(s.svc_id)): s for s in services
@@ -3622,10 +3644,27 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 to_stop.add(sid)
                 to_start.add(sid)
 
+        # A new catalog may take an address previously installed by a
+        # different peer.  Serialize that handoff by the concrete bind key,
+        # not the catalog/service id, and retire the stale owner first.
+        new_endpoint_keys = {
+            self._peer_listener_endpoint(spec): svc_key
+            for svc_key, spec in new_map.items()
+            if str(spec.l_proto) in {"tcp", "udp"}
+        }
+        for svc_key, existing in list(self._peer_installed_services.items()):
+            if svc_key in old_map:
+                continue
+            endpoint = self._peer_listener_endpoint(existing)
+            replacement_key = new_endpoint_keys.get(endpoint)
+            if replacement_key is not None and replacement_key != svc_key:
+                to_stop.add(svc_key)
+
         for svc_key in sorted(to_stop):
-            old = old_map.get(svc_key)
+            old = self._peer_installed_services.get(svc_key)
             if old:
                 await self._stop_listener_for_service_id(svc_key, old.l_proto, spec=old)
+                self._peer_installed_services.pop(svc_key, None)
 
         for svc_key in set(old_map.keys()) - set(new_map.keys()):
             self._peer_installed_services.pop(svc_key, None)
@@ -3645,15 +3684,41 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 continue
             try:
                 if spec.l_proto == "tcp" and svc_key not in self._svc_tcp_servers:
-                    await self._start_tcp_server_for(spec, svc_key)
+                    await self._start_peer_listener_with_backoff(spec, svc_key, self._start_tcp_server_for)
                 elif spec.l_proto == "udp" and svc_key not in self._svc_udp_servers:
-                    await self._start_udp_server_for(spec, svc_key)
+                    await self._start_peer_listener_with_backoff(spec, svc_key, self._start_udp_server_for)
                 elif spec.l_proto == "tun" and svc_key not in self._svc_tun_devices:
                     await self._start_tun_server_for(spec, svc_key)
             except Exception as e:
                 self.log.warning("[MUX/CTRL] peer-installed service %s:%s start failed: %r", svc_key[0], spec.svc_id, e)
 
+    async def _start_peer_listener_with_backoff(self, spec: "ChannelMux.ServiceSpec", svc_key: "ChannelMux.ServiceKey", starter) -> None:
+        """Bind a handed-off TCP/UDP endpoint without an EADDRINUSE log storm."""
+        delays = (0.0, 0.05, 0.15, 0.35)
+        last_error: Optional[OSError] = None
+        for attempt, delay in enumerate(delays, start=1):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                await starter(spec, svc_key)
+                return
+            except OSError as exc:
+                if int(getattr(exc, "errno", 0) or 0) != errno.EADDRINUSE:
+                    raise
+                last_error = exc
+                if attempt < len(delays):
+                    self.log.info(
+                        "[MUX/CTRL] peer listener handoff retry endpoint=%s attempt=%s/%s",
+                        self._peer_listener_endpoint(spec), attempt, len(delays),
+                    )
+        assert last_error is not None
+        raise last_error
+
     async def _drop_peer_installed_services(self, peer_id: Optional[int]) -> None:
+        async with self._peer_listener_catalog_lock:
+            await self._drop_peer_installed_services_serialized(peer_id)
+
+    async def _drop_peer_installed_services_serialized(self, peer_id: Optional[int]) -> None:
         if peer_id is None:
             to_stop = {k: v for k, v in self._peer_installed_services.items() if k[0] == "peer"}
         else:

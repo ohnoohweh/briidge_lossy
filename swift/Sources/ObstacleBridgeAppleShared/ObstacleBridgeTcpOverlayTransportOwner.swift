@@ -398,6 +398,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
                 "rtt_est_ms": ObstacleBridgeAdminSnapshotSupport.peerMetric("rtt_est_ms", from: ["protocol_stats": protocolStats]),
                 "transmit_delay_est_ms": protocolStats["transmit_delay_est_ms"] ?? 0.0,
                 "protocol_stats": protocolStats,
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks
+                "transport_disconnect_total": overlayLayerTransportAdapter?.transportDisconnectCount() ?? 0,
+                "udp_peer_endpoint_change_total": 0,
             ]
         }
     }

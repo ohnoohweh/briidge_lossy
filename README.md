@@ -1421,7 +1421,7 @@ What to look for in WebAdmin first:
 - peer cards show connection uptime, and myudp-specific protocol statistics remain visible only when the peer is actually using the myudp transport
 - when `secure_link.mode=cert`, WebAdmin also shows peer identity and trust details such as subject id/name, roles, deployment id, serial, issuer, trust-anchor id, and trust-validation status
 - when rekeying is enabled, the peer block can briefly show `rekey_in_progress=true` while the session rotates to a fresh `secure_link.session_id`
-- on healthy authenticated runs, the peer block exposes `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, `rekeys_completed_total`, and `last_rekey_trigger`
+- on healthy authenticated runs, the peer block exposes `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_session_total`, `secure_link_rekey_total`, `transport_disconnect_total`, `udp_peer_endpoint_change_total`, and `last_rekey_trigger`; the earlier plural counter names remain compatibility aliases
 - operators can force rekey on an authenticated client-side secure-link session from the peer security block in WebAdmin
 
 API fallback for details not fully surfaced in WebAdmin yet:

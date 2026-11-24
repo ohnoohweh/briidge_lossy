@@ -298,7 +298,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         if status.rekeysCompletedTotal > previousStatus.rekeysCompletedTotal {
             emitDiagnostic(.info, "secure_link_rekey_completed", [
                 "session_id": diagnosticSessionID(status.sessionID),
-                "rekeys_completed_total": status.rekeysCompletedTotal,
+                "secure_link_rekey_total": status.rekeysCompletedTotal,
                 "trigger": status.lastRekeyTrigger,
             ])
         }

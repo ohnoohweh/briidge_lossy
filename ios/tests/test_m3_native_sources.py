@@ -261,6 +261,11 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert '"last_event_unix_ts": snapshot.lastEventUnixTs ?? NSNull()' in provider
     assert '"authenticated_sessions_total": snapshot.authenticatedSessionsTotal' in provider
     assert '"rekeys_completed_total": snapshot.rekeysCompletedTotal' in provider
+    assert '"authenticated_session_total": snapshot.authenticatedSessionsTotal' in provider
+    assert '"secure_link_rekey_total": snapshot.rekeysCompletedTotal' in provider
+    assert '"transport_disconnect_total": transportRuntime["transport_disconnect_total"] ?? 0' in provider
+    assert '"udp_peer_endpoint_change_total": transportRuntime["udp_peer_endpoint_change_total"] ?? 0' in provider
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue" in udp_owner
     assert '"last_rekey_trigger": snapshot.lastRekeyTrigger' in provider
     assert '"trust_validation_state": snapshot.trustValidationState' in provider
     assert '"disconnect_reason": snapshot.disconnectReason' in provider
@@ -904,6 +909,8 @@ def test_proxy_server_source_exists() -> None:
     assert '"last_event_unix_ts": snapshot.lastEventUnixTs ?? NSNull()' in host_runner
     assert '"authenticated_sessions_total": snapshot.authenticatedSessionsTotal' in host_runner
     assert '"rekeys_completed_total": snapshot.rekeysCompletedTotal' in host_runner
+    assert '"authenticated_session_total": snapshot.authenticatedSessionsTotal' in host_runner
+    assert '"secure_link_rekey_total": snapshot.rekeysCompletedTotal' in host_runner
     assert '"last_rekey_trigger": snapshot.lastRekeyTrigger' in host_runner
     assert '"trust_validation_state": snapshot.trustValidationState' in host_runner
     assert '"disconnect_reason": snapshot.disconnectReason' in host_runner

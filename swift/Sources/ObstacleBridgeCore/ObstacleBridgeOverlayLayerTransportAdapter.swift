@@ -51,6 +51,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     private var outerLifecycle: ObstacleBridgeConnectionLifecycleEvent
     private var compressionFailureEpoch: UInt64?
     private var disconnectedSince: TimeInterval?
+    private var transportDisconnectTotal: UInt64 = 0
 
     init(
         compressRuntime: ObstacleBridgeCompressLayerRuntime? = nil,
@@ -338,6 +339,9 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     }
 
     public func handleTransportDisconnected() {
+        if transportLifecycle.state == .connected {
+            transportDisconnectTotal &+= 1
+        }
         let epoch = coreCoordinator.snapshot.epoch
         diagnosticSink?(.warning, "overlay_epoch_failure_detected", [
             "epoch": epoch.map(String.init) ?? "none", "reason": "transport_disconnected",
@@ -350,6 +354,10 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         }
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter?.statusSnapshot())
     }
+
+    /// Native owners publish this beside their transport snapshot.  It counts
+    /// lower-layer state loss only; SecureLink rekeys never call it.
+    func transportDisconnectCount() -> UInt64 { transportDisconnectTotal }
 
     // Owners publish lower transport state independently of SecureLink. If a
     // queued disconnect callback was missed, the next observed lower-state

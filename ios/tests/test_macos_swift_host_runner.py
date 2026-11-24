@@ -390,6 +390,15 @@ def test_macos_swift_host_runner_uses_shared_pending_rekey_timeout_guard() -> No
     assert "pendingRekeyStartedAt" not in source
 
 
+def test_macos_swift_host_runner_exposes_distinct_transport_and_rekey_counters() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert '"authenticated_session_total": snapshot.authenticatedSessionsTotal' in source
+    assert '"secure_link_rekey_total": snapshot.rekeysCompletedTotal' in source
+    assert '"transport_disconnect_total": 0' in source
+    assert '"udp_peer_endpoint_change_total": 0' in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_swift_host_runner" in source
+
+
 def test_macos_swift_host_runner_keeps_shared_tun_hooks_bound_to_adapter_lifecycle() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert "private func teardownSharedMacOSTunAdapter(runLifecycleHook: Bool)" in source

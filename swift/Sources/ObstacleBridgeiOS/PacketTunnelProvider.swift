@@ -2099,7 +2099,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "traffic": traffic,
             "open_connections": openConnections,
             "connection_layers": connectionLayers,
-            "secure_link": adminSecureLinkSnapshot(state: state),
+            "secure_link": adminSecureLinkSnapshot(state: state, transportRuntime: transportRuntime),
             "compress_layer": adminCompressLayerSnapshot() ?? NSNull(),
             "throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections),
             "runtime": transportRuntime,
@@ -3032,7 +3032,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         ]
     }
 
-    private func adminSecureLinkSnapshot(state: String) -> [String: Any] {
+    private func adminSecureLinkSnapshot(state: String, transportRuntime: [String: Any] = [:]) -> [String: Any] {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_runtime_status_projects_shared_runtime_metrics
         let enabled = ObstacleBridgeRuntimeConfig.boolValue(from: adminRuntimeConfigPayload()?["secure_link"]) ?? false
         let mode = ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["secure_link_mode"]) ?? "off"
         guard enabled, let adapter = sharedSecureLinkPskTransportAdapter else {
@@ -3053,6 +3054,10 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "connected_since_unix_ts": NSNull(),
                 "authenticated_sessions_total": 0,
                 "rekeys_completed_total": 0,
+                "authenticated_session_total": 0,
+                "secure_link_rekey_total": 0,
+                "transport_disconnect_total": transportRuntime["transport_disconnect_total"] ?? 0,
+                "udp_peer_endpoint_change_total": transportRuntime["udp_peer_endpoint_change_total"] ?? 0,
                 "handshake_attempts_total": 0,
                 "consecutive_failures": 0,
                 "retry_backoff_sec": 0.0,
@@ -3127,6 +3132,10 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS),
             "authenticated_sessions_total": snapshot.authenticatedSessionsTotal,
             "rekeys_completed_total": snapshot.rekeysCompletedTotal,
+            "authenticated_session_total": snapshot.authenticatedSessionsTotal,
+            "secure_link_rekey_total": snapshot.rekeysCompletedTotal,
+            "transport_disconnect_total": transportRuntime["transport_disconnect_total"] ?? 0,
+            "udp_peer_endpoint_change_total": transportRuntime["udp_peer_endpoint_change_total"] ?? 0,
             "handshake_attempts_total": snapshot.handshakeAttemptsTotal,
             "consecutive_failures": snapshot.consecutiveFailures,
             "retry_backoff_sec": snapshot.retryBackoffSec,

@@ -236,6 +236,10 @@ class _SecureLinkPeerState:
     last_failure_session_id: Optional[int] = None
     authenticated_sessions_total: int = 0
     rekeys_completed_total: int = 0
+    # Singular API names intentionally describe distinct events.  Keep the
+    # older plural spellings in snapshots as compatibility aliases.
+    authenticated_session_total: int = 0
+    secure_link_rekey_total: int = 0
     frames_from_client_passed_total: int = 0
     frames_from_client_dropped_total: int = 0
     frames_to_client_passed_total: int = 0
@@ -468,6 +472,9 @@ class SecureLinkPskSession(ISession):
         self._handshake_attempts_total: int = 0
         self._authenticated_sessions_total: int = 0
         self._rekeys_completed_total: int = 0
+        self._transport_disconnect_total: int = 0
+        self._udp_peer_endpoint_change_total: int = 0
+        self._last_transport_disconnect_epoch: Optional[int] = None
         self._preserve_connected_during_epoch_restart = False
         self._client_retry_task: Optional[asyncio.Task] = None
         self._client_rekey_task: Optional[asyncio.Task] = None
@@ -1200,8 +1207,10 @@ class SecureLinkPskSession(ISession):
                 state.last_material_reload_result = str(self._last_material_reload_result or "")
                 state.last_material_reload_detail = str(self._last_material_reload_detail or "")
         state.authenticated_sessions_total = int(state.authenticated_sessions_total or 0) + 1
+        state.authenticated_session_total = int(state.authenticated_session_total or 0) + 1
         if rekey_completed:
             state.rekeys_completed_total = int(state.rekeys_completed_total or 0) + 1
+            state.secure_link_rekey_total = int(state.secure_link_rekey_total or 0) + 1
             self._rekeys_completed_total += 1
             self._last_rekey_trigger = str(state.last_rekey_trigger or "")
         self._authenticated_sessions_total += 1
@@ -2290,6 +2299,10 @@ class SecureLinkPskSession(ISession):
                 "connected_since_unix_ts": state.connected_since_unix_ts if state is not None else None,
                 "authenticated_sessions_total": int(state.authenticated_sessions_total or 0) if state is not None else 0,
                 "rekeys_completed_total": int(state.rekeys_completed_total or 0) if state is not None else 0,
+                "authenticated_session_total": int(state.authenticated_session_total or 0) if state is not None else 0,
+                "secure_link_rekey_total": int(state.secure_link_rekey_total or 0) if state is not None else 0,
+                "transport_disconnect_total": int(self._transport_disconnect_total or 0),
+                "udp_peer_endpoint_change_total": int(self._udp_peer_endpoint_change_total or 0),
                 "frames_from_client_passed_total": int(state.frames_from_client_passed_total or 0) if state is not None else 0,
                 "frames_from_client_dropped_total": int(state.frames_from_client_dropped_total or 0) if state is not None else 0,
                 "frames_to_client_passed_total": int(state.frames_to_client_passed_total or 0) if state is not None else 0,
@@ -2407,6 +2420,10 @@ class SecureLinkPskSession(ISession):
                         "connected_since_unix_ts": None,
                         "authenticated_sessions_total": int(self._authenticated_sessions_total or 0),
                         "rekeys_completed_total": int(self._rekeys_completed_total or 0),
+                        "authenticated_session_total": int(self._authenticated_sessions_total or 0),
+                        "secure_link_rekey_total": int(self._rekeys_completed_total or 0),
+                        "transport_disconnect_total": int(self._transport_disconnect_total or 0),
+                        "udp_peer_endpoint_change_total": int(self._udp_peer_endpoint_change_total or 0),
                         "frames_from_client_passed_total": 0,
                         "frames_from_client_dropped_total": 0,
                         "frames_to_client_passed_total": 0,
@@ -2546,6 +2563,10 @@ class SecureLinkPskSession(ISession):
             "last_authenticated_session_id": self._last_authenticated_session_id,
             "authenticated_sessions_total": int(self._authenticated_sessions_total or 0),
             "rekeys_completed_total": int(self._rekeys_completed_total or 0),
+            "authenticated_session_total": int(self._authenticated_sessions_total or 0),
+            "secure_link_rekey_total": int(self._rekeys_completed_total or 0),
+            "transport_disconnect_total": int(self._transport_disconnect_total or 0),
+            "udp_peer_endpoint_change_total": int(self._udp_peer_endpoint_change_total or 0),
             "frames_from_client_passed_total": int(primary_state.frames_from_client_passed_total or 0) if primary_state is not None else 0,
             "frames_from_client_dropped_total": int(primary_state.frames_from_client_dropped_total or 0) if primary_state is not None else 0,
             "frames_to_client_passed_total": int(primary_state.frames_to_client_passed_total or 0) if primary_state is not None else 0,
@@ -2705,10 +2726,20 @@ class SecureLinkPskSession(ISession):
             # a stale raw socket/protocol object while its RTT lifecycle has
             # already transitioned to disconnected. Keeping authenticated
             # SecureLink state in that window made the outer layers lie.
+            # This is a lower-transport lifecycle edge, not a SecureLink
+            # rekey.  Count each transport epoch once even when multiple
+            # wrappers observe the same disconnect notification.
+            if self._last_transport_disconnect_epoch != int(event.epoch):
+                self._transport_disconnect_total += 1
+                self._last_transport_disconnect_epoch = int(event.epoch)
             self._preserve_connected_during_epoch_restart = False
             self._clear_all_states()
             return
         self._connection_lifecycle.transition(ConnectionState.DISCONNECTED, event.epoch, "security_handshaking")
+
+    def record_udp_peer_endpoint_change(self) -> None:
+        """Record a myUDP candidate/peer endpoint handoff without a reconnect alias."""
+        self._udp_peer_endpoint_change_total += 1
 
     def _on_inner_transport_epoch_change(self, epoch: int) -> None:
         self._cancel_client_retry_task(clear_schedule=False)
