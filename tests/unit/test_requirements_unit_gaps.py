@@ -91,34 +91,6 @@ class _RunnerStub:
     def __init__(self, args):
         self.args = args
 
-    def get_async_diagnostics_snapshot(self):
-        return {
-            "async": {
-                "last_started_name": "myudp.mux.start",
-                "last_started_kind": "await",
-                "last_started_age_sec": 12.5,
-                "last_finished_name": "myudp.session.start",
-                "last_finished_kind": "await",
-                "last_finished_age_sec": 13.0,
-                "last_failed_name": "",
-                "last_failed_kind": "",
-                "last_failed_age_sec": None,
-                "last_failed_error": "",
-            },
-            "sync": {
-                "last_started_name": "ChannelMux._on_local_tun_packet",
-                "last_started_kind": "callback",
-                "last_started_age_sec": 0.25,
-                "last_finished_name": "ChannelMux._send_mux",
-                "last_finished_kind": "callback",
-                "last_finished_age_sec": 0.1,
-                "last_failed_name": "",
-                "last_failed_kind": "",
-                "last_failed_age_sec": None,
-                "last_failed_error": "",
-            },
-        }
-
 
 class _ConnectedSessionStub:
     def is_connected(self):
@@ -203,8 +175,7 @@ class AdminWebResilienceUnitTests(unittest.TestCase):
         self.assertEqual(payload["state"], "connected")
         self.assertTrue(payload["admin_web_snapshot"]["stale"])
         self.assertEqual(payload["admin_web_snapshot"]["error"], "runner_loop_timeout")
-        self.assertEqual(payload["runner_async_diagnostics"]["async"]["last_started_name"], "myudp.mux.start")
-        self.assertEqual(payload["runner_async_diagnostics"]["sync"]["last_started_name"], "ChannelMux._on_local_tun_packet")
+        self.assertNotIn("runner_async_diagnostics", payload)
 
     def test_status_snapshot_uses_live_session_state_when_uncached_runner_snapshot_fails(self):
         args = _admin_args()
@@ -232,8 +203,7 @@ class AdminWebResilienceUnitTests(unittest.TestCase):
 
         self.assertFalse(payload["admin_web_snapshot"]["stale"])
         self.assertEqual(payload["app"], "udp-bidirectional-mux")
-        self.assertEqual(payload["runner_async_diagnostics"]["async"]["last_started_kind"], "await")
-        self.assertEqual(payload["runner_async_diagnostics"]["sync"]["last_started_kind"], "callback")
+        self.assertNotIn("runner_async_diagnostics", payload)
 
 
 class _FakeSession:

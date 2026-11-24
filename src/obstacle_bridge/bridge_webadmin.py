@@ -466,10 +466,6 @@ class AdminWebUI:
                             "ok": True,
                             "peer_state": "CONNECTED" if bool(sess.is_connected()) else "DISCONNECTED",
                         }
-        async_diag_fn = getattr(self.runner, "get_async_diagnostics_snapshot", None)
-        if callable(async_diag_fn):
-            with contextlib.suppress(Exception):
-                payload["runner_async_diagnostics"] = async_diag_fn()
         payload["admin_web_snapshot"] = {
             "stale": True,
             "error": str(error or "runner unavailable"),
@@ -479,10 +475,6 @@ class AdminWebUI:
 
     def _fresh_snapshot_payload(self, topic: str, payload: dict) -> dict:
         out = copy.deepcopy(payload)
-        async_diag_fn = getattr(self.runner, "get_async_diagnostics_snapshot", None)
-        if callable(async_diag_fn):
-            with contextlib.suppress(Exception):
-                out["runner_async_diagnostics"] = async_diag_fn()
         out["admin_web_snapshot"] = {
             "stale": False,
             "error": "",

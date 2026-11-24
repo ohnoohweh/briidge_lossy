@@ -301,31 +301,6 @@ class Runner:
         )
         self._peer_traffic_rate_state: Dict[str, Tuple[float, int, int]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._async_diag_lock = threading.Lock()
-        self._async_diag: Dict[str, Any] = {
-            "last_started_name": "",
-            "last_started_kind": "",
-            "last_started_monotonic": None,
-            "last_finished_name": "",
-            "last_finished_kind": "",
-            "last_finished_monotonic": None,
-            "last_failed_name": "",
-            "last_failed_kind": "",
-            "last_failed_monotonic": None,
-            "last_failed_error": "",
-        }
-        self._sync_diag: Dict[str, Any] = {
-            "last_started_name": "",
-            "last_started_kind": "",
-            "last_started_monotonic": None,
-            "last_finished_name": "",
-            "last_finished_kind": "",
-            "last_finished_monotonic": None,
-            "last_failed_name": "",
-            "last_failed_kind": "",
-            "last_failed_monotonic": None,
-            "last_failed_error": "",
-        }
 
     def _peer_stack_config(self) -> dict:
         """Project only peer-owned settings into the private bootstrap."""
@@ -815,23 +790,6 @@ class Runner:
                 "longest_uninterrupted_category": slice_leader["category"] if slice_leader and slice_leader["count"] else None,
                 "longest_uninterrupted_last_2_seconds_category": recent_slice_leader["category"] if recent_slice_leader and recent_slice_leader["last_2_seconds_max_ms"] is not None else None}
 
-    def _record_async_activity(self, name: str, *, kind: str, phase: str, error: str = "") -> None:
-        now_mono = time.monotonic()
-        with self._async_diag_lock:
-            if phase == "started":
-                self._async_diag["last_started_name"] = str(name or "")
-                self._async_diag["last_started_kind"] = str(kind or "")
-                self._async_diag["last_started_monotonic"] = now_mono
-            elif phase == "finished":
-                self._async_diag["last_finished_name"] = str(name or "")
-                self._async_diag["last_finished_kind"] = str(kind or "")
-                self._async_diag["last_finished_monotonic"] = now_mono
-            elif phase == "failed":
-                self._async_diag["last_failed_name"] = str(name or "")
-                self._async_diag["last_failed_kind"] = str(kind or "")
-                self._async_diag["last_failed_monotonic"] = now_mono
-                self._async_diag["last_failed_error"] = str(error or "")
-
     def record_sync_activity(self, name: str, *, kind: str = "callback", phase: str, error: str = "") -> None:
         category = "tun_callback" if str(name).startswith("tun") else "channelmux_callback"
         now_ns = time.monotonic_ns()
@@ -843,21 +801,6 @@ class Runner:
                 duration_ns = max(0, now_ns - started)
                 self._runtime_metrics.record(category, duration_ns, completed_at_ns=now_ns)
                 self._runtime_metrics_cpu_interval_by_category[category] = self._runtime_metrics_cpu_interval_by_category.get(category, 0) + duration_ns
-        now_mono = time.monotonic()
-        with self._async_diag_lock:
-            if phase == "started":
-                self._sync_diag["last_started_name"] = str(name or "")
-                self._sync_diag["last_started_kind"] = str(kind or "")
-                self._sync_diag["last_started_monotonic"] = now_mono
-            elif phase == "finished":
-                self._sync_diag["last_finished_name"] = str(name or "")
-                self._sync_diag["last_finished_kind"] = str(kind or "")
-                self._sync_diag["last_finished_monotonic"] = now_mono
-            elif phase == "failed":
-                self._sync_diag["last_failed_name"] = str(name or "")
-                self._sync_diag["last_failed_kind"] = str(kind or "")
-                self._sync_diag["last_failed_monotonic"] = now_mono
-                self._sync_diag["last_failed_error"] = str(error or "")
 
     def record_runtime_duration(self, category: str, duration_ns: int) -> None:
         """Record a completed bounded synchronous scope without retaining it."""
@@ -885,94 +828,6 @@ class Runner:
                 child = getattr(current, attribute, None)
                 if child is not None:
                     pending.append(child)
-
-    async def _await_with_async_diag(self, name: str, awaitable, *, kind: str = "await") -> Any:
-        self._record_async_activity(name, kind=kind, phase="started")
-        try:
-            result = await awaitable
-        except Exception as exc:
-            self._record_async_activity(name, kind=kind, phase="failed", error=type(exc).__name__)
-            raise
-        self._record_async_activity(name, kind=kind, phase="finished")
-        return result
-
-    def _task_diag_name(self, coro: Any) -> str:
-        code = getattr(coro, "cr_code", None)
-        if code is not None:
-            qualname = getattr(code, "co_qualname", "") or getattr(code, "co_name", "")
-            if qualname:
-                return str(qualname)
-        qualname = getattr(type(coro), "__qualname__", "") or getattr(type(coro), "__name__", "")
-        return str(qualname or repr(coro))
-
-    def _install_async_task_factory(self, loop: asyncio.AbstractEventLoop) -> None:
-        previous_factory = loop.get_task_factory()
-        runner = self
-
-        def _factory(loop_obj, coro, **kwargs):
-            task = previous_factory(loop_obj, coro, **kwargs) if previous_factory is not None else asyncio.tasks.Task(coro, loop=loop_obj, **kwargs)
-            name = runner._task_diag_name(coro)
-            runner._record_async_activity(name, kind="task", phase="started")
-
-            def _done(done_task):
-                try:
-                    exc = done_task.exception()
-                except asyncio.CancelledError:
-                    runner._record_async_activity(name, kind="task", phase="finished")
-                    return
-                except Exception as err:
-                    runner._record_async_activity(name, kind="task", phase="failed", error=type(err).__name__)
-                    return
-                if exc is None:
-                    runner._record_async_activity(name, kind="task", phase="finished")
-                else:
-                    runner._record_async_activity(name, kind="task", phase="failed", error=type(exc).__name__)
-
-            with contextlib.suppress(Exception):
-                task.add_done_callback(_done)
-            return task
-
-        loop.set_task_factory(_factory)
-
-    def get_async_diagnostics_snapshot(self) -> dict:
-        with self._async_diag_lock:
-            snapshot = dict(self._async_diag)
-            sync_snapshot = dict(self._sync_diag)
-        now_mono = time.monotonic()
-
-        def _age(value: Any) -> Optional[float]:
-            if value is None:
-                return None
-            with contextlib.suppress(Exception):
-                return max(0.0, now_mono - float(value))
-            return None
-
-        return {
-            "async": {
-                "last_started_name": str(snapshot.get("last_started_name") or ""),
-                "last_started_kind": str(snapshot.get("last_started_kind") or ""),
-                "last_started_age_sec": _age(snapshot.get("last_started_monotonic")),
-                "last_finished_name": str(snapshot.get("last_finished_name") or ""),
-                "last_finished_kind": str(snapshot.get("last_finished_kind") or ""),
-                "last_finished_age_sec": _age(snapshot.get("last_finished_monotonic")),
-                "last_failed_name": str(snapshot.get("last_failed_name") or ""),
-                "last_failed_kind": str(snapshot.get("last_failed_kind") or ""),
-                "last_failed_age_sec": _age(snapshot.get("last_failed_monotonic")),
-                "last_failed_error": str(snapshot.get("last_failed_error") or ""),
-            },
-            "sync": {
-                "last_started_name": str(sync_snapshot.get("last_started_name") or ""),
-                "last_started_kind": str(sync_snapshot.get("last_started_kind") or ""),
-                "last_started_age_sec": _age(sync_snapshot.get("last_started_monotonic")),
-                "last_finished_name": str(sync_snapshot.get("last_finished_name") or ""),
-                "last_finished_kind": str(sync_snapshot.get("last_finished_kind") or ""),
-                "last_finished_age_sec": _age(sync_snapshot.get("last_finished_monotonic")),
-                "last_failed_name": str(sync_snapshot.get("last_failed_name") or ""),
-                "last_failed_kind": str(sync_snapshot.get("last_failed_kind") or ""),
-                "last_failed_age_sec": _age(sync_snapshot.get("last_failed_monotonic")),
-                "last_failed_error": str(sync_snapshot.get("last_failed_error") or ""),
-            },
-        }
 
     def _ensure_runtime_events(self) -> None:
         if self._stop is None:
@@ -1059,7 +914,7 @@ class Runner:
                 raise
             worker = ProxyWorker(worker_mode, getattr(self.args, "proxy_provider_worker_native_executable", None), supervised=True)
             try:
-                await self._await_with_async_diag("proxy_provider.worker.start", worker.start(cfg))
+                await worker.start(cfg)
             except Exception as exc:
                 self._proxy_provider_last_error = getattr(exc, "code", "startup_failed")
                 raise
@@ -1086,7 +941,7 @@ class Runner:
                 )
             )
             try:
-                await self._await_with_async_diag(f"proxy_provider.{name}.start", server.start())
+                await server.start()
             except Exception as exc:
                 self._proxy_provider_last_error = f"{name}:{type(exc).__name__}:{exc}"
                 log.exception("[PROXY] failed to start %s listener bind=%s port=%s", name, cfg["bind"], port)
@@ -1099,10 +954,10 @@ class Runner:
         log = logging.getLogger("proxy_provider")
         if self._proxy_provider_worker is not None:
             worker, self._proxy_provider_worker = self._proxy_provider_worker, None
-            await self._await_with_async_diag("proxy_provider.worker.stop", worker.stop())
+            await worker.stop()
         for name, server in list(self._proxy_provider_servers.items()):
             try:
-                await self._await_with_async_diag(f"proxy_provider.{name}.stop", server.stop())
+                await server.stop()
             except Exception:
                 log.exception("[PROXY] failed to stop %s listener", name)
             finally:
@@ -1171,16 +1026,10 @@ class Runner:
                 self._tun_helper_lifecycle_phase = "attaching_prestarted"
             else:
                 self._tun_helper_lifecycle_phase = "launching_process"
-                self._tun_helper_process = await self._await_with_async_diag(
-                    "tun_helper.process.start",
-                    self._launch_tun_helper_process(),
-                )
+                self._tun_helper_process = await self._launch_tun_helper_process()
             self._tun_helper_lifecycle_phase = "waiting_for_socket"
-            await self._await_with_async_diag(
-                "tun_helper.process.ready",
-                self._wait_for_tun_helper_socket_ready(
-                    timeout_s=self._tun_helper_socket_ready_timeout_s(),
-                ),
+            await self._wait_for_tun_helper_socket_ready(
+                timeout_s=self._tun_helper_socket_ready_timeout_s(),
             )
             self._tun_helper_client = TunHelperClient(
                 socket_path=self._tun_helper_socket_path,
@@ -1189,10 +1038,7 @@ class Runner:
                 logger=logging.getLogger("tun_helper_client"),
             )
             self._tun_helper_lifecycle_phase = "connecting_client"
-            await self._await_with_async_diag(
-                "tun_helper.client.connect",
-                self._tun_helper_client.connect(),
-            )
+            await self._tun_helper_client.connect()
             setattr(self.args, "_tun_helper_settings", settings)
             setattr(self.args, "_tun_helper_client", self._tun_helper_client)
             self._tun_helper_last_error = ""
@@ -1320,16 +1166,10 @@ class Runner:
                 delattr(self.args, attr)
         if self._tun_helper_client is not None:
             with contextlib.suppress(Exception):
-                await self._await_with_async_diag(
-                    "tun_helper.client.close",
-                    self._tun_helper_client.close(),
-                )
+                await self._tun_helper_client.close()
             self._tun_helper_client = None
         with contextlib.suppress(Exception):
-            await self._await_with_async_diag(
-                "tun_helper.process.stop",
-                self._stop_tun_helper_process(),
-            )
+            await self._stop_tun_helper_process()
         self._tun_helper_process = None
         self._tun_helper_backend = None
         self._tun_helper_prestarted = False
@@ -1711,7 +1551,6 @@ class Runner:
             raise ValueError("peer workers require desktop macOS or Linux")
         peer_config = self._peer_stack_config() if peer_mode in {"python", "native"} else None
         self._loop = asyncio.get_running_loop()
-        self._install_async_task_factory(self._loop)
         self.log.debug("[SERVER] Runner start on session id=%x", id(self))
         self.log.info(
             "[SERVER] ObstacleBridge build=%r crypto_extract=%r",
@@ -1747,7 +1586,7 @@ class Runner:
                 self.admin_web = AdminWebUI(self.args, self)
             else:
                 raise ValueError("unsupported Admin worker implementation")
-            await self._await_with_async_diag("AdminWebUI.start", self.admin_web.start())
+            await self.admin_web.start()
 
         if peer_config is not None:
             from .bridge_peer_worker import PeerStackWorker
@@ -1799,8 +1638,8 @@ class Runner:
                     lambda event, transport_name=transport_name, session=session, mux=mux:
                     self._on_connection_lifecycle(transport_name, session, mux, event)
                 )
-            await self._await_with_async_diag(f"{transport_name}.session.start", session.start())
-            await self._await_with_async_diag(f"{transport_name}.mux.start", mux.start())
+            await session.start()
+            await mux.start()
 
         self._session_obj = self._sessions[0] if self._sessions else None
         self._last_connected_monotonic = time.monotonic() if self._session_obj and self._session_obj.is_connected() else None
