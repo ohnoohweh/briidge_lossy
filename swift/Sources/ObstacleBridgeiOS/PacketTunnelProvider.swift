@@ -124,6 +124,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     /// traffic rates, so serialize access to the rate-history state.
     private let peerTrafficRateLock = NSLock()
     private var peerTrafficRateState: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)?
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ipserver_packet_tunnel_provider_source_exists
     // Peer connection uptime belongs to the lower transport, not a
     // SecureLink generation. Rekeying intentionally changes the latter.
     private var transportConnectedSinceUnixTS: Int?
@@ -3043,6 +3044,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         transportRuntime: [String: Any] = [:],
         transportConnected: Bool? = nil
     ) -> [String: Any] {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ipserver_packet_tunnel_provider_source_exists
         // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_runtime_status_projects_shared_runtime_metrics
         let enabled = ObstacleBridgeRuntimeConfig.boolValue(from: adminRuntimeConfigPayload()?["secure_link"]) ?? false
         let mode = ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["secure_link_mode"]) ?? "off"

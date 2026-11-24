@@ -1946,6 +1946,7 @@ def test_macos_swift_host_runner_keeps_secure_link_connection_time_stable() -> N
 
     assert "private var secureLinkSnapshotSessionID: UInt64 = 0" in source
     assert "private var transportConnectedSinceUnixTs: Int?" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_swift_host_runner_keeps_secure_link_connection_time_stable" in source
     assert "private var secureLinkLastAuthenticatedUnixTs: Int?" in source
     assert "secureLinkSnapshotSessionID != snapshot.sessionID" in source
     assert "transportConnected: protocolConnected" in source

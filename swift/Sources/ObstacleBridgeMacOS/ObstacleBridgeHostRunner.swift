@@ -319,6 +319,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
     private var peerTrafficRateState: [String: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)] = [:]
     private var overlayDisconnectedAt: TimeInterval?
     private var secureLinkSnapshotSessionID: UInt64 = 0
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_swift_host_runner_keeps_secure_link_connection_time_stable
     // Peer connection uptime is a lower-transport lifetime. A SecureLink
     // rekey starts a new cryptographic generation, not a new connection.
     private var transportConnectedSinceUnixTs: Int?
@@ -2183,6 +2184,7 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
         defaultState: String,
         transportConnected: Bool? = nil
     ) -> [String: Any] {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_swift_host_runner_keeps_secure_link_connection_time_stable
         // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_swift_host_runner
         let enabled = Self.boolValue(from: runtimeConfig["secure_link"]) ?? false
         let mode = Self.stringValue(from: runtimeConfig["secure_link_mode"]) ?? "off"

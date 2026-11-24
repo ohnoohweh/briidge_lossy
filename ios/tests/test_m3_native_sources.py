@@ -253,6 +253,7 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "private var peerTrafficRateState:" in provider
     assert "peerTrafficRateLock.lock()" in provider
     assert "private var transportConnectedSinceUnixTS:" in provider
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ipserver_packet_tunnel_provider_source_exists" in provider
     assert '"rx_bytes_per_sec": rxRate' in provider
     assert "transportConnected: protocolConnected" in provider
     assert "if let transportConnected" in provider
