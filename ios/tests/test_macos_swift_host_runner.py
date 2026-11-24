@@ -1945,11 +1945,12 @@ def test_macos_swift_host_runner_keeps_secure_link_connection_time_stable() -> N
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
 
     assert "private var secureLinkSnapshotSessionID: UInt64 = 0" in source
-    assert "private var secureLinkConnectedSinceUnixTs: Int?" in source
+    assert "private var transportConnectedSinceUnixTs: Int?" in source
     assert "private var secureLinkLastAuthenticatedUnixTs: Int?" in source
     assert "secureLinkSnapshotSessionID != snapshot.sessionID" in source
-    assert "secureLinkConnectedSinceUnixTs = nowUnix" in source
-    assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTs ?? nowUnix)' in source
+    assert "transportConnected: protocolConnected" in source
+    assert "if let transportConnected" in source
+    assert '"connected_since_unix_ts": transportConnectedSinceUnixTs ?? NSNull()' in source
 
 
 def test_swift_peer_resolution_maps_ipv4_fallback_on_ipv6_socket_like_python() -> None:

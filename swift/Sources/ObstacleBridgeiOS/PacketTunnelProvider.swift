@@ -124,7 +124,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     /// traffic rates, so serialize access to the rate-history state.
     private let peerTrafficRateLock = NSLock()
     private var peerTrafficRateState: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)?
-    private var secureLinkConnectedSinceUnixTS: Int?
+    // Peer connection uptime belongs to the lower transport, not a
+    // SecureLink generation. Rekeying intentionally changes the latter.
+    private var transportConnectedSinceUnixTS: Int?
     private var secureLinkLastAuthenticatedUnixTS: Int?
     private var secureLinkLastSessionID: UInt64 = 0
     private let adminSnapshotRefreshQueue = DispatchQueue(label: "PacketTunnelProvider.AdminSnapshotRefresh", qos: .utility)
@@ -2099,7 +2101,11 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "traffic": traffic,
             "open_connections": openConnections,
             "connection_layers": connectionLayers,
-            "secure_link": adminSecureLinkSnapshot(state: state, transportRuntime: transportRuntime),
+            "secure_link": adminSecureLinkSnapshot(
+                state: state,
+                transportRuntime: transportRuntime,
+                transportConnected: protocolConnected
+            ),
             "compress_layer": adminCompressLayerSnapshot() ?? NSNull(),
             "throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections),
             "runtime": transportRuntime,
@@ -3032,12 +3038,16 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         ]
     }
 
-    private func adminSecureLinkSnapshot(state: String, transportRuntime: [String: Any] = [:]) -> [String: Any] {
+    private func adminSecureLinkSnapshot(
+        state: String,
+        transportRuntime: [String: Any] = [:],
+        transportConnected: Bool? = nil
+    ) -> [String: Any] {
         // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_runtime_status_projects_shared_runtime_metrics
         let enabled = ObstacleBridgeRuntimeConfig.boolValue(from: adminRuntimeConfigPayload()?["secure_link"]) ?? false
         let mode = ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["secure_link_mode"]) ?? "off"
         guard enabled, let adapter = sharedSecureLinkPskTransportAdapter else {
-            secureLinkConnectedSinceUnixTS = nil
+            transportConnectedSinceUnixTS = nil
             secureLinkLastAuthenticatedUnixTS = nil
             secureLinkLastSessionID = 0
             return [
@@ -3089,12 +3099,20 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let nowUnixTS = Int(Date().timeIntervalSince1970)
         let displayAuthenticated = snapshot.peerConfirmedAuthenticated
         let previousSessionID = secureLinkLastSessionID
+        if let transportConnected {
+            if transportConnected {
+                if transportConnectedSinceUnixTS == nil {
+                    transportConnectedSinceUnixTS = nowUnixTS
+                }
+            } else {
+                transportConnectedSinceUnixTS = nil
+            }
+        }
         if snapshot.sessionID == 0 {
-            secureLinkConnectedSinceUnixTS = nil
             secureLinkLastSessionID = 0
         } else {
-            if previousSessionID != snapshot.sessionID || secureLinkConnectedSinceUnixTS == nil {
-                secureLinkConnectedSinceUnixTS = nowUnixTS
+            if transportConnectedSinceUnixTS == nil {
+                transportConnectedSinceUnixTS = nowUnixTS
             }
             secureLinkLastSessionID = snapshot.sessionID
         }
@@ -3129,7 +3147,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "last_event": snapshot.lastEvent,
             "last_event_unix_ts": snapshot.lastEventUnixTs ?? NSNull(),
             "last_authenticated_unix_ts": displayAuthenticated ? (secureLinkLastAuthenticatedUnixTS ?? nowUnixTS) : NSNull(),
-            "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS),
+            "connected_since_unix_ts": transportConnectedSinceUnixTS ?? NSNull(),
             "authenticated_sessions_total": snapshot.authenticatedSessionsTotal,
             "rekeys_completed_total": snapshot.rekeysCompletedTotal,
             "authenticated_session_total": snapshot.authenticatedSessionsTotal,

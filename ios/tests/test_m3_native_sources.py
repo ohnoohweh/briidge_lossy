@@ -252,9 +252,12 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "private let peerTrafficRateLock = NSLock()" in provider
     assert "private var peerTrafficRateState:" in provider
     assert "peerTrafficRateLock.lock()" in provider
-    assert "private var secureLinkConnectedSinceUnixTS:" in provider
+    assert "private var transportConnectedSinceUnixTS:" in provider
     assert '"rx_bytes_per_sec": rxRate' in provider
-    assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS)' in provider
+    assert "transportConnected: protocolConnected" in provider
+    assert "if let transportConnected" in provider
+    assert "if previousSessionID != snapshot.sessionID ||" not in provider
+    assert '"connected_since_unix_ts": transportConnectedSinceUnixTS ?? NSNull()' in provider
     assert '"rekey_supported": snapshot.rekeySupported' in provider
     assert '"rekey_in_progress": snapshot.rekeyInProgress' in provider
     assert '"last_event": snapshot.lastEvent' in provider
