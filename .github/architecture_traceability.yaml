@@ -644,6 +644,8 @@ ARC-CMP-004:
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate
     - tests/unit/test_runtime_metrics.py::test_linux_memory_sampler_reads_current_rss_in_bytes
+    - tests/unit/test_runtime_metrics.py::test_windows_memory_sampler_uses_psapi_working_set
+    - tests/unit/test_runtime_metrics.py::test_darwin_memory_sampler_uses_mach_resident_size
     - tests/unit/test_runtime_metrics.py::test_memory_metrics_are_bounded_and_report_warning_state
     - tests/unit/test_runtime_metrics.py::test_runner_memory_sampler_projects_rss_and_unavailable_state
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::projectsPythonCompatibleBoundedMemoryMetrics

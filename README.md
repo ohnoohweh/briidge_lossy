@@ -659,6 +659,9 @@ Current websocket payload forms:
 | `--mux-tcp-bp-threshold` | `1` | Mux TCP: size threshold (bytes) to trigger drain() (default 1). |
 | `--mux-tcp-bp-latency-ms` | `300` | Mux TCP: if > 0, drain writers after this ms when bytes pending. |
 | `--mux-tcp-bp-poll-interval-ms` | `50` | Mux TCP: polling interval for time-based backpressure (ms). |
+| `--mux-tcp-connect-timeout-s` | `60` | Mux TCP: local target connection timeout in seconds. `0` disables it. |
+| `--mux-tcp-read-timeout-s` | `60` | Mux TCP: maximum time between reads from a local TCP endpoint. `0` disables it. |
+| `--mux-tcp-send-timeout-s` | `60` | Mux TCP: maximum time a local TCP write may remain blocked in `drain()`. `0` disables it. |
 
 On a shared listener, a TCP ChannelMux wire channel belongs to the authenticated
 peer that opened it. The Python runtime keeps that peer identity in its local
@@ -1778,8 +1781,8 @@ For CPU, memory, wakeup, and performance-regression diagnosis, use the [runtime 
 The Python and Swift runtimes' in-process monitoring foundation is bounded and
 dependency-free: it keeps fixed-bucket, fixed-window aggregate timing for
 approved categories, while their runtime owners sample process CPU and memory.
-Python and Swift Linux obtain current RSS, while macOS Swift uses Mach resident
-memory. iOS Runtime Analysis instead presents Mach physical footprint in its
+Python and Swift Linux obtain current RSS, Python Windows obtains its current
+working set through PSAPI, while macOS Swift uses Mach resident memory. iOS Runtime Analysis instead presents Mach physical footprint in its
 Footprint meter, with a 50 MiB observed Network Extension termination-risk
 threshold; resident memory remains available as diagnostic evidence. Cached
 redacted status exposes bounded current/lifetime/recent process-memory
