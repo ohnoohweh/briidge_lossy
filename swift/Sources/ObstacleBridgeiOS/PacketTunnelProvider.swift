@@ -3473,6 +3473,7 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
     private var writeBatches = 0
 
     private var peerFallbackIdleNS: UInt64 {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects
         UInt64(max(4.0, ObstacleBridgeRuntimeConfig.doubleValue(from: settings.runtimeConfig["udp_peer_idle_timeout_s"]) ?? 30.0) * 1_000_000_000)
     }
 
@@ -3694,6 +3695,7 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
                     peerHost: settings.peerHost,
                     peerPort: settings.peerPort,
                     peerResolveFamily: settings.peerResolveFamily,
+                    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects
                     peerIdleTimeoutSeconds: max(4.0, ObstacleBridgeRuntimeConfig.doubleValue(from: settings.runtimeConfig["udp_peer_idle_timeout_s"]) ?? 30.0),
                     sessionMaxAppPayload: sessionMaxAppPayload,
                     maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: settings.runtimeConfig),

@@ -1985,6 +1985,7 @@ def test_macos_shared_udp_retry_policy_remains_nonterminal() -> None:
     assert "handleTransportDisconnected()" in udp_owner
     assert "guard rebuildSocketForPeerRotation(installReceiveSource: false) else" in udp_owner
     assert "Core will advance to the next resolved candidate" in udp_owner
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_shared_udp_retry_policy_remains_nonterminal" in udp_owner
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects" in udp_owner
     assert "resetOverlayTransportEpoch(reason:" in udp_owner
 

@@ -185,6 +185,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         self.configuredPeerResolveFamily = peerResolveFamily
         // Do not reject a candidate before two normal idle probes have each
         // had an opportunity to solicit a reply.
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_shared_udp_retry_policy_remains_nonterminal
         self.peerIdleTimeoutNS = UInt64(max(4.0, peerIdleTimeoutSeconds) * 1_000_000_000)
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
         let boundedStartupMuxFrames = ObstacleBridgeBoundedDataFIFO(limits: .init(maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024))

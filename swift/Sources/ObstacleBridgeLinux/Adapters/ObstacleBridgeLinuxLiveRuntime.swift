@@ -1028,6 +1028,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             var owner: ObstacleBridgeLinuxServiceSocketOwner?
             var lastError: Error?
             for delay in [0, 50, 150, 350] {
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests
+                // OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded listener-bind backoff runs on the serial catalog handoff queue.
                 if delay > 0 { Thread.sleep(forTimeInterval: Double(delay) / 1_000) }
                 let candidate = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence, channelIDAllocation: .listener(ownerIndex: index, ownerCount: specs.count), debugEnabled: configuredRuntime.configuration.debugLoggingEnabled, debugSink: { [weak self] event, fields in self?.emitDebugDiagnostic(event, fields) }) { [weak self] owner, frames in
                     guard let runtime = self else { return }
