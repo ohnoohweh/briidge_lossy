@@ -1431,9 +1431,10 @@ def patch_pbxproj_text(text: str) -> str:
     text = text.replace('../../../../native/ObstacleBridgeApp/ObstacleBridgeTunnelControl.swift', '../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgeTunnelControl.swift')
     text = text.replace('../../../../native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift', '../../../../../swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift')
     text = text.replace('../../../../native/IPServer/ObstacleBridgePacketFlowBridge.swift', '../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift')
-    # Remove every reference left by retired memory diagnostics. Generated
-    # projects are patched in place, so removing a source from the repository
-    # alone would otherwise leave Xcode with a missing build input.
+    # Remove every reference left by the temporary memory-counter experiment
+    # and its later RuntimeHealth successor. Generated projects are patched in
+    # place, so removing a source from the repository alone would otherwise
+    # leave Xcode with a missing build input.
     text = re.sub(r'^.*ObstacleBridgeBufferCounters\.swift.*\n', '', text, flags=re.MULTILINE)
     text = re.sub(r'^.*ObstacleBridgeRuntimeHealth\.swift.*\n', '', text, flags=re.MULTILINE)
     # Projects generated before the source-root move use four parent
