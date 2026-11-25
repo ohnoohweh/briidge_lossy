@@ -123,6 +123,10 @@ ARC-CMP-001:
     - tests/unit/test_ws_payload_mode.py::test_connect_proxy_open_timeout_cancels_without_asyncio_callback_error
     - tests/unit/test_ws_payload_mode.py::test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight
     - tests/unit/test_ws_payload_mode.py::test_initial_failed_address_override_advances_before_reconnect
+    - tests/unit/test_stream_peer_rotation.py::test_tcp_initial_failed_candidate_advances_before_reconnect
+    - tests/unit/test_stream_peer_rotation.py::test_quic_initial_failed_candidate_advances_before_reconnect
+    - ios/tests/test_m3_native_sources.py::test_swift_tcp_synchronous_open_failure_advances_core_candidate
+    - ios/tests/test_macos_swift_host_runner.py::test_swift_tcp_synchronous_open_failure_uses_core_candidate_fallback
     - tests/unit/test_ws_payload_mode.py::test_proxy_multi_ws_peer_uses_resolved_candidate_for_lookup_and_connect
     - tests/unit/test_ws_payload_mode.py::test_client_accept_resets_stale_rtt_state_before_new_transport_establishes
     - tests/unit/test_ws_payload_mode.py::test_client_accept_rejects_overlapping_websocket_without_closing_active

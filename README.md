@@ -1667,9 +1667,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `81` | `1216` |
-| macOS Swift app | `1` | `94` |
-| iOS app/extension | `31` | `237` |
+| Python CLI/runtime, including macOS Python | `81` | `1218` |
+| macOS Swift app | `1` | `96` |
+| iOS app/extension | `31` | `239` |
 
 #### Requirement traceability
 
@@ -1713,7 +1713,7 @@ Desktop-only process ownership is reviewed across macOS and Linux; iOS extension
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
 | Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `94` | `0` | `94` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `35` | `35` |
-| Total parity-oriented evidence | Sum of the lanes above | `106` | `155` | `261` |
+| Total parity-oriented evidence | Sum of the lanes above | `108` | `155` | `263` |
 
 Important caveat:
 

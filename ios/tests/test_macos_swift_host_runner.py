@@ -1747,6 +1747,19 @@ def test_swift_websocket_synchronous_open_failure_uses_core_candidate_fallback()
     )
 
 
+def test_swift_tcp_synchronous_open_failure_uses_core_candidate_fallback() -> None:
+    tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    connect_overlay = tcp_owner[
+        tcp_owner.index("    private func connectOverlay(coreCandidateIndex:") : tcp_owner.index("    private func startOverlayListener")
+    ]
+
+    assert 'eventSink?("tcp_overlay_connect_failed"' in connect_overlay
+    assert connect_overlay.count("overlayLayerTransportAdapter?.handleTransportDisconnected()") == 2
+    assert connect_overlay.index("overlayLayerTransportAdapter?.handleTransportDisconnected()") < connect_overlay.index(
+        "scheduleReconnect()"
+    )
+
+
 def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
     core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     backpressure = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayBackpressure.swift").read_text(encoding="utf-8")

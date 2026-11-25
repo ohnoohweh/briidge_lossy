@@ -887,8 +887,12 @@ REQ-LIFE-002:
     - tests/unit/test_peer_resolution.py::test_udp_session_rotation_rebuilds_client_socket
     - ios/tests/test_m3_native_sources.py::test_udp_overlay_peer_rotation_rebuilds_the_native_socket
     - tests/unit/test_stream_peer_rotation.py::test_tcp_reconnect_cleanup_survives_stopped_event_loop
+    - tests/unit/test_stream_peer_rotation.py::test_tcp_initial_failed_candidate_advances_before_reconnect
     - tests/unit/test_stream_peer_rotation.py::test_ws_reconnect_cleanup_survives_stopped_event_loop
     - tests/unit/test_stream_peer_rotation.py::test_quic_reconnect_cleanup_survives_stopped_event_loop
+    - tests/unit/test_stream_peer_rotation.py::test_quic_initial_failed_candidate_advances_before_reconnect
+    - ios/tests/test_m3_native_sources.py::test_swift_tcp_synchronous_open_failure_advances_core_candidate
+    - ios/tests/test_macos_swift_host_runner.py::test_swift_tcp_synchronous_open_failure_uses_core_candidate_fallback
     - tests/unit/test_ws_payload_mode.py::test_quick_reconnect_cancels_pending_disconnect
     - tests/unit/test_ws_payload_mode.py::test_client_accept_resets_stale_rtt_state_before_new_transport_establishes
     - tests/unit/test_ws_payload_mode.py::test_client_accept_rejects_overlapping_websocket_without_closing_active

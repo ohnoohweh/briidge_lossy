@@ -688,7 +688,13 @@ class TcpStreamSession(ISession):
         self._next_reconnect_attempt_monotonic = None
         host, port = self._current_peer_endpoint()
         async def _connect():
+            # Keep the first bootstrap attempt on the same candidate lifecycle
+            # as later reconnects.  A failed preferred IPv6 candidate must
+            # advance before a supervisor can observe a disconnected session.
             await self._connect_to(host, port)
+            if self._run_flag and self._writer is None:
+                self._advance_peer_candidate()
+                self._start_reconnect_loop()
         self._connecting_task = self._loop.create_task(_connect())
 
     def _start_reconnect_loop(self) -> None:
@@ -787,8 +793,6 @@ class TcpStreamSession(ISession):
             self._flush_early()
         except Exception as e:
             self._log.warning(f"[TCP-SESSION] ({self._probe_id}) connect failed to {host}:{port}: {e!r}")
-            if self._run_flag and self._writer is None:
-                self._start_reconnect_loop()
         finally:
             self._connecting_task = None
 

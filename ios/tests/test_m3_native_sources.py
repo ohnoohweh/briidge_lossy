@@ -628,6 +628,17 @@ def test_swift_websocket_synchronous_open_failure_advances_core_candidate() -> N
     )
 
 
+def test_swift_tcp_synchronous_open_failure_advances_core_candidate() -> None:
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    connect_overlay = owner[owner.index("    private func connectOverlay(") : owner.index("    private func startOverlayListener")]
+
+    assert 'eventSink?("tcp_overlay_connect_failed"' in connect_overlay
+    assert connect_overlay.count("overlayLayerTransportAdapter?.handleTransportDisconnected()") == 2
+    assert connect_overlay.index("overlayLayerTransportAdapter?.handleTransportDisconnected()") < connect_overlay.index(
+        "scheduleReconnect()"
+    )
+
+
 def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
     tun_runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
     overlay_core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")

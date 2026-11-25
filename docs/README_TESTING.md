@@ -40,7 +40,7 @@ This guide should describe the current testing model, not act as a dated event l
 
 The active testing focus on this branch is:
 
-- overlay reconnect and stale-transport recovery on Python and Swift paths, including myUDP disconnected-epoch publication for every unsuccessful candidate rotation and a fresh Swift WebSocket ChannelMux TUN epoch before each connection attempt
+- overlay reconnect and stale-transport recovery on Python and Swift paths, including myUDP disconnected-epoch publication for every unsuccessful candidate rotation, first-attempt TCP/QUIC/WebSocket peer-candidate advancement, Core-owned Swift TCP setup-failure fallback, and a fresh Swift WebSocket ChannelMux TUN epoch before each connection attempt
 - typed Python lifecycle-contract normalization, Compression forwarding, shared peer-client/listener ChannelMux outer-readiness, RTT-gated TCP/UDP admission plus post-mux TUN DATA shedding and a 30-second high-delay rotation request, full-stack candidate-cycle reset, Runner cycle-exhaustion restart, and myUDP event-order/epoch emission
 - cross-runtime MyUDP TCP continuity through ten time-triggered SecureLink rekeys, including immediate listener lifecycle publication on the first valid RTT so a delayed probe cannot restart security state after authenticated traffic begins
 - demand-driven Python ChannelMux TCP backpressure workers and Swift per-channel Network.framework send drains, including cancellation on remote close so historical TCP churn cannot retain idle polling tasks or pending completion chains
@@ -94,6 +94,7 @@ Representative anchors for those areas:
 
 - reconnect and transport-state guards:
   - [tests/unit/test_ws_payload_mode.py](../tests/unit/test_ws_payload_mode.py)
+  - [tests/unit/test_stream_peer_rotation.py](../tests/unit/test_stream_peer_rotation.py)
   - [tests/unit/test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
   - [tests/unit/test_swift_ws_transport_owner_source_guards.py](../tests/unit/test_swift_ws_transport_owner_source_guards.py)
   - [ios/tests/test_ios_secure_link_transport_adapter.py](../ios/tests/test_ios_secure_link_transport_adapter.py)
