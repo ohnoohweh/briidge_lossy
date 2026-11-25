@@ -1378,6 +1378,8 @@ REQ-MUX-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkCarriesChannelMuxFrameAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::tcpListenerPublishesOpenAndDataFrames
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxChannelIDAllocationTests.swift::partitionsPeerAndListenerIDsAcrossIndependentOwners
+    - tests/unit/test_peer_resolution.py::test_mux_tcp_read_and_send_timeouts_default_to_disabled
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeConfigPolicyTests.swift::disablesMuxTCPReadAndSendTimeoutsByDefault
 
 REQ-MUX-002:
   integration_tests:

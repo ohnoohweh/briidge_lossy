@@ -268,9 +268,12 @@ ARC-CMP-003:
   # catalog facade required by TCP and UDP owners alongside the Core crypto module, then runs
   # in a bounded, test-name-reporting CI lane.
   # The separate RuntimeConfig policy probe compiles its Core service and
-  # ChannelMux codec dependencies for portable route and schema checks.
+  # ChannelMux codec dependencies for portable route and schema checks,
+  # including disabled-by-default ChannelMux local TCP inactivity limits.
   unit_tests:
     - tests/unit/test_peer_resolution.py::test_udp_peer_idle_timeout_defaults_to_30_seconds_and_accepts_override
+    - tests/unit/test_peer_resolution.py::test_mux_tcp_read_and_send_timeouts_default_to_disabled
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeConfigPolicyTests.swift::disablesMuxTCPReadAndSendTimeoutsByDefault
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_udp_candidate_fallback_uses_the_shared_30_second_receive_idle_timeout
     - tests/unit/test_peer_stack_worker.py::test_peer_worker_rejects_remote_tun_before_install_or_hooks
     # Generated iOS project patching keeps embedded CPython framework plist and

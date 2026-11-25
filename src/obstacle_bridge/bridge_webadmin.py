@@ -1726,10 +1726,10 @@ class AdminWebUI:
             req.get("mux_tcp_connect_timeout_s", getattr(self.args, "mux_tcp_connect_timeout_s", 60.0)) or 0.0
         )
         selected_mux_tcp_read_timeout_s = float(
-            req.get("mux_tcp_read_timeout_s", getattr(self.args, "mux_tcp_read_timeout_s", 60.0)) or 0.0
+            req.get("mux_tcp_read_timeout_s", getattr(self.args, "mux_tcp_read_timeout_s", 0.0)) or 0.0
         )
         selected_mux_tcp_send_timeout_s = float(
-            req.get("mux_tcp_send_timeout_s", getattr(self.args, "mux_tcp_send_timeout_s", 60.0)) or 0.0
+            req.get("mux_tcp_send_timeout_s", getattr(self.args, "mux_tcp_send_timeout_s", 0.0)) or 0.0
         )
         selected_proxy_provider = self._sanitize_onboarding_proxy_provider(
             req.get("proxy_provider", self._onboarding_proxy_provider_from_args(self.args))

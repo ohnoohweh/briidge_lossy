@@ -661,8 +661,8 @@ Current websocket payload forms:
 | `--mux-tcp-bp-latency-ms` | `300` | Mux TCP: if > 0, drain writers after this ms when bytes pending. |
 | `--mux-tcp-bp-poll-interval-ms` | `50` | Mux TCP: polling interval for time-based backpressure (ms). |
 | `--mux-tcp-connect-timeout-s` | `60` | Mux TCP: local target connection timeout in seconds. `0` disables it. |
-| `--mux-tcp-read-timeout-s` | `60` | Mux TCP: maximum time between reads from a local TCP endpoint. `0` disables it. |
-| `--mux-tcp-send-timeout-s` | `60` | Mux TCP: maximum time a local TCP write may remain blocked in `drain()`. `0` disables it. |
+| `--mux-tcp-read-timeout-s` | `0` | Mux TCP: maximum time between reads from a local TCP endpoint. Disabled by default; set a positive value only when an appropriate deployment-specific bound is known. |
+| `--mux-tcp-send-timeout-s` | `0` | Mux TCP: maximum time a local TCP write may remain blocked in `drain()`. Disabled by default; set a positive value only when an appropriate deployment-specific bound is known. |
 
 On a shared listener, a TCP ChannelMux wire channel belongs to the authenticated
 peer that opened it. The Python runtime keeps that peer identity in its local

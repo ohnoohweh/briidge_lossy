@@ -422,11 +422,11 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             p.add_argument('--mux-tcp-connect-timeout-s', type=float, default=60.0,
                            help='Mux TCP: local target connection timeout in seconds; 0 disables (default 60).')
         if not _has('--mux-tcp-read-timeout-s'):
-            p.add_argument('--mux-tcp-read-timeout-s', type=float, default=60.0,
-                           help='Mux TCP: maximum idle time between local TCP reads in seconds; 0 disables (default 60).')
+            p.add_argument('--mux-tcp-read-timeout-s', type=float, default=0.0,
+                           help='Mux TCP: maximum idle time between local TCP reads in seconds; 0 disables (default 0).')
         if not _has('--mux-tcp-send-timeout-s'):
-            p.add_argument('--mux-tcp-send-timeout-s', type=float, default=60.0,
-                           help='Mux TCP: maximum time waiting for a local TCP write drain in seconds; 0 disables (default 60).')
+            p.add_argument('--mux-tcp-send-timeout-s', type=float, default=0.0,
+                           help='Mux TCP: maximum time waiting for a local TCP write drain in seconds; 0 disables (default 0).')
         if not _has('--channelmux-transport-delay-threshold-ms'):
             p.add_argument(
                 '--channelmux-transport-delay-threshold-ms', type=float,
@@ -520,8 +520,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         try: mux._tcp_bp_poll_interval_s = float(getattr(args, 'mux_tcp_bp_poll_interval_ms', 50)) / 1000.0
         except Exception: mux._tcp_bp_poll_interval_s = 0.05
         mux._tcp_connect_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_connect_timeout_s', 60.0), 60.0)
-        mux._tcp_read_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_read_timeout_s', 60.0), 60.0)
-        mux._tcp_send_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_send_timeout_s', 60.0), 60.0)
+        mux._tcp_read_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_read_timeout_s', 0.0), 0.0)
+        mux._tcp_send_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_send_timeout_s', 0.0), 0.0)
         try:
             mux._transport_delay_threshold_ms = max(0.0, float(getattr(
                 args, 'channelmux_transport_delay_threshold_ms', mux.DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS,

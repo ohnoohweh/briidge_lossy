@@ -6,7 +6,7 @@ import socket
 
 import pytest
 
-from obstacle_bridge.bridge import _resolve_peer_endpoint
+from obstacle_bridge.bridge import ChannelMux, _resolve_peer_endpoint
 import obstacle_bridge.bridge_transport_common as transport_common
 from obstacle_bridge.bridge_transport_udp import SendPort, UdpSession
 
@@ -24,6 +24,15 @@ def test_udp_peer_idle_timeout_defaults_to_30_seconds_and_accepts_override() -> 
 
     too_short = parser.parse_args(["--udp-peer-idle-timeout-s", "2"])
     assert UdpSession(too_short)._peer_candidate_idle_timeout_s == 4.0
+
+
+def test_mux_tcp_read_and_send_timeouts_default_to_disabled() -> None:
+    parser = argparse.ArgumentParser()
+    ChannelMux.register_cli(parser)
+
+    defaults = parser.parse_args([])
+    assert defaults.mux_tcp_read_timeout_s == 0.0
+    assert defaults.mux_tcp_send_timeout_s == 0.0
 
 
 async def _rotate_client_socket() -> tuple[bool, bool, tuple, tuple]:
