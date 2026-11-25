@@ -1295,7 +1295,7 @@ function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="14">No ${escapeHtml(protocolLabel)} connections</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="16">No ${escapeHtml(protocolLabel)} connections</td></tr>`;
     return;
   }
 
@@ -1320,6 +1320,8 @@ function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
         <td class="mono">${escapeHtml(fmtDestination(row.remote_destination))}</td>
         <td class="mono">${escapeHtml(fmtBytes(rxBytes))}</td>
         <td class="mono">${escapeHtml(fmtBytes(txBytes))}</td>
+        <td class="mono">${escapeHtml(fmtAgeSeconds(row.rx_idle_seconds ?? row.stats?.rx_idle_seconds))}</td>
+        <td class="mono">${escapeHtml(fmtAgeSeconds(row.tx_idle_seconds ?? row.stats?.tx_idle_seconds))}</td>
         <td class="mono">${escapeHtml(fmtInteger(rxMsgs))}</td>
         <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>
         <td class="mono">${escapeHtml(fmtThrottleSummary(row.throttle))}</td>

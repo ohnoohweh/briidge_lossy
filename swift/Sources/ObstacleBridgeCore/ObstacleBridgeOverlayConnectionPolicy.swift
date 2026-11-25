@@ -11,7 +11,7 @@ enum ObstacleBridgeNativeConnectionSnapshot {
         proto: String, role: String, state: String, chanID: Int, svcID: Int,
         serviceName: String, sourceHost: String?, sourcePort: Int?,
         localHost: String?, localPort: Int?, remoteHost: String, remotePort: Int,
-        stats: [String: Int]
+        stats: [String: Int], rxIdleSeconds: Any = NSNull(), txIdleSeconds: Any = NSNull()
     ) -> [String: Any] {
         [
             "protocol": proto, "role": role, "state": state, "chan_id": chanID,
@@ -21,6 +21,8 @@ enum ObstacleBridgeNativeConnectionSnapshot {
             "local_port": localPort ?? NSNull(),
             "remote_destination": endpoint(host: remoteHost, port: remotePort),
             "stats": stats,
+            "rx_idle_seconds": rxIdleSeconds,
+            "tx_idle_seconds": txIdleSeconds,
         ]
     }
 }
@@ -37,13 +39,20 @@ struct ObstacleBridgeOverlayConnectionState {
     var localHost: String?
     var localPort: Int?
     var stats: [String: Int]
+    var lastRXActivityNS: UInt64 = 0
+    var lastTXActivityNS: UInt64 = 0
 
     func snapshot() -> [String: Any] {
-        ObstacleBridgeNativeConnectionSnapshot.make(
+        let now = DispatchTime.now().uptimeNanoseconds
+        let rxIdle: Any = lastRXActivityNS > 0 && now >= lastRXActivityNS
+            ? Double(now - lastRXActivityNS) / 1_000_000_000.0 : NSNull()
+        let txIdle: Any = lastTXActivityNS > 0 && now >= lastTXActivityNS
+            ? Double(now - lastTXActivityNS) / 1_000_000_000.0 : NSNull()
+        return ObstacleBridgeNativeConnectionSnapshot.make(
             proto: proto, role: role, state: state, chanID: chanID, svcID: svcID,
             serviceName: serviceName, sourceHost: nil, sourcePort: nil,
             localHost: localHost, localPort: localPort, remoteHost: remoteHost,
-            remotePort: remotePort, stats: stats
+            remotePort: remotePort, stats: stats, rxIdleSeconds: rxIdle, txIdleSeconds: txIdle
         )
     }
 }
@@ -78,6 +87,12 @@ enum ObstacleBridgeOverlayConnectionSupport {
         let keyBytes = direction == "inbound" ? "rx_bytes" : "tx_bytes"
         state.stats[keyMessages, default: 0] += 1
         state.stats[keyBytes, default: 0] += bytes
+        let now = DispatchTime.now().uptimeNanoseconds
+        if direction == "inbound" {
+            state.lastRXActivityNS = now
+        } else {
+            state.lastTXActivityNS = now
+        }
         states[chanID] = state
     }
 }

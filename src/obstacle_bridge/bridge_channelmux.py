@@ -44,6 +44,10 @@ class _ChanCtr:
     msgs_out: int = 0
     bytes_in: int = 0
     bytes_out: int = 0
+    # Monotonic timestamps are deliberately kept beside the matching table
+    # counters.  They describe local service activity, not overlay liveness.
+    last_rx_activity_ns: int = 0
+    last_tx_activity_ns: int = 0
     crc_in: int = 0
     crc_out: int = 0
 
@@ -3019,6 +3023,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         ctr = self._ctr(ChannelMux.Proto.UDP, chan)
         ctr.msgs_in += 1
         ctr.bytes_in += len(data)
+        ctr.last_rx_activity_ns = time.monotonic_ns()
         try:
             self._log_conn("<-", "UDP", chan, data, src=src, dst=dst)
         except Exception as e:
@@ -7003,6 +7008,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         ctr = self._ctr(ChannelMux.Proto.UDP, chan)
         ctr.msgs_in += 1
         ctr.bytes_in += len(data)        
+        ctr.last_rx_activity_ns = time.monotonic_ns()
         if len(data) > self._udp_service_datagram_cap:
             self.log.warning(
                 "[UDP] chan=%s drop overlay UDP datagram len=%s cap=%s (%s)",
@@ -7021,6 +7027,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 try:
                     ctr.msgs_out += 1
                     ctr.bytes_out += len(data)
+                    ctr.last_tx_activity_ns = time.monotonic_ns()
                     srv_tr.sendto(data, addr)
                     self._log_udp_diag(
                         "server",
@@ -7073,6 +7080,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         try:
             ctr.msgs_out += 1
             ctr.bytes_out += len(data)
+            ctr.last_tx_activity_ns = time.monotonic_ns()
             tr.sendto(data)
             self._udp_client_last_ts[chan] = time.time()
         except Exception as e:
@@ -7154,6 +7162,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             ctr = self.parent._ctr(ChannelMux.Proto.UDP, self.chan)
             ctr.msgs_out += 1
             ctr.bytes_out += len(data)
+            ctr.last_tx_activity_ns = time.monotonic_ns()
             # remote -> overlay
             try:
                 # Resolve endpoints for logging
@@ -7267,6 +7276,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                         ctr = self._ctr(ChannelMux.Proto.TCP, chan)
                         ctr.msgs_in += 1
                         ctr.bytes_in += len(data)
+                        ctr.last_rx_activity_ns = time.monotonic_ns()
                         self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, data)
                         self.log.debug("[TCP/SRV] chan=%s local->overlay %dB", chan, len(data))
                 except Exception as e:
@@ -7413,6 +7423,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                         ctr = self._ctr(ChannelMux.Proto.TCP, local_chan)
                         ctr.msgs_out += 1
                         ctr.bytes_out += len(buf)
+                        ctr.last_tx_activity_ns = time.monotonic_ns()
                         self._maybe_signal_backpressure(local_chan, writer)
                         self.log.debug("[TCP/CLI] chan=%s flushed pending %dB", wire_chan, len(buf))
                     except Exception as e:
@@ -7459,6 +7470,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                             ctr = self._ctr(ChannelMux.Proto.TCP, local_chan)
                             ctr.msgs_in += 1
                             ctr.bytes_in += len(buf)
+                            ctr.last_rx_activity_ns = time.monotonic_ns()
                             self._send_mux(wire_chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, buf, peer_id=peer_key)
                             if local_chan not in self._tcp_first_remote_to_overlay_logged:
                                 self._tcp_first_remote_to_overlay_logged.add(local_chan)
@@ -7554,6 +7566,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 ctr = self._ctr(ChannelMux.Proto.TCP, local_chan)
                 ctr.msgs_out += 1
                 ctr.bytes_out += len(data)
+                ctr.last_tx_activity_ns = time.monotonic_ns()
                 self._maybe_signal_backpressure(local_chan, writer)
                 if local_chan not in self._tcp_first_overlay_to_local_logged:
                     self._tcp_first_overlay_to_local_logged.add(local_chan)
@@ -8077,12 +8090,19 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "tx_msgs": 0,
                 "rx_bytes": 0,
                 "tx_bytes": 0,
+                "rx_idle_seconds": None,
+                "tx_idle_seconds": None,
             }
+        now_ns = time.monotonic_ns()
+        rx_at = int(getattr(c, "last_rx_activity_ns", 0) or 0)
+        tx_at = int(getattr(c, "last_tx_activity_ns", 0) or 0)
         return {
             "rx_msgs": int(getattr(c, "msgs_in", 0)),
             "tx_msgs": int(getattr(c, "msgs_out", 0)),
             "rx_bytes": int(getattr(c, "bytes_in", 0)),
             "tx_bytes": int(getattr(c, "bytes_out", 0)),
+            "rx_idle_seconds": (max(0, now_ns - rx_at) / 1e9) if rx_at else None,
+            "tx_idle_seconds": (max(0, now_ns - tx_at) / 1e9) if tx_at else None,
         }
 
     def _remote_requested_listener_rows(self, proto: "ChannelMux.ProtoName") -> list[dict]:
@@ -8156,6 +8176,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 ),
                 "throttle": throttle,
                 "stats": stats,
+                "rx_idle_seconds": stats["rx_idle_seconds"],
+                "tx_idle_seconds": stats["tx_idle_seconds"],
             })
 
         # UDP listeners: bound sockets waiting for first client/channel mapping.
@@ -8221,6 +8243,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     ),
                     "throttle": throttle,
                     "stats": stats,
+                    "rx_idle_seconds": stats["rx_idle_seconds"],
+                    "tx_idle_seconds": stats["tx_idle_seconds"],
                 })
             except Exception:
                 continue
@@ -8281,6 +8305,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "remote_destination": remote_destination,
                 "throttle": {"applicable": False, "active": False, "reason": "tcp_stream_backpressure"},
                 "stats": stats,
+                "rx_idle_seconds": stats["rx_idle_seconds"],
+                "tx_idle_seconds": stats["tx_idle_seconds"],
             })
 
         rows.sort(key=lambda x: (x["protocol"], x["role"], x["chan_id"]))
@@ -8329,12 +8355,19 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "tx_msgs": 0,
                 "rx_bytes": 0,
                 "tx_bytes": 0,
+                "rx_idle_seconds": None,
+                "tx_idle_seconds": None,
             }
+        now_ns = time.monotonic_ns()
+        rx_at = int(getattr(c, "last_rx_activity_ns", 0) or 0)
+        tx_at = int(getattr(c, "last_tx_activity_ns", 0) or 0)
         return {
             "rx_msgs": int(getattr(c, "msgs_in", 0)),
             "tx_msgs": int(getattr(c, "msgs_out", 0)),
             "rx_bytes": int(getattr(c, "bytes_in", 0)),
             "tx_bytes": int(getattr(c, "bytes_out", 0)),
+            "rx_idle_seconds": (max(0, now_ns - rx_at) / 1e9) if rx_at else None,
+            "tx_idle_seconds": (max(0, now_ns - tx_at) / 1e9) if tx_at else None,
         }
 
     def snapshot_udp_connections(self) -> list[dict]:
@@ -8373,6 +8406,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 ),
                 "throttle": throttle,
                 "stats": stats,
+                "rx_idle_seconds": stats["rx_idle_seconds"],
+                "tx_idle_seconds": stats["tx_idle_seconds"],
             })
 
         # UDP listeners: bound sockets waiting for first client/channel mapping.
@@ -8438,6 +8473,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     ),
                     "throttle": throttle,
                     "stats": stats,
+                    "rx_idle_seconds": stats["rx_idle_seconds"],
+                    "tx_idle_seconds": stats["tx_idle_seconds"],
                 })
             except Exception:
                 continue
@@ -8497,6 +8534,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "local_port": int(local[1]) if local else (int(spec.l_port) if spec else None),
                 "remote_destination": remote_destination,
                 "stats": stats,
+                "rx_idle_seconds": stats["rx_idle_seconds"],
+                "tx_idle_seconds": stats["tx_idle_seconds"],
             })
 
         # TCP listeners: bound server sockets waiting for incoming channels.

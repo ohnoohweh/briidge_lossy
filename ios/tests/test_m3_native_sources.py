@@ -2046,6 +2046,10 @@ def test_native_proxy_connections_keep_callbacks_on_owner_queue() -> None:
     assert "maximumItems: Int = 128, maximumBytes: Int = 2 * 1_024 * 1_024" in source
     assert "private lazy var localSender = ObstacleBridgeBoundedConnectionDataSender" in source
     assert "private lazy var remoteSender = ObstacleBridgeBoundedConnectionDataSender" in source
+    assert source.count("private var lastRXActivityNS: UInt64 = 0") == 2
+    assert source.count("private var lastTXActivityNS: UInt64 = 0") == 2
+    assert source.count("rxIdleSeconds: idleSeconds(since: lastRXActivityNS)") == 2
+    assert source.count("txIdleSeconds: idleSeconds(since: lastTXActivityNS)") == 2
 
 
 def test_web_admin_server_callbacks_keep_owner_queue() -> None:

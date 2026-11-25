@@ -2049,6 +2049,7 @@ REQ-ADM-006:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunProbeDiagnosticsPolicyTests.swift::buildsPortableProbeCountersAndResultProjection
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebAdminLiveTopicPolicyTests.swift::tabsRestrictTopicsAndUnknownSubscriptionsAreRejected
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayConnectionPolicyTests.swift::projectsAndUpdatesConnectionState
+    - tests/unit/test_connection_snapshots.py::test_udp_and_tcp_rows_expose_directional_idle_durations_without_timestamps
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv4_without_delivering_control_frames
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv6_without_delivering_control_frames
     - tests/unit/test_peer_address_protocol.py::test_server_normalizes_ipv4_mapped_ipv6_to_ipv4

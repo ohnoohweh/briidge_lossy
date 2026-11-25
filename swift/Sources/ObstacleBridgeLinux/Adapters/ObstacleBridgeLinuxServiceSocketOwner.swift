@@ -40,7 +40,7 @@ public struct ObstacleBridgeLinuxServiceSocketOwnerEpochReset: Equatable, Sendab
 /// callbacks and data-plane mutation run on one serial queue; no descriptor or
 /// channel state is touched by the overlay thread directly.
 public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
-    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxServiceSocketOwnerTests
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxServiceSocketOwnerTests; idle activity remains queue-owned
     public typealias FrameSink = (ObstacleBridgeLinuxServiceSocketOwner, [ObstacleBridgeChannelMuxFrame]) -> Void
 
     private struct ChannelTraffic {
@@ -48,6 +48,8 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         var txBytes = 0
         var rxMessages = 0
         var txMessages = 0
+        var lastRXActivityNS: UInt64 = 0
+        var lastTXActivityNS: UInt64 = 0
     }
 
     private var spec: ObstacleBridgeLinuxServiceSpec
@@ -183,6 +185,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     public func adminConnectionRows(peerID: String, catalog: String = "own_servers") -> [[String: Any]] {
         queue.sync {
             let boundListenerPort = listener >= 0 ? boundPort(listener) : 0
+            let now = DispatchTime.now().uptimeNanoseconds
             let base: [String: Any] = [
                 "peer_id": peerID,
                 "svc_id": Int(spec.serviceID),
@@ -217,6 +220,10 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                     "rx_msgs": traffic.rxMessages,
                     "tx_msgs": traffic.txMessages,
                 ]
+                row["rx_idle_seconds"] = traffic.lastRXActivityNS > 0 && now >= traffic.lastRXActivityNS
+                    ? Double(now - traffic.lastRXActivityNS) / 1_000_000_000.0 : NSNull()
+                row["tx_idle_seconds"] = traffic.lastTXActivityNS > 0 && now >= traffic.lastTXActivityNS
+                    ? Double(now - traffic.lastTXActivityNS) / 1_000_000_000.0 : NSNull()
                 rows.append(row)
             }
             return rows
@@ -471,6 +478,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         var traffic = channelTraffic[channelID] ?? .init()
         traffic.rxBytes += bytes
         traffic.rxMessages += 1
+        traffic.lastRXActivityNS = DispatchTime.now().uptimeNanoseconds
         channelTraffic[channelID] = traffic
     }
 
@@ -479,6 +487,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         var traffic = channelTraffic[channelID] ?? .init()
         traffic.txBytes += bytes
         traffic.txMessages += 1
+        traffic.lastTXActivityNS = DispatchTime.now().uptimeNanoseconds
         channelTraffic[channelID] = traffic
     }
 

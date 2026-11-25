@@ -1104,6 +1104,7 @@ ARC-CMP-005:
     - tests/unit/test_connection_snapshots.py::test_snapshot_exposes_requested_remote_servers_as_client_listeners
     - tests/unit/test_connection_snapshots.py::test_snapshot_hides_requested_remote_servers_when_overlay_disconnected
     - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
+    - tests/unit/test_connection_snapshots.py::test_udp_and_tcp_rows_expose_directional_idle_durations_without_timestamps
     - tests/unit/test_connection_snapshots.py::test_wrapped_myudp_client_snapshot_uses_inner_configured_peer_endpoint
     - tests/unit/test_connection_snapshots.py::test_ws_client_snapshot_prefers_applied_peer_over_multi_host_config
     - tests/unit/test_connection_snapshots.py::test_quic_client_snapshot_prefers_applied_peer_over_multi_host_config
