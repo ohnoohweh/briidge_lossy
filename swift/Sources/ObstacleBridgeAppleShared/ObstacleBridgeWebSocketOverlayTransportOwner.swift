@@ -749,7 +749,19 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             task.resume()
         } catch {
             eventSink?("ws_overlay_connect_failed", ["error": error.localizedDescription])
-            scheduleReconnect()
+            // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_websocket_overlay_owner_serializes_public_and_delegate_callbacks
+            // `connectOverlay` resets a previous epoch without notifying Core
+            // before allocating the new native connection.  A synchronous
+            // setup failure (for example an invalid physical URL) therefore
+            // must explicitly close this Core epoch.  Core advances the
+            // candidate index before it asks us to retry, so an unreachable
+            // IPv6 literal falls through to the configured IPv4 literal
+            // rather than restarting the owner at candidate zero.
+            if overlayLayerTransportAdapter != nil {
+                overlayLayerTransportAdapter?.handleTransportDisconnected()
+            } else {
+                scheduleReconnect()
+            }
         }
     }
 

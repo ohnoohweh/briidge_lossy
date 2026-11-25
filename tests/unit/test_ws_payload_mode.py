@@ -849,6 +849,45 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         )
         on_accept.assert_awaited_once_with(fake_ws)
 
+    async def test_initial_failed_address_override_advances_before_reconnect(self):
+        args = _args("binary")
+        args.ws_peer = "bridge.example.test"
+        args.ws_peer_port = 8080
+        args.ws_peer_addresses = ["192.0.2.44", "2001:db8::44"]
+        args.ws_peer_resolve_family = "prefer-ipv6"
+        args.ws_bind = "::"
+        args.overlay_reconnect_retry_delay_ms = 1
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+
+        attempts: list[tuple[str, int]] = []
+
+        async def fake_connect(host: str, port: int) -> None:
+            attempts.append((host, port))
+            if host == "192.0.2.44":
+                session._ws = object()
+
+        session._connect_to = fake_connect  # type: ignore[method-assign]
+        session._ensure_connect_once()
+        for _ in range(20):
+            if session._ws is not None:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(
+            attempts[:2],
+            [("2001:db8::44", 8080), ("192.0.2.44", 8080)],
+        )
+        self.assertEqual(session._peer_candidate_index, 1)
+
+        session._run_flag = False
+        for task in (session._connecting_task, session._reconnect_task):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
     def test_peer_address_override_rejects_dns_names(self):
         args = _args("binary")
         args.ws_peer = "ohnoohweh.synology.me"

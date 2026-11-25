@@ -1733,7 +1733,15 @@ class WebSocketSession(ISession):
             return
         self._next_reconnect_attempt_monotonic = None
         host, port = self._current_peer_endpoint()
-        async def _connect(): await self._connect_to(host, port)
+        async def _connect():
+            # Keep the first bootstrap attempt on the same candidate lifecycle
+            # as later reconnects.  In particular, do not let a failed first
+            # IPv6 attempt leave the candidate selector at index zero while a
+            # supervisor observes the disconnected state and restarts us.
+            await self._connect_to(host, port)
+            if self._run_flag and self._ws is None:
+                self._advance_peer_candidate()
+                self._start_reconnect_loop()
         self._connecting_task = self._loop.create_task(_connect())  # type: ignore
 
     def _start_reconnect_loop(self) -> None:
@@ -2202,8 +2210,6 @@ class WebSocketSession(ISession):
                 )
                 self._record_connection_failure(failure_reason, failure_detail)
                 self._log.warning(f"[WS-SESSION] ({self._probe_id}) connect failed to {uri}: {e!r}")
-                if self._run_flag and self._ws is None:
-                    self._start_reconnect_loop()
             finally:
                 self._connecting_task = None
 

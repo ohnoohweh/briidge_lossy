@@ -122,6 +122,7 @@ ARC-CMP-001:
     - tests/unit/test_ws_payload_mode.py::test_open_ws_proxy_socket_blocking_establishes_connect_tunnel
     - tests/unit/test_ws_payload_mode.py::test_connect_proxy_open_timeout_cancels_without_asyncio_callback_error
     - tests/unit/test_ws_payload_mode.py::test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight
+    - tests/unit/test_ws_payload_mode.py::test_initial_failed_address_override_advances_before_reconnect
     - tests/unit/test_ws_payload_mode.py::test_proxy_multi_ws_peer_uses_resolved_candidate_for_lookup_and_connect
     - tests/unit/test_ws_payload_mode.py::test_client_accept_resets_stale_rtt_state_before_new_transport_establishes
     - tests/unit/test_ws_payload_mode.py::test_client_accept_rejects_overlapping_websocket_without_closing_active

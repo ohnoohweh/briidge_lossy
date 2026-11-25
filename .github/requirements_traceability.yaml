@@ -709,8 +709,10 @@ REQ-WSP-013:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_ws_peer_address_list
     - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_uses_literal_endpoint_with_logical_http_and_tls_name
     - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_empty_address_list_preserves_dns_resolution
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_reports_synchronous_open_failures_to_core_for_candidate_fallback
     - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_uses_ws_address_override_without_dns
     - tests/unit/test_ws_payload_mode.py::test_connect_peer_address_override_keeps_logical_host_for_uri_tls_and_http
+    - tests/unit/test_ws_payload_mode.py::test_initial_failed_address_override_advances_before_reconnect
     - tests/unit/test_ws_payload_mode.py::test_empty_peer_address_override_resolves_ws_peer_as_before
     - tests/unit/test_ws_payload_mode.py::test_peer_address_override_rejects_dns_names
 

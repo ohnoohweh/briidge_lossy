@@ -1735,6 +1735,18 @@ def test_swift_websocket_reconnect_resets_tun_state_before_transport_generation(
     )
 
 
+def test_swift_websocket_synchronous_open_failure_uses_core_candidate_fallback() -> None:
+    ws_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    connect_overlay = ws_owner[
+        ws_owner.index("    private func connectOverlay(coreCandidateIndex:") : ws_owner.index("    private func currentResolvedPeer")
+    ]
+
+    assert "overlayLayerTransportAdapter?.handleTransportDisconnected()" in connect_overlay
+    assert connect_overlay.index("overlayLayerTransportAdapter?.handleTransportDisconnected()") < connect_overlay.index(
+        "scheduleReconnect()"
+    )
+
+
 def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
     core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     backpressure = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayBackpressure.swift").read_text(encoding="utf-8")
