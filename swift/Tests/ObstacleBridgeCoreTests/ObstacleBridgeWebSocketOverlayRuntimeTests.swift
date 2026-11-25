@@ -242,4 +242,21 @@ struct ObstacleBridgeWebSocketOverlayRuntimeTests {
             + "User-Agent: ObstacleBridge-ws-proxy/1.0\r\n"
             + "Proxy-Authorization: Basic dXNlcjpwYXNz\r\n\r\n")
     }
+
+    @Test func webSocketConnectPlanAdvertisesConfiguredMaximumMessageSize() throws {
+        let runtime = try ObstacleBridgeWebSocketOverlayRuntime(payloadMode: "semi-text-shape", wsMaxSize: 123)
+        let plan = runtime.buildConnectPlan(
+            host: "192.0.2.44",
+            port: 8080,
+            peerNameHost: nil,
+            peerNamePort: nil,
+            useTLS: false,
+            wsPath: "/",
+            wsSubprotocol: nil,
+            proxyActive: false
+        )
+
+        #expect(plan.upgradeHeaders["X-ObstacleBridge-WS-Max-Size"] == "123")
+        #expect(plan.upgradeHeaders["X-ObstacleBridge-WS-Payload-Mode"] == "semi-text-shape")
+    }
 }

@@ -57,7 +57,7 @@ private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
                 let configuration = runtime.configuration
                 let lower = try ObstacleBridgeLinuxOverlayTransportClient(
                     host: host, port: configuration.port, transport: expectedTransport,
-                    wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode,
+                    wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode, wsMaxSize: configuration.webSocketMaxSize,
                     wsTLS: configuration.webSocketTLS, wsTrustRootsPath: configuration.webSocketTrustRootsPath,
                     wsProxy: configuration.webSocketProxy, quicALPN: configuration.quicALPN,
                     quicInsecure: configuration.quicInsecure, quicTrustRootsPath: configuration.quicTrustRootsPath,

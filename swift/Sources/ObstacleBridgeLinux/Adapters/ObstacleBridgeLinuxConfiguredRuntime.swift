@@ -603,7 +603,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
         try connect(sessionID: sessionID, clientNonce: clientNonce, admission: defaultAdmission) { [weak self, configuration] host in
             let lower = try ObstacleBridgeLinuxOverlayTransportClient(
                 host: host, port: configuration.port, transport: configuration.transport,
-                wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode,
+                wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode, wsMaxSize: configuration.webSocketMaxSize,
                 wsTLS: configuration.webSocketTLS, wsTrustRootsPath: configuration.webSocketTrustRootsPath,
                 wsProxy: configuration.webSocketProxy, quicALPN: configuration.quicALPN,
                 quicInsecure: configuration.quicInsecure, quicTrustRootsPath: configuration.quicTrustRootsPath,

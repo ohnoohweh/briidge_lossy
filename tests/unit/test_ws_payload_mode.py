@@ -638,8 +638,21 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         on_accept.assert_awaited_once_with(fake_ws)
         self.assertEqual(
             seen["additional_headers"],
-            {"X-ObstacleBridge-WS-Payload-Mode": "semi-text-shape"},
+            {
+                "X-ObstacleBridge-WS-Payload-Mode": "semi-text-shape",
+                "X-ObstacleBridge-WS-Max-Size": "65535",
+            },
         )
+
+    def test_listener_uses_advertised_maximum_per_peer_and_configured_fallback(self):
+        session = WebSocketSession(_args("binary"))
+
+        advertised = session._resolve_inbound_ws_max_size("123", "binary")
+        fallback = session._resolve_inbound_ws_max_size(None, "binary")
+
+        self.assertEqual(advertised, 123)
+        self.assertEqual(fallback, 65535)
+        self.assertEqual(session._resolve_inbound_ws_max_size("not-a-size", "binary"), fallback)
 
     async def test_connect_uses_encoded_frame_limit_for_text_payload_modes(self):
         for mode in ("base64", "json-base64", "semi-text-shape"):
@@ -684,6 +697,7 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
 
         peer_ws = _FakeWs()
         peer_ws.payload_mode = "base64"
+        peer_ws.frame_max_size = 123
         peer_ws.local_address = ("127.0.0.1", 8080)
         peer_ws.remote_address = ("127.0.0.1", 54321)
 
@@ -691,6 +705,7 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
 
         ctx = session._server_peers[1]
         self.assertEqual(ctx["payload_mode"], "base64")
+        self.assertEqual(ctx["ws_frame_max_size"], 123)
         self.assertEqual(session._decode_ws_message("AnBvbmc=", ctx=ctx), b"\x02pong")
 
         session._schedule_server_send(ctx, b"\x02pong")

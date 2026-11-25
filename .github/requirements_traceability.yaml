@@ -677,6 +677,9 @@ REQ-WSP-010:
     - tests/unit/test_ws_payload_mode.py::test_listener_peer_uses_advertised_payload_mode_for_rx_and_tx
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
     - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
+    - tests/unit/test_ws_payload_mode.py::test_listener_uses_advertised_maximum_per_peer_and_configured_fallback
+    - ios/tests/test_m3_native_sources.py::test_swift_websocket_clients_advertise_their_configured_message_limit
+    - ios/tests/test_m3_native_sources.py::test_swift_tls_websocket_listener_keeps_a_message_limit_per_connection
 
 REQ-WSP-011:
   integration_tests:
