@@ -573,6 +573,16 @@ def _http_json_body(writer: _WriterStub) -> dict:
 
 class AdminWebPayloadTests(unittest.TestCase):
 
+    def test_live_connections_tab_subscribes_to_connection_updates(self):
+        ui = AdminWebUI(argparse.Namespace(), _RunnerStub())
+
+        self.assertEqual(
+            ui._live_topics_for_control_message(
+                ["status", "connections"], ["connections"], {"status", "connections"}
+            ),
+            {"status", "connections"},
+        )
+
     def test_telemetry_tab_renders_client_and_collector_status(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
         index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")

@@ -957,6 +957,8 @@ ARC-CMP-005:
   # The private Admin-worker boundary returns that same envelope.
   # The shared live-status contract retains bounded runtime metrics on Python
   # and every Swift host, so a live update cannot clear Runtime Analysis rows.
+  # The UDP/TCP tab retains the connection topic so its live counters and idle
+  # durations refresh while that tab is active.
   # Linux-native myUDP uses nonblocking read readiness and a separately
   # scheduled Core timer after bootstrap; idle socket waits are not receive work,
   # while Core decode/dispatch is measured per DATA, CONTROL, or IDLE datagram.
@@ -989,6 +991,8 @@ ARC-CMP-005:
     - tests/unit/test_admin_worker.py::test_runner_selects_and_stops_admin_worker
     - tests/unit/test_admin_worker.py::test_admin_child_queries_python_logging_child
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebAdminLiveTopicPolicyTests.swift::tabsRestrictTopicsAndUnknownSubscriptionsAreRejected
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebAdminLiveTopicPolicyTests.swift::connectionsTabRetainsConnectionUpdates
+    - tests/unit/test_admin_web_payloads.py::test_live_connections_tab_subscribes_to_connection_updates
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     # Telemetry navigation is omitted without an enabled client or collector;
     # each role's card is independently conditional.
