@@ -10,6 +10,7 @@ from .bridge_transport_common import (
     _bind_family_constraint,
     _family_preference_rank,
     _listener_family_for_host,
+    _order_candidates_for_current_network,
     _peer_resolve_mode,
     _resolve_peer_candidates,
     _resolve_cli_peer,
@@ -1984,6 +1985,13 @@ class UdpSession(ISession):
         self._peer_candidate_cycle: int = 0
         self._peer_candidate_fallback_task: Optional[asyncio.Task] = None
         self._socket_rebuild_task: Optional[asyncio.Task] = None
+        self._peer_candidate_selected_at_ns: int = time.monotonic_ns()
+        # A candidate must receive at least two full idle-probe opportunities
+        # before it can be disqualified. ProtocolRuntime probes a connected
+        # peer after two seconds without RTT progress.
+        self._peer_candidate_idle_timeout_s = max(
+            4.0, float(getattr(args, "udp_peer_idle_timeout_s", 30.0) or 30.0)
+        )
 
         # Inner reliability/session engine remains the same one from base module.
         self.inner_session = MyUDP2Session(max_in_flight=args.max_inflight, proto=self._proto_state)
@@ -2034,6 +2042,14 @@ class UdpSession(ISession):
                 choices=['prefer-ipv6', 'ipv4', 'ipv6'],
                 default='prefer-ipv6',
                 help='Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.'
+            )
+        if not _has('--udp-peer-idle-timeout-s'):
+            p.add_argument(
+                '--udp-peer-idle-timeout-s',
+                dest='udp_peer_idle_timeout_s',
+                type=float,
+                default=30.0,
+                help='Seconds without a received UDP datagram before a multi-peer client rotates to its next peer candidate (minimum 4: two myUDP idle-probe intervals).'
             )
 
         # Session window
@@ -2351,7 +2367,7 @@ class UdpSession(ISession):
                 peer=peer,
                 peer_family=peer_family,
                 allow_ipv4_mapped_send=allow_ipv4_mapped_send,
-            ) and len(self._peer_candidates) > 1 and self._peer_candidate_fallback_task is None:
+            ) and self._peer_candidates and self._peer_candidate_fallback_task is None:
                 self._peer_candidate_fallback_task = self._loop.create_task(self._peer_candidate_fallback_loop())
             return
 
@@ -2851,7 +2867,7 @@ class UdpSession(ISession):
         for candidate in candidates:
             if candidate not in deduped:
                 deduped.append(candidate)
-        deduped.sort(key=lambda item: _family_preference_rank(item[2], resolve_mode))
+        deduped = _order_candidates_for_current_network(deduped, resolve_mode)
         bind_family = _bind_family_constraint(bind_host)
         if bind_family is not None:
             matching = [item for item in deduped if item[2] == bind_family]
@@ -2875,11 +2891,17 @@ class UdpSession(ISession):
         old_peer = self._peer_candidates[self._peer_candidate_index]
         new_peer = self._peer_candidates[next_index]
         self._peer_candidate_index = next_index
+        self._peer_candidate_selected_at_ns = time.monotonic_ns()
         self._log.warning(
-            "[UDP/SESSION] no liveness on current peer %r, rotating to %r",
+            "[UDP/SESSION] no received UDP datagram for %.1fs on current peer %r, rotating to %r",
+            self._peer_candidate_idle_timeout_s,
             old_peer[:2],
             new_peer[:2],
         )
+        if old_peer != new_peer:
+            recorder = getattr(self.inner_session, "record_udp_peer_endpoint_change", None)
+            if callable(recorder):
+                recorder()
         self.inner_session.reset_transport_epoch()
         with contextlib.suppress(Exception):
             self._proto_state.rtt_est_ms = 0.0
@@ -2937,19 +2959,8 @@ class UdpSession(ISession):
         current = None
         if self._proto is not None and getattr(self._proto, "send_port", None) is not None:
             current = self._proto.send_port.peer_addr
-        resolve_mode = _peer_resolve_mode(self._args, "udp_peer_resolve_family").strip().lower()
-        current_family = None
-        with contextlib.suppress(Exception):
-            current_family = self._peer_candidates[self._peer_candidate_index][2]
-        if resolve_mode == "prefer-ipv6" and current_family == socket.AF_INET6:
-            self._log.warning(
-                "[UDP/SESSION] peer send error err=%r current_peer=%r retaining preferred IPv6 candidate until liveness fallback",
-                err,
-                current,
-            )
-            return
         self._log.warning(
-            "[UDP/SESSION] peer send error err=%r current_peer=%r attempting immediate fallback",
+            "[UDP/SESSION] peer send error err=%r current_peer=%r marking current candidate unavailable and attempting immediate fallback",
             err,
             current,
         )
@@ -2957,12 +2968,15 @@ class UdpSession(ISession):
 
     async def _peer_candidate_fallback_loop(self) -> None:
         try:
-            while not self._listener_mode and len(self._peer_candidates) > 1:
-                await asyncio.sleep(3.0)
-                if self.is_connected():
-                    return
-                if getattr(self._proto_state, "last_rtt_ok_ns", 0):
-                    return
+            while not self._listener_mode and self._peer_candidates:
+                now_ns = time.monotonic_ns()
+                last_rx_ns = int(getattr(self._proto_state, "_last_rx_wall_ns", 0) or 0)
+                idle_anchor_ns = max(self._peer_candidate_selected_at_ns, last_rx_ns)
+                idle_timeout_ns = int(self._peer_candidate_idle_timeout_s * 1_000_000_000)
+                remaining_ns = idle_timeout_ns - max(0, now_ns - idle_anchor_ns)
+                if remaining_ns > 0:
+                    await asyncio.sleep(min(1.0, remaining_ns / 1_000_000_000))
+                    continue
                 if not self._rotate_to_next_peer_candidate():
                     return
         except asyncio.CancelledError:

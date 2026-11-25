@@ -252,15 +252,24 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "private let peerTrafficRateLock = NSLock()" in provider
     assert "private var peerTrafficRateState:" in provider
     assert "peerTrafficRateLock.lock()" in provider
-    assert "private var secureLinkConnectedSinceUnixTS:" in provider
+    assert "private var transportConnectedSinceUnixTS:" in provider
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ipserver_packet_tunnel_provider_source_exists" in provider
     assert '"rx_bytes_per_sec": rxRate' in provider
-    assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS)' in provider
+    assert "transportConnected: protocolConnected" in provider
+    assert "if let transportConnected" in provider
+    assert "if previousSessionID != snapshot.sessionID ||" not in provider
+    assert '"connected_since_unix_ts": transportConnectedSinceUnixTS ?? NSNull()' in provider
     assert '"rekey_supported": snapshot.rekeySupported' in provider
     assert '"rekey_in_progress": snapshot.rekeyInProgress' in provider
     assert '"last_event": snapshot.lastEvent' in provider
     assert '"last_event_unix_ts": snapshot.lastEventUnixTs ?? NSNull()' in provider
     assert '"authenticated_sessions_total": snapshot.authenticatedSessionsTotal' in provider
     assert '"rekeys_completed_total": snapshot.rekeysCompletedTotal' in provider
+    assert '"authenticated_session_total": snapshot.authenticatedSessionsTotal' in provider
+    assert '"secure_link_rekey_total": snapshot.rekeysCompletedTotal' in provider
+    assert '"transport_disconnect_total": transportRuntime["transport_disconnect_total"] ?? 0' in provider
+    assert '"udp_peer_endpoint_change_total": transportRuntime["udp_peer_endpoint_change_total"] ?? 0' in provider
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue" in udp_owner
     assert '"last_rekey_trigger": snapshot.lastRekeyTrigger' in provider
     assert '"trust_validation_state": snapshot.trustValidationState' in provider
     assert '"disconnect_reason": snapshot.disconnectReason' in provider
@@ -904,6 +913,8 @@ def test_proxy_server_source_exists() -> None:
     assert '"last_event_unix_ts": snapshot.lastEventUnixTs ?? NSNull()' in host_runner
     assert '"authenticated_sessions_total": snapshot.authenticatedSessionsTotal' in host_runner
     assert '"rekeys_completed_total": snapshot.rekeysCompletedTotal' in host_runner
+    assert '"authenticated_session_total": snapshot.authenticatedSessionsTotal' in host_runner
+    assert '"secure_link_rekey_total": snapshot.rekeysCompletedTotal' in host_runner
     assert '"last_rekey_trigger": snapshot.lastRekeyTrigger' in host_runner
     assert '"trust_validation_state": snapshot.trustValidationState' in host_runner
     assert '"disconnect_reason": snapshot.disconnectReason' in host_runner
@@ -1678,16 +1689,20 @@ def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
     owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(" in owner
 
-    assert "private func rebuildSocketForPeerRotation() -> Bool" in owner
+    assert "private func rebuildSocketForPeerRotation(installReceiveSource: Bool = true) -> Bool" in owner
     assert "Darwin.close(socketFD)" in owner
     assert "installReadSource()" in owner
     assert "udp_overlay_socket_rebuilt" in owner
-    assert "guard rebuildSocketForPeerRotation() else" in owner
+    assert "guard rebuildSocketForPeerRotation(installReceiveSource: false) else" in owner
     # A peer that completed its initial handshake must still rotate after a
     # later receive outage; anchoring only at selection time permanently
     # suppresses that recovery path.
     assert "let idleAnchorNS = max(currentPeerSelectedAtNS, lastInboundDatagramNS)" in owner
-    assert "nowNS - idleAnchorNS < Self.peerFallbackIdleNS" in owner
+    assert "nowNS - idleAnchorNS < peerIdleTimeoutNS" in owner
+    assert "overlayLayerTransportAdapter.handleTransportDisconnected()" in owner
+    assert "Core owns candidate rotation for the shared Apple runtime" in owner
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_shared_udp_retry_policy_remains_nonterminal" in owner
+    assert "candidatesUsableOnCurrentNetwork" in owner
     assert 'snapshot["tun_mux_frame_counters"] = tunMuxFrameCounters' in owner
     assert 'snapshot["shared_tun"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? [:]' in owner
     assert 'tunMuxFrameCounters["data_delivered", default: 0] += 1' in owner
@@ -2031,6 +2046,10 @@ def test_native_proxy_connections_keep_callbacks_on_owner_queue() -> None:
     assert "maximumItems: Int = 128, maximumBytes: Int = 2 * 1_024 * 1_024" in source
     assert "private lazy var localSender = ObstacleBridgeBoundedConnectionDataSender" in source
     assert "private lazy var remoteSender = ObstacleBridgeBoundedConnectionDataSender" in source
+    assert source.count("private var lastRXActivityNS: UInt64 = 0") == 2
+    assert source.count("private var lastTXActivityNS: UInt64 = 0") == 2
+    assert source.count("rxIdleSeconds: idleSeconds(since: lastRXActivityNS)") == 2
+    assert source.count("txIdleSeconds: idleSeconds(since: lastTXActivityNS)") == 2
 
 
 def test_web_admin_server_callbacks_keep_owner_queue() -> None:

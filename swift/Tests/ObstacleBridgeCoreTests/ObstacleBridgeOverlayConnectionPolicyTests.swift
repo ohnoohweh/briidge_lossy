@@ -58,10 +58,17 @@ struct ObstacleBridgeOverlayConnectionPolicyTests {
         ObstacleBridgeOverlayConnectionSupport.recordTraffic(
             states: &states, proto: "tcp", chanID: 7, direction: "inbound", bytes: 12
         )
+        ObstacleBridgeOverlayConnectionSupport.recordTraffic(
+            states: &states, proto: "tcp", chanID: 7, direction: "outbound", bytes: 8
+        )
         let row = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: states)[0]
         #expect(row["state"] as? String == "connected")
         #expect(row["chan_id"] as? Int == 7)
         #expect((row["stats"] as? [String: Int])?["rx_bytes"] == 12)
+        #expect((row["rx_idle_seconds"] as? Double ?? -1) >= 0)
+        #expect((row["tx_idle_seconds"] as? Double ?? -1) >= 0)
+        #expect(row["last_rx_activity_ns"] == nil)
+        #expect(row["last_tx_activity_ns"] == nil)
         #expect((row["local"] as? [String: Any])?["host"] as? String == "10.0.0.2")
     }
 }

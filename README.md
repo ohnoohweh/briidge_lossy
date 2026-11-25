@@ -583,6 +583,7 @@ The tables below are generated from the current parser registrations in `bridge.
 | `--udp-own-port` | `4433` | UDP overlay own port |
 | `--udp-peer` | `None` | peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets]) |
 | `--udp-peer-port` | `443` | peer overlay port |
+| `--udp-peer-idle-timeout-s` | `30.0` | Seconds without a received UDP datagram before client socket recreation or peer-candidate advance; values below two 2-second idle-probe intervals clamp to 4 seconds. |
 | `--peer-resolve-family` | `prefer-ipv6` | Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only. |
 | `--max-inflight` | `32767` | max DATA frames allowed in flight (1..32767). Excess frames are queued. |
 
@@ -660,8 +661,8 @@ Current websocket payload forms:
 | `--mux-tcp-bp-latency-ms` | `300` | Mux TCP: if > 0, drain writers after this ms when bytes pending. |
 | `--mux-tcp-bp-poll-interval-ms` | `50` | Mux TCP: polling interval for time-based backpressure (ms). |
 | `--mux-tcp-connect-timeout-s` | `60` | Mux TCP: local target connection timeout in seconds. `0` disables it. |
-| `--mux-tcp-read-timeout-s` | `60` | Mux TCP: maximum time between reads from a local TCP endpoint. `0` disables it. |
-| `--mux-tcp-send-timeout-s` | `60` | Mux TCP: maximum time a local TCP write may remain blocked in `drain()`. `0` disables it. |
+| `--mux-tcp-read-timeout-s` | `0` | Mux TCP: maximum time between reads from a local TCP endpoint. Disabled by default; set a positive value only when an appropriate deployment-specific bound is known. |
+| `--mux-tcp-send-timeout-s` | `0` | Mux TCP: maximum time a local TCP write may remain blocked in `drain()`. Disabled by default; set a positive value only when an appropriate deployment-specific bound is known. |
 
 On a shared listener, a TCP ChannelMux wire channel belongs to the authenticated
 peer that opened it. The Python runtime keeps that peer identity in its local
@@ -1135,7 +1136,7 @@ What the admin web shows:
 - Python and native Linux `myudp` peer diagnostics include the myUDP2 stream-record, chunk, batch, and queue budgets plus live batch/chunk/stream-byte totals, queue age, retransmitted-chunk, malformed-batch, malformed-stream, and frames-to/from-SecureLink counters. The native counter advances at the shared myUDP/SecureLink framing boundary for handshake, rekey, and protected application frames, independent of application-payload delivery. Peer ChannelMux RX/TX bytes and messages are separately aggregated from the owned service connection rows, not inferred from SecureLink frames. SecureLink separately reports passed client-to-server and server-to-client frames plus client-originated drops; passed totals cover protected handshake/control as well as application frames that cross the boundary. Swift myUDP2 parity remains a release prerequisite.
 - Transport State, Protocol Status, and layer Reported Status pills use green for connected and red for disconnected, keeping transitions distinct from definitive connection state.
 - Accepted listener peers retain their peer-local transport metrics while their SecureLink and compression pills use that peer’s authenticated wrapper state.
-- UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, requested remote TCP/UDP listeners, remote endpoints, and per-channel byte/message counters.
+- UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, requested remote TCP/UDP listeners, remote endpoints, and per-channel byte/message counters. Active UDP/TCP rows also show RX Idle and TX Idle as elapsed durations since the last matching local service activity; no activity timestamp is exposed.
 - The dedicated TUN / Routing view renders one row for each physical shared TUN interface with binding-derived overall RX/TX, followed by one row per configured ownership peer with bound/not-bound state, protocol-qualified connection ID, learned addresses, and binding-specific RX/TX counters. The tab is enabled by the versioned Core-owned `/api/tun-routing/status` capability rather than a product-specific configuration switch, so Linux, macOS, and iOS expose the same Admin API and page behavior. A process-wide shared binding identity keeps same-number peers from independent WS and myUDP listener muxes distinct, while the TUN page resolves it back to the true binding transport and connection id; its stable reader owner is activated before the first authenticated shared binding is published, so reverse traffic does not depend on whether a Swift or Python peer connects first. Disconnect and peer-scoped TUN-close cleanup remove closed bindings and channel aliases from every shared-device holder, and counters remain consistent when an in-process virtual-peer mux receives traffic while the shared-device reader-owner observes the device, alongside interface-facing ChannelMux flow counters, shared-drop totals, per-reason drop summaries, recent drop context, helper lifecycle phase, and runtime warnings such as a TUN device that exists but is missing its expected configured tunnel address, so TUN-path failures can be distinguished from healthy overlay transport state. Low-level ICMP/probe/reply counters remain available in a closed Technical details section at the bottom of the page.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
 - A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
@@ -1421,7 +1422,7 @@ What to look for in WebAdmin first:
 - peer cards show connection uptime, and myudp-specific protocol statistics remain visible only when the peer is actually using the myudp transport
 - when `secure_link.mode=cert`, WebAdmin also shows peer identity and trust details such as subject id/name, roles, deployment id, serial, issuer, trust-anchor id, and trust-validation status
 - when rekeying is enabled, the peer block can briefly show `rekey_in_progress=true` while the session rotates to a fresh `secure_link.session_id`
-- on healthy authenticated runs, the peer block exposes `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, `rekeys_completed_total`, and `last_rekey_trigger`
+- on healthy authenticated runs, the peer block exposes `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_session_total`, `secure_link_rekey_total`, `transport_disconnect_total`, `udp_peer_endpoint_change_total`, and `last_rekey_trigger`; the earlier plural counter names remain compatibility aliases
 - operators can force rekey on an authenticated client-side secure-link session from the peer security block in WebAdmin
 
 API fallback for details not fully surfaced in WebAdmin yet:
@@ -1666,9 +1667,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `81` | `1187` |
-| macOS Swift app | `1` | `93` |
-| iOS app/extension | `31` | `233` |
+| Python CLI/runtime, including macOS Python | `81` | `1214` |
+| macOS Swift app | `1` | `94` |
+| iOS app/extension | `31` | `237` |
 
 #### Requirement traceability
 
@@ -1710,9 +1711,9 @@ Desktop-only process ownership is reviewed across macOS and Linux; iOS extension
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `93` | `0` | `93` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `34` | `34` |
-| Total parity-oriented evidence | Sum of the lanes above | `105` | `154` | `259` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `94` | `0` | `94` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `35` | `35` |
+| Total parity-oriented evidence | Sum of the lanes above | `106` | `155` | `261` |
 
 Important caveat:
 
@@ -1848,7 +1849,7 @@ pass over its bounded aggregate set.
 - Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
 - Keep the throttled TCP-overlay fairness case in that flow: four synchronized 100 kB downloads sharing one 10 kB/s relay must expose any channel that monopolizes the aggregate path; the shared Python/Swift persistent per-source round robin schedules every TCP, UDP, TUN, and control mux record.
 - Keep Python TCP, QUIC, and WebSocket reconnect cleanup covered through stopped-event-loop teardown so supervisor restarts do not emit secondary coroutine-close exceptions.
-- Keep UDP multi-peer resolution coverage aligned with dual-stack behavior, including `prefer-ipv6` retention across immediate send errors and IPv4 fallback through IPv4-mapped sends when the active socket is IPv6.
+- Keep UDP multi-peer resolution coverage aligned with dual-stack behavior: `prefer-ipv6` selects IPv6 only with a global IPv6 source when IPv4 is also available, otherwise starts on IPv4; immediate route/address errors also advance to IPv4, while IPv4-mapped sends remain supported on IPv6 sockets.
 - Keep the Python and Swift `prefer-ipv6` peer-resolution contract pinned for native IPv4 literals: resolution should keep the IPv4 host identity intact, while IPv4-mapped notation is reserved for IPv6 socket send compatibility.
 - Keep reconnect waits aligned with expected process self-restarts, so a freshly relaunched peer gets a bounded chance to reconnect before the integration harness reports failure. Linux native foreground restart records its actor-owned restart request before signalling shutdown and consumes it once before relaunch or exit.
 - Keep secure-link multi-peer listener probes gated on authenticated peer state before expecting client-published services to accept traffic.

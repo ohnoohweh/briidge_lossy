@@ -34,6 +34,8 @@ REQ-OVL-001:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::canonicalJSONIsSharedByAdminAndServiceCatalogOwners
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxChannelIDAllocationTests.swift::splitsMaximumMyUDPRecordAtTheChannelMuxWireBoundary
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_bidirectional_sessions_deliver_independent_payloads
+    - tests/unit/test_peer_resolution.py::test_udp_peer_idle_timeout_defaults_to_30_seconds_and_accepts_override
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_udp_candidate_fallback_uses_the_shared_30_second_receive_idle_timeout
 
 REQ-RUN-001:
   unit_tests:
@@ -121,14 +123,16 @@ REQ-OVL-007:
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_rotates_to_next_peer_candidate_after_idle_timeout
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_wraps_peer_rotation_after_repeated_idle_timeout
-    - tests/unit/test_peer_resolution.py::test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error
+    - tests/unit/test_peer_resolution.py::test_udp_session_prefer_ipv6_advances_to_ipv4_on_immediate_send_error
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayCoordinatorTests.swift::unreachablePreferredCandidateAdvancesToFallbackBeforeAnyRetryExhaustion
     - tests/unit/test_peer_resolution.py::test_send_port_prefer_ipv6_allows_ipv4_mapped_destination_on_ipv6_socket
     - tests/unit/test_peer_resolution.py::test_resolve_prefer_ipv6_keeps_native_ipv4_literal_until_ipv6_socket_send_mapping
     - ios/tests/test_macos_swift_host_runner.py::test_swift_peer_resolution_prefer_ipv6_keeps_ipv4_literal_native_until_socket_normalization
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv4_uses_loopback_fallback_on_gaierror
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv6_uses_loopback_fallback_on_gaierror
     - tests/unit/test_ws_payload_mode.py::test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight
-    - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
+    - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv4_without_a_global_ipv6_source
+    - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_with_a_global_ipv6_source
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePeerAddressPolicyTests.swift::parsesConfiguredHostsAndNormalizesLiterals
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePeerAddressPolicyTests.swift::ordersAndFiltersCandidatesWithoutSocketTypes
@@ -329,7 +333,7 @@ REQ-MUX-005:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
     - tests/unit/test_channel_mux_listener_mode.py::test_concurrent_tcp_listener_starts_are_single_flight
-    - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
+    - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_handoff_replaces_stale_owner_for_same_listener_endpoint
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_mux_data_after_transport_delay_threshold
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_does_not_throttle_ingress_for_buffer_pressure
 
@@ -1374,6 +1378,8 @@ REQ-MUX-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkCarriesChannelMuxFrameAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::tcpListenerPublishesOpenAndDataFrames
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxChannelIDAllocationTests.swift::partitionsPeerAndListenerIDsAcrossIndependentOwners
+    - tests/unit/test_peer_resolution.py::test_mux_tcp_read_and_send_timeouts_default_to_disabled
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeConfigPolicyTests.swift::disablesMuxTCPReadAndSendTimeoutsByDefault
 
 REQ-MUX-002:
   integration_tests:
@@ -1391,7 +1397,7 @@ REQ-MUX-003:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_concurrent_tcp_listener_starts_are_single_flight
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_same_channel_id_routes_to_its_destination_peer
-    - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
+    - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_handoff_replaces_stale_owner_for_same_listener_endpoint
     - tests/unit/test_channel_mux_listener_mode.py::test_local_udp_datagram_emits_debug_level_direction_diagnostic
     - tests/unit/test_channel_mux_listener_mode.py::test_overlay_udp_to_target_emits_debug_level_direction_diagnostic
     - tests/unit/test_ws_multi_peer.py::test_inbound_mux_rewrite_allocates_distinct_server_channels_per_peer
@@ -1453,7 +1459,7 @@ REQ-MUX-007:
     - tests/unit/test_channel_mux_listener_mode.py::test_receiver_starts_udp_and_tcp_listeners_from_remote_catalog
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_open_uses_pending_peer_listener_before_async_catalog_start
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_device_keeps_symmetric_channel_aliases_routable
-    - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
+    - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_handoff_replaces_stale_owner_for_same_listener_endpoint
 
 REQ-MUX-008:
   # The WS SecureLink integration assertion uses peer byte counters because
@@ -2044,13 +2050,16 @@ REQ-ADM-006:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::peerTrafficRatesAndOpenCountsUseTheCoreConnectionContract
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunProbeDiagnosticsPolicyTests.swift::buildsPortableProbeCountersAndResultProjection
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebAdminLiveTopicPolicyTests.swift::tabsRestrictTopicsAndUnknownSubscriptionsAreRejected
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebAdminLiveTopicPolicyTests.swift::connectionsTabRetainsConnectionUpdates
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayConnectionPolicyTests.swift::projectsAndUpdatesConnectionState
+    - tests/unit/test_connection_snapshots.py::test_udp_and_tcp_rows_expose_directional_idle_durations_without_timestamps
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv4_without_delivering_control_frames
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv6_without_delivering_control_frames
     - tests/unit/test_peer_address_protocol.py::test_server_normalizes_ipv4_mapped_ipv6_to_ipv4
     - tests/unit/test_peer_address_protocol.py::test_transparent_wrapper_delegates_required_session_methods
     - ios/tests/test_ios_peer_address_protocol.py::test_ios_peer_address_protocol_reflects_ipv4_and_ipv6_without_delivering_control
     - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
+    - tests/unit/test_admin_web_payloads.py::test_live_connections_tab_subscribes_to_connection_updates
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
     - tests/unit/test_connection_snapshots.py::test_tcp_client_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_connection_snapshots.py::test_tcp_server_snapshot_includes_last_incoming_age_seconds

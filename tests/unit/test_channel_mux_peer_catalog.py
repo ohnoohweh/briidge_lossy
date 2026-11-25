@@ -25,7 +25,7 @@ class _FakeSession:
 
 
 class ChannelMuxPeerCatalogTests(unittest.IsolatedAsyncioTestCase):
-    async def test_peer_catalog_state_is_scoped_by_peer_id(self):
+    async def test_peer_catalog_handoff_replaces_stale_owner_for_same_listener_endpoint(self):
         session = _FakeSession()
         mux = ChannelMux(session, asyncio.get_running_loop())
         svc = ChannelMux.ServiceSpec(
@@ -41,7 +41,9 @@ class ChannelMuxPeerCatalogTests(unittest.IsolatedAsyncioTestCase):
         await mux._apply_peer_installed_services([svc], peer_id=11)
         await mux._apply_peer_installed_services([svc], peer_id=22)
 
-        self.assertIn(("peer", 11, 1), mux._peer_installed_services)
+        # A listener endpoint is process-owned, not peer-owned.  The second
+        # authenticated catalog takes it only after the stale owner closes.
+        self.assertNotIn(("peer", 11, 1), mux._peer_installed_services)
         self.assertIn(("peer", 22, 1), mux._peer_installed_services)
 
         await mux._drop_peer_installed_services(peer_id=11)

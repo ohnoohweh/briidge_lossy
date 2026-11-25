@@ -124,6 +124,8 @@ Legend:
 | `/api/peers[].secure_link.last_authenticated_unix_ts` | live | live | live |
 | `/api/peers[].secure_link.authenticated_sessions_total` | static `1/0` from current auth state | static `1/0` from current auth state | live counter |
 | `/api/peers[].secure_link.rekeys_completed_total` | static `0` | static `0` | live counter |
+| `/api/peers[].secure_link.{authenticated_session_total,secure_link_rekey_total,transport_disconnect_total,udp_peer_endpoint_change_total}` | live | live | live |
+| `/api/status.transport_runtime.myudp_disconnect_reason` | payload-free iOS myUDP loss record | payload-free macOS myUDP loss record | n/a |
 | `/api/peers[].secure_link.last_rekey_trigger` | missing | missing | live |
 | `/api/peers[].secure_link.frames_passed_total` | live after the Swift counter-parity fix; stale builds may still report static `0` | live after the Swift counter-parity fix | live |
 | `/api/peers[].secure_link.frames_dropped_total` | live after the Swift counter-parity fix; stale builds may still report static `0` | live after the Swift counter-parity fix | live |

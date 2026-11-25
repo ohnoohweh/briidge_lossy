@@ -19,6 +19,7 @@ enum ObstacleBridgeWebAdminLiveTopicPolicy {
                 return text.isEmpty ? nil : text
             })
             if tabs.contains("status") { next.formUnion(["connections", "peers"]) }
+            if tabs.contains("connections") { next.insert("connections") }
             if tabs.contains("tun-routing") { next.insert("tun_routing") }
             if tabs.contains("misc") { next.insert("meta") }
             topics = next

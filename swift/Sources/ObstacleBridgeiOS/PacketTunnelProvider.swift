@@ -124,7 +124,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     /// traffic rates, so serialize access to the rate-history state.
     private let peerTrafficRateLock = NSLock()
     private var peerTrafficRateState: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)?
-    private var secureLinkConnectedSinceUnixTS: Int?
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ipserver_packet_tunnel_provider_source_exists
+    // Peer connection uptime belongs to the lower transport, not a
+    // SecureLink generation. Rekeying intentionally changes the latter.
+    private var transportConnectedSinceUnixTS: Int?
     private var secureLinkLastAuthenticatedUnixTS: Int?
     private var secureLinkLastSessionID: UInt64 = 0
     private let adminSnapshotRefreshQueue = DispatchQueue(label: "PacketTunnelProvider.AdminSnapshotRefresh", qos: .utility)
@@ -2099,7 +2102,11 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "traffic": traffic,
             "open_connections": openConnections,
             "connection_layers": connectionLayers,
-            "secure_link": adminSecureLinkSnapshot(state: state),
+            "secure_link": adminSecureLinkSnapshot(
+                state: state,
+                transportRuntime: transportRuntime,
+                transportConnected: protocolConnected
+            ),
             "compress_layer": adminCompressLayerSnapshot() ?? NSNull(),
             "throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections),
             "runtime": transportRuntime,
@@ -3032,11 +3039,17 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         ]
     }
 
-    private func adminSecureLinkSnapshot(state: String) -> [String: Any] {
+    private func adminSecureLinkSnapshot(
+        state: String,
+        transportRuntime: [String: Any] = [:],
+        transportConnected: Bool? = nil
+    ) -> [String: Any] {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ipserver_packet_tunnel_provider_source_exists
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_runtime_status_projects_shared_runtime_metrics
         let enabled = ObstacleBridgeRuntimeConfig.boolValue(from: adminRuntimeConfigPayload()?["secure_link"]) ?? false
         let mode = ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["secure_link_mode"]) ?? "off"
         guard enabled, let adapter = sharedSecureLinkPskTransportAdapter else {
-            secureLinkConnectedSinceUnixTS = nil
+            transportConnectedSinceUnixTS = nil
             secureLinkLastAuthenticatedUnixTS = nil
             secureLinkLastSessionID = 0
             return [
@@ -3053,6 +3066,10 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "connected_since_unix_ts": NSNull(),
                 "authenticated_sessions_total": 0,
                 "rekeys_completed_total": 0,
+                "authenticated_session_total": 0,
+                "secure_link_rekey_total": 0,
+                "transport_disconnect_total": transportRuntime["transport_disconnect_total"] ?? 0,
+                "udp_peer_endpoint_change_total": transportRuntime["udp_peer_endpoint_change_total"] ?? 0,
                 "handshake_attempts_total": 0,
                 "consecutive_failures": 0,
                 "retry_backoff_sec": 0.0,
@@ -3084,12 +3101,20 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let nowUnixTS = Int(Date().timeIntervalSince1970)
         let displayAuthenticated = snapshot.peerConfirmedAuthenticated
         let previousSessionID = secureLinkLastSessionID
+        if let transportConnected {
+            if transportConnected {
+                if transportConnectedSinceUnixTS == nil {
+                    transportConnectedSinceUnixTS = nowUnixTS
+                }
+            } else {
+                transportConnectedSinceUnixTS = nil
+            }
+        }
         if snapshot.sessionID == 0 {
-            secureLinkConnectedSinceUnixTS = nil
             secureLinkLastSessionID = 0
         } else {
-            if previousSessionID != snapshot.sessionID || secureLinkConnectedSinceUnixTS == nil {
-                secureLinkConnectedSinceUnixTS = nowUnixTS
+            if transportConnectedSinceUnixTS == nil {
+                transportConnectedSinceUnixTS = nowUnixTS
             }
             secureLinkLastSessionID = snapshot.sessionID
         }
@@ -3124,9 +3149,13 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "last_event": snapshot.lastEvent,
             "last_event_unix_ts": snapshot.lastEventUnixTs ?? NSNull(),
             "last_authenticated_unix_ts": displayAuthenticated ? (secureLinkLastAuthenticatedUnixTS ?? nowUnixTS) : NSNull(),
-            "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS),
+            "connected_since_unix_ts": transportConnectedSinceUnixTS ?? NSNull(),
             "authenticated_sessions_total": snapshot.authenticatedSessionsTotal,
             "rekeys_completed_total": snapshot.rekeysCompletedTotal,
+            "authenticated_session_total": snapshot.authenticatedSessionsTotal,
+            "secure_link_rekey_total": snapshot.rekeysCompletedTotal,
+            "transport_disconnect_total": transportRuntime["transport_disconnect_total"] ?? 0,
+            "udp_peer_endpoint_change_total": transportRuntime["udp_peer_endpoint_change_total"] ?? 0,
             "handshake_attempts_total": snapshot.handshakeAttemptsTotal,
             "consecutive_failures": snapshot.consecutiveFailures,
             "retry_backoff_sec": snapshot.retryBackoffSec,
@@ -3422,7 +3451,6 @@ private struct SwiftSimpleUDPPeerSettings {
 // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_strict_concurrency_build_requires_zero_diagnostics
 private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
     private static let queueKey = DispatchSpecificKey<UInt8>()
-    private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
     private static let tunProbeIdentifier: UInt16 = UInt16.random(in: 1...UInt16.max)
     // A socket can remain readable indefinitely under sustained traffic.  The
     // packet-device API takes an owned `[Data]`, so draining until EAGAIN would
@@ -3463,6 +3491,11 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
     private var bytesToSystem = 0
     private var readBatches = 0
     private var writeBatches = 0
+
+    private var peerFallbackIdleNS: UInt64 {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects
+        UInt64(max(4.0, ObstacleBridgeRuntimeConfig.doubleValue(from: settings.runtimeConfig["udp_peer_idle_timeout_s"]) ?? 30.0) * 1_000_000_000)
+    }
 
     /// High-rate native transport events are opt-in. Returning `nil` means
     /// the transport owner never constructs per-frame diagnostic fields.
@@ -3682,6 +3715,8 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
                     peerHost: settings.peerHost,
                     peerPort: settings.peerPort,
                     peerResolveFamily: settings.peerResolveFamily,
+                    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects
+                    peerIdleTimeoutSeconds: max(4.0, ObstacleBridgeRuntimeConfig.doubleValue(from: settings.runtimeConfig["udp_peer_idle_timeout_s"]) ?? 30.0),
                     sessionMaxAppPayload: sessionMaxAppPayload,
                     maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: settings.runtimeConfig),
                     overlayLayerTransportAdapter: overlayLayerTransportAdapter,
@@ -4572,11 +4607,9 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
             return
         }
         let nowNS = monotonicNowNS()
-        guard lastInboundDatagramNS == 0 || lastInboundDatagramNS < currentPeerSelectedAtNS else {
-            return
-        }
-        guard nowNS >= currentPeerSelectedAtNS,
-              nowNS - currentPeerSelectedAtNS >= Self.peerFallbackIdleNS
+        let idleAnchorNS = max(currentPeerSelectedAtNS, lastInboundDatagramNS)
+        guard nowNS >= idleAnchorNS,
+              nowNS - idleAnchorNS >= peerFallbackIdleNS
         else {
             return
         }
@@ -4931,18 +4964,17 @@ private final class SwiftSimpleUDPPeerBridge: @unchecked Sendable {
         peerPort: Int,
         peerResolveFamily: String
     ) throws -> (socketFamily: Int32, peerCandidates: [ResolvedAddress], peerAddress: ResolvedAddress) {
-        let resolvedCandidates = try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_swift_peer_resolution_maps_ipv4_fallback_on_ipv6_socket_like_python
+        let resolvedCandidates = ObstacleBridgePeerAddressResolver.candidatesUsableOnCurrentNetwork(try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
             host: peerHost,
             port: peerPort,
             resolveFamily: peerResolveFamily,
             bindHost: bindHost,
             errorDomain: "ObstacleBridge.IPServer"
-        )
+        ), resolveFamily: peerResolveFamily)
         let socketFamily: Int32
         if let bindFamily = ObstacleBridgePeerAddressResolver.bindFamilyConstraint(bindHost) {
             socketFamily = bindFamily
-        } else if resolvedCandidates.contains(where: { $0.family == AF_INET6 }) {
-            socketFamily = AF_INET6
         } else {
             socketFamily = resolvedCandidates[0].family
         }

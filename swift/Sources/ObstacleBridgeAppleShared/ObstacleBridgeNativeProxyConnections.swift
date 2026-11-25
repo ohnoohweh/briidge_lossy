@@ -70,7 +70,7 @@ public enum ObstacleBridgeProxyStatusProjection {
 /// Both Network connections are started on the injected proxy-owner queue;
 /// all mutable proxy state is accessed only by callbacks on that queue.
 final class ObstacleBridgeTCPProxyConnection: @unchecked Sendable {
-    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_native_proxy_connections_keep_callbacks_on_owner_queue; idle activity remains queue-owned
     private let chanID: Int
     private let spec: ObstacleBridgeNativeServiceSpec
     private let listenerHost: String
@@ -95,6 +95,8 @@ final class ObstacleBridgeTCPProxyConnection: @unchecked Sendable {
         "rx_bytes": 0,
         "tx_bytes": 0,
     ]
+    private var lastRXActivityNS: UInt64 = 0
+    private var lastTXActivityNS: UInt64 = 0
 
     init(
         chanID: Int,
@@ -159,8 +161,15 @@ final class ObstacleBridgeTCPProxyConnection: @unchecked Sendable {
             localPort: listenerPort,
             remoteHost: spec.targetHost,
             remotePort: spec.targetPort,
-            stats: stats
+            stats: stats,
+            rxIdleSeconds: idleSeconds(since: lastRXActivityNS),
+            txIdleSeconds: idleSeconds(since: lastTXActivityNS)
         )
+    }
+
+    private func idleSeconds(since timestamp: UInt64) -> Any {
+        let now = DispatchTime.now().uptimeNanoseconds
+        return timestamp > 0 && now >= timestamp ? Double(now - timestamp) / 1_000_000_000.0 : NSNull()
     }
 
     private func captureSourceEndpoint() {
@@ -201,6 +210,7 @@ final class ObstacleBridgeTCPProxyConnection: @unchecked Sendable {
                 _ = try? self.runtime.handleLocalServerData(chanID: self.chanID, payload: data, overlayConnected: true)
                 self.stats["tx_msgs", default: 0] += 1
                 self.stats["tx_bytes", default: 0] += data.count
+                self.lastTXActivityNS = DispatchTime.now().uptimeNanoseconds
                 self.updateState(self.snapshot())
                 guard self.remoteSender.submit(data, completion: { [weak self] error in
                     if error != nil { self?.closeRemote() }
@@ -226,6 +236,7 @@ final class ObstacleBridgeTCPProxyConnection: @unchecked Sendable {
                     for buffer in inbound.writtenBuffers {
                         self.stats["rx_msgs", default: 0] += 1
                         self.stats["rx_bytes", default: 0] += buffer.count
+                        self.lastRXActivityNS = DispatchTime.now().uptimeNanoseconds
                         guard self.localSender.submit(buffer, completion: { [weak self] error in
                             if error != nil { self?.closeLocal() }
                         }) else {
@@ -306,6 +317,8 @@ final class ObstacleBridgeUDPProxyConnection: @unchecked Sendable {
         "rx_bytes": 0,
         "tx_bytes": 0,
     ]
+    private var lastRXActivityNS: UInt64 = 0
+    private var lastTXActivityNS: UInt64 = 0
 
     init(
         spec: ObstacleBridgeNativeServiceSpec,
@@ -372,8 +385,15 @@ final class ObstacleBridgeUDPProxyConnection: @unchecked Sendable {
             localPort: listenerPort,
             remoteHost: spec.targetHost,
             remotePort: spec.targetPort,
-            stats: stats
+            stats: stats,
+            rxIdleSeconds: idleSeconds(since: lastRXActivityNS),
+            txIdleSeconds: idleSeconds(since: lastTXActivityNS)
         )
+    }
+
+    private func idleSeconds(since timestamp: UInt64) -> Any {
+        let now = DispatchTime.now().uptimeNanoseconds
+        return timestamp > 0 && now >= timestamp ? Double(now - timestamp) / 1_000_000_000.0 : NSNull()
     }
 
     private func captureSourceEndpoint() {
@@ -415,6 +435,7 @@ final class ObstacleBridgeUDPProxyConnection: @unchecked Sendable {
                     self.chanID = snapshot.chanID
                     self.stats["tx_msgs", default: 0] += 1
                     self.stats["tx_bytes", default: 0] += data.count
+                    self.lastTXActivityNS = DispatchTime.now().uptimeNanoseconds
                     self.updateState(self.snapshot())
                     guard self.remoteSender.submit(data, completion: { [weak self] error in
                         if error != nil { self?.stop() }
@@ -440,6 +461,7 @@ final class ObstacleBridgeUDPProxyConnection: @unchecked Sendable {
                 if inbound.delivered, let packet = inbound.packet {
                     self.stats["rx_msgs", default: 0] += 1
                     self.stats["rx_bytes", default: 0] += packet.count
+                    self.lastRXActivityNS = DispatchTime.now().uptimeNanoseconds
                     self.updateState(self.snapshot())
                     guard self.localSender.submit(packet, completion: { [weak self] error in
                         if error != nil { self?.stop() }

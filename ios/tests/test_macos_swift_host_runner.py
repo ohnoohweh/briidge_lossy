@@ -390,6 +390,15 @@ def test_macos_swift_host_runner_uses_shared_pending_rekey_timeout_guard() -> No
     assert "pendingRekeyStartedAt" not in source
 
 
+def test_macos_swift_host_runner_exposes_distinct_transport_and_rekey_counters() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert '"authenticated_session_total": snapshot.authenticatedSessionsTotal' in source
+    assert '"secure_link_rekey_total": snapshot.rekeysCompletedTotal' in source
+    assert '"transport_disconnect_total": 0' in source
+    assert '"udp_peer_endpoint_change_total": 0' in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_swift_host_runner" in source
+
+
 def test_macos_swift_host_runner_keeps_shared_tun_hooks_bound_to_adapter_lifecycle() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert "private func teardownSharedMacOSTunAdapter(runLifecycleHook: Bool)" in source
@@ -1936,11 +1945,13 @@ def test_macos_swift_host_runner_keeps_secure_link_connection_time_stable() -> N
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
 
     assert "private var secureLinkSnapshotSessionID: UInt64 = 0" in source
-    assert "private var secureLinkConnectedSinceUnixTs: Int?" in source
+    assert "private var transportConnectedSinceUnixTs: Int?" in source
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_swift_host_runner_keeps_secure_link_connection_time_stable" in source
     assert "private var secureLinkLastAuthenticatedUnixTs: Int?" in source
     assert "secureLinkSnapshotSessionID != snapshot.sessionID" in source
-    assert "secureLinkConnectedSinceUnixTs = nowUnix" in source
-    assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTs ?? nowUnix)' in source
+    assert "transportConnected: protocolConnected" in source
+    assert "if let transportConnected" in source
+    assert '"connected_since_unix_ts": transportConnectedSinceUnixTs ?? NSNull()' in source
 
 
 def test_swift_peer_resolution_maps_ipv4_fallback_on_ipv6_socket_like_python() -> None:
@@ -1956,6 +1967,11 @@ def test_swift_peer_resolution_maps_ipv4_fallback_on_ipv6_socket_like_python() -
     assert "setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY" in udp_owner
     assert "EAFNOSUPPORT" in udp_owner
     assert "resolveMode: ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: peerResolveFamily)" in packet_tunnel
+    assert "candidatesUsableOnCurrentNetwork" in resolver
+    assert "hasGlobalIPv6InterfaceAddress" in resolver
+    assert "isLinkLocal" in resolver
+    assert "isUniqueLocal" in resolver
+    assert "candidatesUsableOnCurrentNetwork(try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(" in packet_tunnel
 
 
 def test_swift_peer_address_protocol_normalizes_ipv4_mapped_ipv6() -> None:
@@ -1974,6 +1990,9 @@ def test_macos_shared_udp_retry_policy_remains_nonterminal() -> None:
 
     assert "maximumAttempts: Int = .max" in coordinator
     assert "handleTransportDisconnected()" in udp_owner
+    assert "guard rebuildSocketForPeerRotation(installReceiveSource: false) else" in udp_owner
+    assert "Core will advance to the next resolved candidate" in udp_owner
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_shared_udp_retry_policy_remains_nonterminal" in udp_owner
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_ios_packet_tunnel_provider_probe_keeps_udp_client_retryable_after_repeated_disconnects" in udp_owner
     assert "resetOverlayTransportEpoch(reason:" in udp_owner
 

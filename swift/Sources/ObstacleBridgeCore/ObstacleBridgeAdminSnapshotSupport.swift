@@ -303,6 +303,10 @@ public enum ObstacleBridgeAdminSnapshotSupport {
             "last_event_unix_ts": NSNull(),
             "last_authenticated_unix_ts": NSNull(),
             "authenticated_sessions_total": 0,
+            "authenticated_session_total": 0,
+            "secure_link_rekey_total": 0,
+            "transport_disconnect_total": 0,
+            "udp_peer_endpoint_change_total": 0,
             "last_rekey_trigger": "none",
             "frames_from_client_passed_total": 0,
             "frames_from_client_dropped_total": 0,
@@ -315,6 +319,12 @@ public enum ObstacleBridgeAdminSnapshotSupport {
         // authenticated epoch when a more specific protocol event is absent.
         if secureLink["authenticated_sessions_total"] == nil {
             normalizedSecureLink["authenticated_sessions_total"] = secureLink["authenticated_generations_total"] ?? 0
+        }
+        if secureLink["authenticated_session_total"] == nil {
+            normalizedSecureLink["authenticated_session_total"] = normalizedSecureLink["authenticated_sessions_total"] ?? 0
+        }
+        if secureLink["secure_link_rekey_total"] == nil {
+            normalizedSecureLink["secure_link_rekey_total"] = secureLink["rekeys_completed_total"] ?? 0
         }
         let secureLinkAuthenticated = normalizedSecureLink["authenticated"] as? Bool ?? false
         if secureLink["last_event"] == nil {
@@ -451,6 +461,10 @@ public enum ObstacleBridgeAdminSnapshotSupport {
                 "authenticated_generations_total": facts.authenticatedGenerationsTotal,
                 "authenticated_sessions_total": facts.authenticatedGenerationsTotal,
                 "rekeys_completed_total": facts.rekeysCompletedTotal,
+                "authenticated_session_total": facts.authenticatedGenerationsTotal,
+                "secure_link_rekey_total": facts.rekeysCompletedTotal,
+                "transport_disconnect_total": 0,
+                "udp_peer_endpoint_change_total": 0,
                 "enabled": secureLinkEnabled, "mode": facts.secureLinkMode,
                 "rekey_in_progress": facts.pendingRekeySessionID != nil,
                 "last_event": facts.authenticated ? "authenticated" : facts.secureLinkState,

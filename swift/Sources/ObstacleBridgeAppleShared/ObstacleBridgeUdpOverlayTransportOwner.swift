@@ -11,8 +11,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
 
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
-    private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
     private static let reconnectProbeIntervalNS: UInt64 = 1_000_000_000
+    private static let idleProbeIntervalNS: UInt64 = 2_000_000_000
     private static let tunOpenReplayIntervalNS: UInt64 = 10_000_000_000
     private static let secureLinkHandshakeRetryIntervalNS: UInt64 = 1_000_000_000
     private static let secureLinkHandshakeStaleNS: UInt64 = 5_000_000_000
@@ -25,6 +25,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     private let configuredPeerHost: String?
     private let configuredPeerPort: Int?
     private let configuredPeerResolveFamily: String
+    private let peerIdleTimeoutNS: UInt64
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let startupMuxFrames: ObstacleBridgeBoundedDataFIFO
     private let startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?
@@ -124,6 +125,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     private var lastInboundDatagramNS: UInt64 = 0
     private var lastIdleProbeNS: UInt64 = 0
     private var lastOverlayConnectedState = false
+    private var transportDisconnectTotal: UInt64 = 0
+    private var udpPeerEndpointChangeTotal: UInt64 = 0
+    private var disconnectEventSequence: UInt64 = 0
+    private var lastDisconnectReason: [String: Any] = [:]
     private var batchFlushScheduled = false
     private var secureLinkPayloadDrainScheduled = false
     private var secureLinkPayloadQueuedMax = 0
@@ -147,6 +152,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         peerHost: String? = nil,
         peerPort: Int? = nil,
         peerResolveFamily: String = "prefer-ipv6",
+        peerIdleTimeoutSeconds: Double = 30.0,
         sessionMaxAppPayload: Int = 65535,
         maxInFlight: Int = 200,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
@@ -177,6 +183,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         self.configuredPeerHost = (trimmedPeerHost?.isEmpty == false) ? trimmedPeerHost : nil
         self.configuredPeerPort = peerPort
         self.configuredPeerResolveFamily = peerResolveFamily
+        // Do not reject a candidate before two normal idle probes have each
+        // had an opportunity to solicit a reply.
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_shared_udp_retry_policy_remains_nonterminal
+        self.peerIdleTimeoutNS = UInt64(max(4.0, peerIdleTimeoutSeconds) * 1_000_000_000)
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
         let boundedStartupMuxFrames = ObstacleBridgeBoundedDataFIFO(limits: .init(maximumItems: 128, maximumBytes: 2 * 1_024 * 1_024))
         for frame in startupMuxFrames { _ = boundedStartupMuxFrames.append(frame) }
@@ -297,11 +307,20 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             switch effect {
             case .openTransport(_, let candidateIndex, _):
                 guard started else { continue }
+                let previousPeer = currentPeerAddress
                 if peerCandidates.indices.contains(candidateIndex) {
                     peerCandidateIndex = candidateIndex
                     currentPeerAddress = peerCandidates[candidateIndex]
                 }
                 currentPeerSelectedAtNS = monotonicNowNS()
+                if previousPeer?.host != currentPeerAddress?.host
+                    || previousPeer?.port != currentPeerAddress?.port
+                    || previousPeer?.family != currentPeerAddress?.family {
+                    guard rebuildSocketForPeerRotation(installReceiveSource: false) else {
+                        overlayLayerTransportAdapter?.handleTransportDisconnected()
+                        continue
+                    }
+                }
                 sendInitialIdleProbe()
             case .cancelTransport:
                 withdrawRemoteServiceCatalog()
@@ -341,7 +360,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     }
 
     @discardableResult
-    private func rebuildSocketForPeerRotation() -> Bool {
+    private func rebuildSocketForPeerRotation(installReceiveSource: Bool = true) -> Bool {
         let selectedIndex = peerCandidateIndex
         readSource?.cancel()
         readSource = nil
@@ -367,11 +386,13 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
                 peerCandidateIndex = 0
                 currentPeerAddress = socket.peerAddress
             }
-            installReadSource()
+            if installReceiveSource {
+                installReadSource()
+            }
             eventSink?("udp_overlay_socket_rebuilt", [
                 "candidate_index": peerCandidateIndex,
-                "peer_host": currentPeerAddress?.host ?? NSNull(),
-                "peer_port": currentPeerAddress?.port ?? NSNull(),
+                "peer_host": currentPeerHostValue(),
+                "peer_port": currentPeerPortValue(),
             ])
             return true
         } catch {
@@ -534,6 +555,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             snapshot["overlay_peer_family"] = peerFamily
             snapshot["overlay_peer_candidate_index"] = peerCandidateIndex
             snapshot["overlay_peer_candidate_count"] = peerCandidates.count
+            snapshot["udp_peer_idle_timeout_s"] = Double(peerIdleTimeoutNS) / 1_000_000_000.0
             snapshot["fixed_peer_host"] = fixedPeerHost
             snapshot["fixed_peer_port"] = fixedPeerPort
             snapshot["mux_instance_id"] = muxInstanceID
@@ -553,6 +575,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             snapshot["rtt_est_ms"] = overlayRuntime.rttEstMS
             snapshot["transmit_delay_est_ms"] = overlayRuntime.transmitDelayEstMS
             snapshot["protocol_stats"] = protocolStats
+            // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue
+            snapshot["transport_disconnect_total"] = overlayLayerTransportAdapter?.transportDisconnectCount() ?? transportDisconnectTotal
+            snapshot["udp_peer_endpoint_change_total"] = udpPeerEndpointChangeTotal
+            snapshot["myudp_disconnect_reason"] = lastDisconnectReason
             // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_owner_keeps_callbacks_on_owner_queue
             // All payload arrays are owned by `queue`; status only samples
             // their aggregate byte counts while on that same owner.
@@ -792,7 +818,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     }
 
     private func startPeerFallbackTimer() {
-        guard peerCandidates.count > 1 else {
+        guard !peerCandidates.isEmpty else {
             return
         }
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -910,7 +936,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     }
 
     private func handlePeerFallbackTimer() {
-        guard started, peerCandidates.count > 1 else {
+        guard started, !peerCandidates.isEmpty else {
             return
         }
         let nowNS = monotonicNowNS()
@@ -921,10 +947,17 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         if nowNS <= idleAnchorNS {
             return
         }
-        if nowNS - idleAnchorNS < Self.peerFallbackIdleNS {
+        if nowNS - idleAnchorNS < peerIdleTimeoutNS {
             return
         }
-        rotateToNextPeerCandidate(nowNS: nowNS, reason: "idle")
+        if let overlayLayerTransportAdapter {
+            // Core owns candidate rotation for the shared Apple runtime.  Do
+            // not rotate the native selector independently or it can diverge
+            // from the Core retry epoch and skip an IPv4 fallback candidate.
+            overlayLayerTransportAdapter.handleTransportDisconnected()
+        } else {
+            rotateToNextPeerCandidate(nowNS: nowNS, reason: "idle")
+        }
     }
 
     private func handleOverlayDatagram(_ datagram: Data) {
@@ -1011,9 +1044,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         if !wasConnected && overlayConnected {
             ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportLifecycle) {
                 eventSink?("udp_overlay_connected", [
-                    "peer_host": currentPeerAddress?.host ?? NSNull(),
-                    "peer_port": currentPeerAddress?.port ?? NSNull(),
-                    "resolved_peer_family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
+                    "peer_host": currentPeerHostValue(),
+                    "peer_port": currentPeerPortValue(),
+                    "resolved_peer_family": currentPeerFamilyValue(),
                 ])
                 maybePrimeSecureLinkHandshake()
                 maybeSendStartupMuxFrames()
@@ -1047,6 +1080,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         }
         lastOverlayConnectedState = connected
         if connected {
+            maybeSendIdleProbeForReceiveLiveness(nowNS: nowNS)
             if maybeRecoverUnavailableAppReady(nowNS: nowNS) {
                 lastOverlayConnectedState = false
                 sendInitialIdleProbe()
@@ -1060,6 +1094,17 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             return
         }
         if lastIdleProbeNS != 0, nowNS > lastIdleProbeNS, (nowNS - lastIdleProbeNS) < Self.reconnectProbeIntervalNS {
+            return
+        }
+        sendInitialIdleProbe()
+    }
+
+    private func maybeSendIdleProbeForReceiveLiveness(nowNS: UInt64) {
+        let idleAnchorNS = max(currentPeerSelectedAtNS, lastInboundDatagramNS)
+        guard nowNS >= idleAnchorNS,
+              nowNS - idleAnchorNS >= Self.idleProbeIntervalNS,
+              (lastIdleProbeNS == 0 || nowNS >= lastIdleProbeNS && nowNS - lastIdleProbeNS >= Self.idleProbeIntervalNS)
+        else {
             return
         }
         sendInitialIdleProbe()
@@ -1105,6 +1150,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
     }
 
     private func resetOverlayTransportEpoch(reason: String) {
+        recordDisconnectReason(reason: reason)
         withdrawRemoteServiceCatalog()
         overlayRuntime.resetTransportEpoch()
         tunRuntime?.resetTransportEpoch()
@@ -1122,6 +1168,79 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
             overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)
         }
         eventSink?("udp_overlay_transport_epoch_reset", ["reason": reason])
+    }
+
+    /// Payload-free, monotonic disconnect evidence for field diagnosis.  The
+    /// owner uses a BSD UDP socket rather than NWConnection for the overlay,
+    /// so `nw_state` describes the owner-level readiness state explicitly.
+    private func recordDisconnectReason(reason: String) {
+        let nowNS = monotonicNowNS()
+        let stats = overlayRuntime.protocolStatsSnapshot()
+        disconnectEventSequence &+= 1
+        transportDisconnectTotal &+= 1
+        let lastRXAgeMS: Any = lastInboundDatagramNS == 0 || nowNS < lastInboundDatagramNS
+            ? NSNull()
+            : Int((nowNS - lastInboundDatagramNS) / 1_000_000)
+        lastDisconnectReason = [
+            "reason": reason,
+            "event_sequence": disconnectEventSequence,
+            "socket_state": socketFD >= 0 ? "open" : "closed",
+            "nw_state": overlayConnected ? "ready" : "waiting",
+            "candidate": [
+                "index": peerCandidateIndex,
+                "host": currentPeerHostValue(),
+                "port": currentPeerPortValue(),
+                "family": currentPeerFamilyValue(),
+            ],
+            "local_udp_port": localUDPSocketPort() ?? NSNull(),
+            "last_rx_age_ms": lastRXAgeMS,
+            "retransmit_count": Int(stats["retransmitted_chunks"] as? Int ?? 0),
+            "inflight": Int(stats["inflight"] as? Int ?? 0),
+        ]
+    }
+
+    /// Converts the optional peer family to the concrete value required by
+    /// heterogeneous diagnostic payloads. Keeping the optional handling out
+    /// of the dictionary literal avoids implicitly boxing `Any?` as `Any`.
+    private func currentPeerFamilyValue() -> Any {
+        guard let currentPeerAddress else { return NSNull() }
+        return ObstacleBridgePeerAddressResolver.familyName(currentPeerAddress.family)
+    }
+
+    private func currentPeerHostValue() -> Any {
+        currentPeerAddress?.host ?? NSNull()
+    }
+
+    private func currentPeerPortValue() -> Any {
+        currentPeerAddress?.port ?? NSNull()
+    }
+
+    private func localUDPSocketPort() -> Int? {
+        guard socketFD >= 0 else { return nil }
+        var address = sockaddr_storage()
+        var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
+        let result = withUnsafeMutablePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(socketFD, $0, &length)
+            }
+        }
+        guard result == 0 else { return nil }
+        switch Int32(address.ss_family) {
+        case AF_INET:
+            return withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                    Int(UInt16(bigEndian: $0.pointee.sin_port))
+                }
+            }
+        case AF_INET6:
+            return withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
+                    Int(UInt16(bigEndian: $0.pointee.sin6_port))
+                }
+            }
+        default:
+            return nil
+        }
     }
 
     private func withdrawRemoteServiceCatalog() {
@@ -1608,18 +1727,29 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         }
         switch sendErrno {
         case ENETUNREACH, EHOSTUNREACH, EADDRNOTAVAIL, EAFNOSUPPORT, EPROTOTYPE, EINVAL:
-            rotateToNextPeerCandidate(nowNS: monotonicNowNS(), reason: "send_error")
+            if let overlayLayerTransportAdapter {
+                // An explicit route/address error proves this candidate cannot
+                // work. Core will advance to the next resolved candidate
+                // before any broader restart policy is considered.
+                overlayLayerTransportAdapter.handleTransportDisconnected()
+            } else {
+                rotateToNextPeerCandidate(nowNS: monotonicNowNS(), reason: "send_error")
+            }
         default:
             break
         }
     }
 
     private func rotateToNextPeerCandidate(nowNS: UInt64, reason: String) {
-        guard peerCandidates.count > 1 else {
+        guard !peerCandidates.isEmpty else {
             return
         }
+        let previousPeer = currentPeerAddress
         peerCandidateIndex = (peerCandidateIndex + 1) % peerCandidates.count
         currentPeerAddress = peerCandidates[peerCandidateIndex]
+        if previousPeer?.host != currentPeerAddress?.host || previousPeer?.port != currentPeerAddress?.port || previousPeer?.family != currentPeerAddress?.family {
+            udpPeerEndpointChangeTotal &+= 1
+        }
         currentPeerSelectedAtNS = nowNS
         lastInboundDatagramNS = 0
         guard rebuildSocketForPeerRotation() else {
@@ -1629,9 +1759,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
         eventSink?("udp_overlay_peer_candidate_rotated", [
             "reason": reason,
             "candidate_index": peerCandidateIndex,
-            "peer_host": currentPeerAddress?.host ?? NSNull(),
-            "peer_port": currentPeerAddress?.port ?? NSNull(),
-            "peer_family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
+            "peer_host": currentPeerHostValue(),
+            "peer_port": currentPeerPortValue(),
+            "peer_family": currentPeerFamilyValue(),
         ])
         sendInitialIdleProbe()
     }
@@ -1746,12 +1876,17 @@ final class ObstacleBridgeUdpOverlayTransportOwner: @unchecked Sendable {
            !peerHost.isEmpty,
            let peerPort,
            peerPort > 0 {
-            resolvedPeers = try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
+            let resolved = try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
                 host: peerHost,
                 port: peerPort,
                 resolveFamily: peerResolveFamily,
                 bindHost: bindHost,
                 errorDomain: "ObstacleBridge.UdpOverlayTransportOwner"
+            )
+            // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_udp_overlay_peer_rotation_rebuilds_the_native_socket
+            resolvedPeers = ObstacleBridgePeerAddressResolver.candidatesUsableOnCurrentNetwork(
+                resolved,
+                resolveFamily: peerResolveFamily
             )
         } else {
             resolvedPeers = []

@@ -33,6 +33,22 @@ def test_swift_overlay_transport_owners_publish_layered_readiness() -> None:
         assert "ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace" in source
 
 
+def test_swift_udp_candidate_fallback_uses_the_shared_30_second_receive_idle_timeout() -> None:
+    owner = _read("ObstacleBridgeAppleShared", "ObstacleBridgeUdpOverlayTransportOwner.swift")
+    provider = _read("ObstacleBridgeiOS", "PacketTunnelProvider.swift")
+    config = _read("ObstacleBridgeAppleShared", "ObstacleBridgeRuntimeConfig.swift")
+    policy = (CORE_ROOT / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
+
+    assert "peerIdleTimeoutSeconds: Double = 30.0" in owner
+    assert "max(4.0, peerIdleTimeoutSeconds)" in owner
+    assert "idleProbeIntervalNS: UInt64 = 2_000_000_000" in owner
+    assert "let idleAnchorNS = max(currentPeerSelectedAtNS, lastInboundDatagramNS)" in owner
+    assert "nowNS - idleAnchorNS < peerIdleTimeoutNS" in owner
+    assert 'payload["udp_peer_idle_timeout_s"] = 30.0' in config
+    assert 'schemaItem(key: "udp_peer_idle_timeout_s"' in policy
+    assert 'settings.runtimeConfig["udp_peer_idle_timeout_s"]' in provider
+
+
 def test_swift_layered_readiness_gates_inflow_on_outer_app_ready() -> None:
     adapter = (CORE_ROOT / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
 

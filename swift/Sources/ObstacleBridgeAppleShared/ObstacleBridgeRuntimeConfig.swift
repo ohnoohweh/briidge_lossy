@@ -215,6 +215,9 @@ enum ObstacleBridgeRuntimeConfig {
         if payload["udp_peer_resolve_family"] == nil {
             payload["udp_peer_resolve_family"] = "prefer-ipv6"
         }
+        if payload["udp_peer_idle_timeout_s"] == nil {
+            payload["udp_peer_idle_timeout_s"] = 30.0
+        }
         if payload["tcp_bind"] == nil {
             payload["tcp_bind"] = "::"
         }

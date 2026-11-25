@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 from collections import deque
 from collections.abc import Mapping
 
@@ -43,6 +44,10 @@ class _ChanCtr:
     msgs_out: int = 0
     bytes_in: int = 0
     bytes_out: int = 0
+    # Monotonic timestamps are deliberately kept beside the matching table
+    # counters.  They describe local service activity, not overlay liveness.
+    last_rx_activity_ns: int = 0
+    last_tx_activity_ns: int = 0
     crc_in: int = 0
     crc_out: int = 0
 
@@ -417,11 +422,11 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             p.add_argument('--mux-tcp-connect-timeout-s', type=float, default=60.0,
                            help='Mux TCP: local target connection timeout in seconds; 0 disables (default 60).')
         if not _has('--mux-tcp-read-timeout-s'):
-            p.add_argument('--mux-tcp-read-timeout-s', type=float, default=60.0,
-                           help='Mux TCP: maximum idle time between local TCP reads in seconds; 0 disables (default 60).')
+            p.add_argument('--mux-tcp-read-timeout-s', type=float, default=0.0,
+                           help='Mux TCP: maximum idle time between local TCP reads in seconds; 0 disables (default 0).')
         if not _has('--mux-tcp-send-timeout-s'):
-            p.add_argument('--mux-tcp-send-timeout-s', type=float, default=60.0,
-                           help='Mux TCP: maximum time waiting for a local TCP write drain in seconds; 0 disables (default 60).')
+            p.add_argument('--mux-tcp-send-timeout-s', type=float, default=0.0,
+                           help='Mux TCP: maximum time waiting for a local TCP write drain in seconds; 0 disables (default 0).')
         if not _has('--channelmux-transport-delay-threshold-ms'):
             p.add_argument(
                 '--channelmux-transport-delay-threshold-ms', type=float,
@@ -515,8 +520,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         try: mux._tcp_bp_poll_interval_s = float(getattr(args, 'mux_tcp_bp_poll_interval_ms', 50)) / 1000.0
         except Exception: mux._tcp_bp_poll_interval_s = 0.05
         mux._tcp_connect_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_connect_timeout_s', 60.0), 60.0)
-        mux._tcp_read_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_read_timeout_s', 60.0), 60.0)
-        mux._tcp_send_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_send_timeout_s', 60.0), 60.0)
+        mux._tcp_read_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_read_timeout_s', 0.0), 0.0)
+        mux._tcp_send_timeout_s = mux._timeout_seconds(getattr(args, 'mux_tcp_send_timeout_s', 0.0), 0.0)
         try:
             mux._transport_delay_threshold_ms = max(0.0, float(getattr(
                 args, 'channelmux_transport_delay_threshold_ms', mux.DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS,
@@ -734,6 +739,14 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._svc_tcp_servers: dict[ChannelMux.ServiceKey, asyncio.base_events.Server] = {}
         self._svc_udp_servers: dict[ChannelMux.ServiceKey, asyncio.DatagramTransport] = {}
         self._svc_tun_devices: dict[ChannelMux.ServiceKey, ChannelMux.TunDevice] = {}
+
+        # A remote catalog belongs to one authenticated peer, but its local
+        # listener address belongs to the process.  Applying two catalogs can
+        # therefore otherwise race: both tasks pass their per-service checks,
+        # then one loses bind(2) with EADDRINUSE.  Keep catalog replacement in
+        # one critical section so an endpoint's prior owner is fully closed
+        # before a new owner can bind it.
+        self._peer_listener_catalog_lock = asyncio.Lock()
 
         # Channel id allocators
         self._chan_id_start: int = 1
@@ -3010,6 +3023,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         ctr = self._ctr(ChannelMux.Proto.UDP, chan)
         ctr.msgs_in += 1
         ctr.bytes_in += len(data)
+        ctr.last_rx_activity_ns = time.monotonic_ns()
         try:
             self._log_conn("<-", "UDP", chan, data, src=src, dst=dst)
         except Exception as e:
@@ -3605,6 +3619,19 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 pass
 
     async def _apply_peer_installed_services(self, services: list["ChannelMux.ServiceSpec"], peer_id: Optional[int]) -> None:
+        async with self._peer_listener_catalog_lock:
+            await self._apply_peer_installed_services_serialized(services, peer_id)
+
+    @staticmethod
+    def _peer_listener_endpoint(spec: "ChannelMux.ServiceSpec") -> tuple[str, str, int]:
+        """The process-wide ownership key for a peer-installed listener."""
+        return (
+            str(spec.l_proto or "").strip().lower(),
+            str(spec.l_bind or "").strip().lower(),
+            int(spec.l_port or 0),
+        )
+
+    async def _apply_peer_installed_services_serialized(self, services: list["ChannelMux.ServiceSpec"], peer_id: Optional[int]) -> None:
         owner_peer_id = int(peer_id or 0)
         new_map: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {
             ("peer", owner_peer_id, int(s.svc_id)): s for s in services
@@ -3622,10 +3649,27 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 to_stop.add(sid)
                 to_start.add(sid)
 
+        # A new catalog may take an address previously installed by a
+        # different peer.  Serialize that handoff by the concrete bind key,
+        # not the catalog/service id, and retire the stale owner first.
+        new_endpoint_keys = {
+            self._peer_listener_endpoint(spec): svc_key
+            for svc_key, spec in new_map.items()
+            if str(spec.l_proto) in {"tcp", "udp"}
+        }
+        for svc_key, existing in list(self._peer_installed_services.items()):
+            if svc_key in old_map:
+                continue
+            endpoint = self._peer_listener_endpoint(existing)
+            replacement_key = new_endpoint_keys.get(endpoint)
+            if replacement_key is not None and replacement_key != svc_key:
+                to_stop.add(svc_key)
+
         for svc_key in sorted(to_stop):
-            old = old_map.get(svc_key)
+            old = self._peer_installed_services.get(svc_key)
             if old:
                 await self._stop_listener_for_service_id(svc_key, old.l_proto, spec=old)
+                self._peer_installed_services.pop(svc_key, None)
 
         for svc_key in set(old_map.keys()) - set(new_map.keys()):
             self._peer_installed_services.pop(svc_key, None)
@@ -3645,15 +3689,41 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 continue
             try:
                 if spec.l_proto == "tcp" and svc_key not in self._svc_tcp_servers:
-                    await self._start_tcp_server_for(spec, svc_key)
+                    await self._start_peer_listener_with_backoff(spec, svc_key, self._start_tcp_server_for)
                 elif spec.l_proto == "udp" and svc_key not in self._svc_udp_servers:
-                    await self._start_udp_server_for(spec, svc_key)
+                    await self._start_peer_listener_with_backoff(spec, svc_key, self._start_udp_server_for)
                 elif spec.l_proto == "tun" and svc_key not in self._svc_tun_devices:
                     await self._start_tun_server_for(spec, svc_key)
             except Exception as e:
                 self.log.warning("[MUX/CTRL] peer-installed service %s:%s start failed: %r", svc_key[0], spec.svc_id, e)
 
+    async def _start_peer_listener_with_backoff(self, spec: "ChannelMux.ServiceSpec", svc_key: "ChannelMux.ServiceKey", starter) -> None:
+        """Bind a handed-off TCP/UDP endpoint without an EADDRINUSE log storm."""
+        delays = (0.0, 0.05, 0.15, 0.35)
+        last_error: Optional[OSError] = None
+        for attempt, delay in enumerate(delays, start=1):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                await starter(spec, svc_key)
+                return
+            except OSError as exc:
+                if int(getattr(exc, "errno", 0) or 0) != errno.EADDRINUSE:
+                    raise
+                last_error = exc
+                if attempt < len(delays):
+                    self.log.info(
+                        "[MUX/CTRL] peer listener handoff retry endpoint=%s attempt=%s/%s",
+                        self._peer_listener_endpoint(spec), attempt, len(delays),
+                    )
+        assert last_error is not None
+        raise last_error
+
     async def _drop_peer_installed_services(self, peer_id: Optional[int]) -> None:
+        async with self._peer_listener_catalog_lock:
+            await self._drop_peer_installed_services_serialized(peer_id)
+
+    async def _drop_peer_installed_services_serialized(self, peer_id: Optional[int]) -> None:
         if peer_id is None:
             to_stop = {k: v for k, v in self._peer_installed_services.items() if k[0] == "peer"}
         else:
@@ -6938,6 +7008,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         ctr = self._ctr(ChannelMux.Proto.UDP, chan)
         ctr.msgs_in += 1
         ctr.bytes_in += len(data)        
+        ctr.last_rx_activity_ns = time.monotonic_ns()
         if len(data) > self._udp_service_datagram_cap:
             self.log.warning(
                 "[UDP] chan=%s drop overlay UDP datagram len=%s cap=%s (%s)",
@@ -6956,6 +7027,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 try:
                     ctr.msgs_out += 1
                     ctr.bytes_out += len(data)
+                    ctr.last_tx_activity_ns = time.monotonic_ns()
                     srv_tr.sendto(data, addr)
                     self._log_udp_diag(
                         "server",
@@ -7008,6 +7080,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         try:
             ctr.msgs_out += 1
             ctr.bytes_out += len(data)
+            ctr.last_tx_activity_ns = time.monotonic_ns()
             tr.sendto(data)
             self._udp_client_last_ts[chan] = time.time()
         except Exception as e:
@@ -7089,6 +7162,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             ctr = self.parent._ctr(ChannelMux.Proto.UDP, self.chan)
             ctr.msgs_out += 1
             ctr.bytes_out += len(data)
+            ctr.last_tx_activity_ns = time.monotonic_ns()
             # remote -> overlay
             try:
                 # Resolve endpoints for logging
@@ -7202,6 +7276,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                         ctr = self._ctr(ChannelMux.Proto.TCP, chan)
                         ctr.msgs_in += 1
                         ctr.bytes_in += len(data)
+                        ctr.last_rx_activity_ns = time.monotonic_ns()
                         self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, data)
                         self.log.debug("[TCP/SRV] chan=%s local->overlay %dB", chan, len(data))
                 except Exception as e:
@@ -7348,6 +7423,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                         ctr = self._ctr(ChannelMux.Proto.TCP, local_chan)
                         ctr.msgs_out += 1
                         ctr.bytes_out += len(buf)
+                        ctr.last_tx_activity_ns = time.monotonic_ns()
                         self._maybe_signal_backpressure(local_chan, writer)
                         self.log.debug("[TCP/CLI] chan=%s flushed pending %dB", wire_chan, len(buf))
                     except Exception as e:
@@ -7394,6 +7470,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                             ctr = self._ctr(ChannelMux.Proto.TCP, local_chan)
                             ctr.msgs_in += 1
                             ctr.bytes_in += len(buf)
+                            ctr.last_rx_activity_ns = time.monotonic_ns()
                             self._send_mux(wire_chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, buf, peer_id=peer_key)
                             if local_chan not in self._tcp_first_remote_to_overlay_logged:
                                 self._tcp_first_remote_to_overlay_logged.add(local_chan)
@@ -7489,6 +7566,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 ctr = self._ctr(ChannelMux.Proto.TCP, local_chan)
                 ctr.msgs_out += 1
                 ctr.bytes_out += len(data)
+                ctr.last_tx_activity_ns = time.monotonic_ns()
                 self._maybe_signal_backpressure(local_chan, writer)
                 if local_chan not in self._tcp_first_overlay_to_local_logged:
                     self._tcp_first_overlay_to_local_logged.add(local_chan)
@@ -8012,12 +8090,19 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "tx_msgs": 0,
                 "rx_bytes": 0,
                 "tx_bytes": 0,
+                "rx_idle_seconds": None,
+                "tx_idle_seconds": None,
             }
+        now_ns = time.monotonic_ns()
+        rx_at = int(getattr(c, "last_rx_activity_ns", 0) or 0)
+        tx_at = int(getattr(c, "last_tx_activity_ns", 0) or 0)
         return {
             "rx_msgs": int(getattr(c, "msgs_in", 0)),
             "tx_msgs": int(getattr(c, "msgs_out", 0)),
             "rx_bytes": int(getattr(c, "bytes_in", 0)),
             "tx_bytes": int(getattr(c, "bytes_out", 0)),
+            "rx_idle_seconds": (max(0, now_ns - rx_at) / 1e9) if rx_at else None,
+            "tx_idle_seconds": (max(0, now_ns - tx_at) / 1e9) if tx_at else None,
         }
 
     def _remote_requested_listener_rows(self, proto: "ChannelMux.ProtoName") -> list[dict]:
@@ -8091,6 +8176,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 ),
                 "throttle": throttle,
                 "stats": stats,
+                "rx_idle_seconds": stats["rx_idle_seconds"],
+                "tx_idle_seconds": stats["tx_idle_seconds"],
             })
 
         # UDP listeners: bound sockets waiting for first client/channel mapping.
@@ -8156,6 +8243,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     ),
                     "throttle": throttle,
                     "stats": stats,
+                    "rx_idle_seconds": stats["rx_idle_seconds"],
+                    "tx_idle_seconds": stats["tx_idle_seconds"],
                 })
             except Exception:
                 continue
@@ -8216,6 +8305,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "remote_destination": remote_destination,
                 "throttle": {"applicable": False, "active": False, "reason": "tcp_stream_backpressure"},
                 "stats": stats,
+                "rx_idle_seconds": stats["rx_idle_seconds"],
+                "tx_idle_seconds": stats["tx_idle_seconds"],
             })
 
         rows.sort(key=lambda x: (x["protocol"], x["role"], x["chan_id"]))
@@ -8264,12 +8355,19 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "tx_msgs": 0,
                 "rx_bytes": 0,
                 "tx_bytes": 0,
+                "rx_idle_seconds": None,
+                "tx_idle_seconds": None,
             }
+        now_ns = time.monotonic_ns()
+        rx_at = int(getattr(c, "last_rx_activity_ns", 0) or 0)
+        tx_at = int(getattr(c, "last_tx_activity_ns", 0) or 0)
         return {
             "rx_msgs": int(getattr(c, "msgs_in", 0)),
             "tx_msgs": int(getattr(c, "msgs_out", 0)),
             "rx_bytes": int(getattr(c, "bytes_in", 0)),
             "tx_bytes": int(getattr(c, "bytes_out", 0)),
+            "rx_idle_seconds": (max(0, now_ns - rx_at) / 1e9) if rx_at else None,
+            "tx_idle_seconds": (max(0, now_ns - tx_at) / 1e9) if tx_at else None,
         }
 
     def snapshot_udp_connections(self) -> list[dict]:
@@ -8308,6 +8406,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 ),
                 "throttle": throttle,
                 "stats": stats,
+                "rx_idle_seconds": stats["rx_idle_seconds"],
+                "tx_idle_seconds": stats["tx_idle_seconds"],
             })
 
         # UDP listeners: bound sockets waiting for first client/channel mapping.
@@ -8373,6 +8473,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     ),
                     "throttle": throttle,
                     "stats": stats,
+                    "rx_idle_seconds": stats["rx_idle_seconds"],
+                    "tx_idle_seconds": stats["tx_idle_seconds"],
                 })
             except Exception:
                 continue
@@ -8432,6 +8534,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "local_port": int(local[1]) if local else (int(spec.l_port) if spec else None),
                 "remote_destination": remote_destination,
                 "stats": stats,
+                "rx_idle_seconds": stats["rx_idle_seconds"],
+                "tx_idle_seconds": stats["tx_idle_seconds"],
             })
 
         # TCP listeners: bound server sockets waiting for incoming channels.

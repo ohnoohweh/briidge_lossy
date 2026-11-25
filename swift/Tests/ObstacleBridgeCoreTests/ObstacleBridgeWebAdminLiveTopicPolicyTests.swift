@@ -10,4 +10,10 @@ struct ObstacleBridgeWebAdminLiveTopicPolicyTests {
         #expect(ObstacleBridgeWebAdminLiveTopicPolicy.interval("meta") == 5)
         #expect(ObstacleBridgeWebAdminLiveTopicPolicy.interval("peers") == 1)
     }
+
+    @Test func connectionsTabRetainsConnectionUpdates() {
+        #expect(ObstacleBridgeWebAdminLiveTopicPolicy.topicsForControlMessage(
+            subscribe: ["status", "connections"], activeTabs: ["connections"]
+        ) == ["status", "connections"])
+    }
 }

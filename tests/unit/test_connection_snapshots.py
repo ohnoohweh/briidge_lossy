@@ -390,6 +390,29 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertIn("connected", {row.get("state") for row in snap["udp"]})
         self.assertIn("connected", {row.get("state") for row in snap["tcp"]})
 
+    def test_udp_and_tcp_rows_expose_directional_idle_durations_without_timestamps(self):
+        self.mux._udp_by_chan[101] = (self.udp_key, ("10.10.10.10", 40001))
+        self.mux._tcp_by_chan[201] = (2, _FakeWriter(("0.0.0.0", 2222), ("10.10.10.20", 40002)))
+        self.mux._tcp_role_by_chan[201] = "server"
+        now_ns = time.monotonic_ns()
+        udp_ctr = self.mux._ctr(ChannelMux.Proto.UDP, 101)
+        udp_ctr.last_rx_activity_ns = now_ns - 2_000_000_000
+        udp_ctr.last_tx_activity_ns = now_ns - 1_000_000_000
+        tcp_ctr = self.mux._ctr(ChannelMux.Proto.TCP, 201)
+        tcp_ctr.last_rx_activity_ns = now_ns - 3_000_000_000
+        tcp_ctr.last_tx_activity_ns = now_ns - 500_000_000
+
+        snap = self.mux.snapshot_connections()
+        udp_stats = next(row for row in snap["udp"] if row.get("chan_id") == 101)["stats"]
+        tcp_stats = next(row for row in snap["tcp"] if row.get("chan_id") == 201)["stats"]
+
+        self.assertGreaterEqual(udp_stats["rx_idle_seconds"], 1.9)
+        self.assertGreaterEqual(udp_stats["tx_idle_seconds"], 0.9)
+        self.assertGreaterEqual(tcp_stats["rx_idle_seconds"], 2.9)
+        self.assertGreaterEqual(tcp_stats["tx_idle_seconds"], 0.4)
+        self.assertNotIn("last_rx_activity_ns", udp_stats)
+        self.assertNotIn("last_tx_activity_ns", tcp_stats)
+
     def test_snapshot_uses_peer_service_spec_when_peer_svc_id_collides_with_local(self):
         local_shared_tun = ChannelMux.ServiceSpec(
             1,

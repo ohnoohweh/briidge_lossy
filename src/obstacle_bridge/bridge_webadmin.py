@@ -31,6 +31,7 @@ class AdminWebUI:
             "udp_bind",
             "udp_own_port",
             "udp_peer_resolve_family",
+            "udp_peer_idle_timeout_s",
             "max_inflight",
         ),
         "tcp": (
@@ -1725,10 +1726,10 @@ class AdminWebUI:
             req.get("mux_tcp_connect_timeout_s", getattr(self.args, "mux_tcp_connect_timeout_s", 60.0)) or 0.0
         )
         selected_mux_tcp_read_timeout_s = float(
-            req.get("mux_tcp_read_timeout_s", getattr(self.args, "mux_tcp_read_timeout_s", 60.0)) or 0.0
+            req.get("mux_tcp_read_timeout_s", getattr(self.args, "mux_tcp_read_timeout_s", 0.0)) or 0.0
         )
         selected_mux_tcp_send_timeout_s = float(
-            req.get("mux_tcp_send_timeout_s", getattr(self.args, "mux_tcp_send_timeout_s", 60.0)) or 0.0
+            req.get("mux_tcp_send_timeout_s", getattr(self.args, "mux_tcp_send_timeout_s", 0.0)) or 0.0
         )
         selected_proxy_provider = self._sanitize_onboarding_proxy_provider(
             req.get("proxy_provider", self._onboarding_proxy_provider_from_args(self.args))
@@ -2827,6 +2828,30 @@ class AdminWebUI:
                     topics.add(topic)
         return topics
 
+    def _live_topics_for_control_message(
+        self,
+        subscribe: Any,
+        active_tabs: Any,
+        current_topics: Set[str],
+    ) -> Set[str]:
+        topics = set(current_topics)
+        requested = self._parse_live_topics(subscribe)
+        if requested:
+            topics = requested
+        tabs = {str(item or "").strip().lower() for item in (active_tabs or [])}
+        tabs.discard("")
+        if tabs:
+            topics = {"status"}
+            if "status" in tabs:
+                topics.update({"connections", "peers"})
+            if "connections" in tabs:
+                topics.add("connections")
+            if "tun-routing" in tabs:
+                topics.add("tun_routing")
+            if "misc" in tabs:
+                topics.add("meta")
+        return topics
+
     async def _handle_live_websocket(self, reader, writer, headers: dict) -> None:
         key = str(headers.get("sec-websocket-key", "") or "").strip()
         version = str(headers.get("sec-websocket-version", "") or "").strip()
@@ -2874,19 +2899,9 @@ class AdminWebUI:
                     msg = json.loads(incoming)
                 except Exception:
                     msg = {}
-                requested = self._parse_live_topics(msg.get("subscribe"))
-                if requested:
-                    topics = requested
-                active_tabs = set(str(item or "").strip().lower() for item in (msg.get("active_tabs") or []))
-                if active_tabs:
-                    next_topics: Set[str] = {"status"}
-                    if "status" in active_tabs:
-                        next_topics.update({"connections", "peers"})
-                    if "tun-routing" in active_tabs:
-                        next_topics.add("tun_routing")
-                    if "misc" in active_tabs:
-                        next_topics.add("meta")
-                    topics = next_topics
+                topics = self._live_topics_for_control_message(
+                    msg.get("subscribe"), msg.get("active_tabs"), topics,
+                )
                 request_topics = self._parse_live_topics(msg.get("request"))
                 for topic in sorted(request_topics):
                     payload = self._live_topic_payload(topic)

@@ -346,6 +346,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 "transmit_delay_est_ms": transmitDelayEstMSValue() ?? NSNull(),
                 "protocol_stats": protocolStats,
                 // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_websocket_overlay_owner_serializes_public_and_delegate_callbacks
+                "transport_disconnect_total": overlayLayerTransportAdapter?.transportDisconnectCount() ?? 0,
+                "udp_peer_endpoint_change_total": 0,
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_websocket_overlay_owner_serializes_public_and_delegate_callbacks
                 // `transportSnapshot` runs on the WebSocket owner queue.
                 "fifo_levels": [
                     "secure_link_pending_payloads": [

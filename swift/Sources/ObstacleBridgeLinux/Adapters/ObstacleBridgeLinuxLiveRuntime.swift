@@ -1013,14 +1013,44 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     }
 
     private func startRemoteServiceOwners(_ specs: [ObstacleBridgeLinuxServiceSpec]) throws {
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests
+        // This method always runs on `queue`, so a catalog handoff is one
+        // serialized ownership transaction. `stop()` synchronously closes the
+        // old descriptor before any replacement bind below.
         stopRemoteServiceOwners()
         let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
+        var endpoints = Set<String>()
         for (index, spec) in specs.enumerated() {
-            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence, channelIDAllocation: .listener(ownerIndex: index, ownerCount: specs.count), debugEnabled: configuredRuntime.configuration.debugLoggingEnabled, debugSink: { [weak self] event, fields in self?.emitDebugDiagnostic(event, fields) }) { [weak self] owner, frames in
-                guard let runtime = self else { return }
-                runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
+            let endpoint = "\(spec.listenProtocol.rawValue)|\(spec.listenHost.lowercased())|\(spec.listenPort)"
+            guard endpoints.insert(endpoint).inserted else {
+                throw NSError(domain: "ObstacleBridgeLinuxLiveRuntime", code: Int(EADDRINUSE), userInfo: [NSLocalizedDescriptionKey: "remote catalog duplicates listener endpoint \(endpoint)"])
             }
-            try owner.start()
+            var owner: ObstacleBridgeLinuxServiceSocketOwner?
+            var lastError: Error?
+            for delay in [0, 50, 150, 350] {
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests
+                if delay > 0 { Thread.sleep(forTimeInterval: Double(delay) / 1_000) } // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests; OBSTACLEBRIDGE-ASYNC-IO-EXCEPTION: bounded listener-bind backoff runs on the serial catalog handoff queue.
+                let candidate = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence, channelIDAllocation: .listener(ownerIndex: index, ownerCount: specs.count), debugEnabled: configuredRuntime.configuration.debugLoggingEnabled, debugSink: { [weak self] event, fields in self?.emitDebugDiagnostic(event, fields) }) { [weak self] owner, frames in
+                    guard let runtime = self else { return }
+                    runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
+                }
+                do {
+                    try candidate.start()
+                    owner = candidate
+                    break
+                } catch ObstacleBridgeLinuxServiceSocketOwnerError.bindFailure(let code) where code == EADDRINUSE {
+                    lastError = ObstacleBridgeLinuxServiceSocketOwnerError.bindFailure(code)
+                } catch {
+                    throw error
+                }
+            }
+            guard let owner else {
+                emitDiagnostic("channel_mux.catalog_listener_bind_failed", fields: [
+                    "endpoint": endpoint,
+                    "reason": lastError?.localizedDescription ?? "address_in_use",
+                ], level: .warning)
+                throw lastError ?? ObstacleBridgeLinuxServiceSocketOwnerError.bindFailure(EADDRINUSE)
+            }
             remoteServiceOwners.append(owner)
         }
     }
