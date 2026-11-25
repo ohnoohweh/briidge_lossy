@@ -649,6 +649,7 @@ def test_swift_tcp_synchronous_open_failure_advances_core_candidate() -> None:
     connect_overlay = owner[owner.index("    private func connectOverlay(") : owner.index("    private func startOverlayListener")]
 
     assert 'eventSink?("tcp_overlay_connect_failed"' in connect_overlay
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks" in connect_overlay
     assert connect_overlay.count("overlayLayerTransportAdapter?.handleTransportDisconnected()") == 2
     assert connect_overlay.index("overlayLayerTransportAdapter?.handleTransportDisconnected()") < connect_overlay.index(
         "scheduleReconnect()"

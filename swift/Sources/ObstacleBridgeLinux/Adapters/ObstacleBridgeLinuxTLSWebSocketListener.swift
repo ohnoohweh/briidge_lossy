@@ -20,6 +20,7 @@ public final class ObstacleBridgeLinuxTLSWebSocketPSKListener: @unchecked Sendab
         func read(_ count: Int, timeout: Int) throws -> Data { let deadline = Date().addingTimeInterval(Double(timeout) / 1_000); condition.lock(); defer { condition.unlock() }; while bytes.count < count && !inactive { guard condition.wait(until: deadline) else { throw ObstacleBridgeLinuxOverlayTransportError.ioFailure(ETIMEDOUT) } }; guard bytes.count >= count else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }; let result = Data(bytes.prefix(count)); bytes.removeFirst(count); return result }
     }
     private final class Connection: ObstacleBridgeLinuxWebSocketByteConnection {
+        // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxOverlayTransportTests
         let channel: any Channel; let inbound: Inbound; let timeout: Int; var webSocketMaxSize = 65535
         init(_ channel: any Channel, _ inbound: Inbound, _ timeout: Int) { self.channel = channel; self.inbound = inbound; self.timeout = timeout }
         func write(_ data: Data) throws { var b = channel.allocator.buffer(capacity: data.count); b.writeBytes(data); try channel.writeAndFlush(b).wait() }

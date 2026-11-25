@@ -54,6 +54,7 @@ private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
         lock.unlock()
         do {
             let session = try runtime.connect(sessionID: sessionID, clientNonce: clientNonce, admission: admission) { [expectedTransport, runtime] host in
+                // OBSTACLEBRIDGE-CONCURRENCY: lock; test=ObstacleBridgeLinuxOverlayTransportTests
                 let configuration = runtime.configuration
                 let lower = try ObstacleBridgeLinuxOverlayTransportClient(
                     host: host, port: configuration.port, transport: expectedTransport,
