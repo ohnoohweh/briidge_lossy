@@ -2172,7 +2172,13 @@ class WebSocketSession(ISession):
                         uri,
                         ssl=ssl_ctx,
                         subprotocols=subprotocols,
-                        max_size=self._ws_frame_max_size,
+                        # A peer advertising an oversized frame must not be
+                        # able to turn a compatibility mismatch into an
+                        # availability failure.  Receive it, emit a warning
+                        # below, and let the overlay codec decide whether it
+                        # is valid.  The advertised/configured size remains
+                        # the sender-side target and a server-peer limit.
+                        max_size=None,
                         compression=self._ws_compression,
                         ping_interval=None,    # we run our own RTT ping
                         ping_timeout=None,
@@ -2634,6 +2640,17 @@ class WebSocketSession(ISession):
                 if active_ws is None:
                     return
                 msg = await active_ws.recv()  # type: ignore
+                if client_mode and self._ws_frame_max_size > 0:
+                    encoded_size = len(msg.encode("utf-8")) if isinstance(msg, str) else len(msg)
+                    if encoded_size > self._ws_frame_max_size:
+                        self._log.warning(
+                            "[WS/RX] (%s) accepting oversized peer WebSocket message "
+                            "encoded_bytes=%d advertised_limit=%d; peer should honor "
+                            "X-ObstacleBridge-WS-Max-Size",
+                            self._probe_id,
+                            encoded_size,
+                            self._ws_frame_max_size,
+                        )
                 b = self._decode_ws_message(msg, ctx=ctx)
                 if b is None:
                     continue

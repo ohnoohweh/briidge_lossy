@@ -636,6 +636,14 @@ def test_swift_websocket_clients_advertise_their_configured_message_limit() -> N
     assert 'X-ObstacleBridge-WS-Max-Size: \\(wsMaxSize)' in linux_client
 
 
+def test_swift_websocket_clients_accept_and_report_oversized_peer_messages() -> None:
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "webSocketOptions.maximumMessageSize = Int.max" in owner
+    assert 'eventSink?("ws_overlay_oversized_message_accepted"' in owner
+    assert "reportOversizedWebSocketMessageIfNeeded(content.count)" in owner
+
+
 def test_swift_tls_websocket_listener_keeps_a_message_limit_per_connection() -> None:
     listener = (ROOT / "swift" / "Sources" / "ObstacleBridgeLinux" / "Adapters" / "ObstacleBridgeLinuxTLSWebSocketListener.swift").read_text(encoding="utf-8")
 

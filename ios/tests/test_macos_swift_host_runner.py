@@ -1747,6 +1747,14 @@ def test_swift_websocket_synchronous_open_failure_uses_core_candidate_fallback()
     )
 
 
+def test_swift_websocket_client_oversize_compatibility_does_not_close_transport() -> None:
+    ws_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "webSocketOptions.maximumMessageSize = Int.max" in ws_owner
+    assert "reportOversizedWebSocketMessageIfNeeded" in ws_owner
+    assert '"ws_overlay_oversized_message_accepted"' in ws_owner
+
+
 def test_swift_tcp_synchronous_open_failure_uses_core_candidate_fallback() -> None:
     tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     connect_overlay = tcp_owner[

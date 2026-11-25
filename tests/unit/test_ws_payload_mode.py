@@ -654,7 +654,7 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fallback, 65535)
         self.assertEqual(session._resolve_inbound_ws_max_size("not-a-size", "binary"), fallback)
 
-    async def test_connect_uses_encoded_frame_limit_for_text_payload_modes(self):
+    async def test_connect_tolerates_oversized_peer_frames_for_text_payload_modes(self):
         for mode in ("base64", "json-base64", "semi-text-shape"):
             with self.subTest(mode=mode):
                 args = _args(mode)
@@ -688,8 +688,8 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
 
                 preflight.assert_awaited_once()
                 on_accept.assert_awaited_once_with(fake_ws)
-                self.assertEqual(seen["max_size"], session._ws_frame_max_size)
-                self.assertGreater(seen["max_size"], session._ws_max_size)
+                self.assertIsNone(seen["max_size"])
+                self.assertGreater(session._ws_frame_max_size, session._ws_max_size)
 
     async def test_listener_peer_uses_advertised_payload_mode_for_rx_and_tx(self):
         session = WebSocketSession(_args("binary"))

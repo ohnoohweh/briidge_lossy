@@ -80,6 +80,10 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private var resolvedPeerFamily = ""
     private var resolvedPeerCandidateIndex = 0
     private var resolvedPeerCandidates: [ResolvedAddress] = []
+    /// The peer was told this size in its upgrade request.  It is a sender
+    /// target, not a client-side disconnect threshold: older/misconfigured
+    /// peers must not take the overlay down merely by exceeding it.
+    private var webSocketAdvertisedMaxSize = 0
     private let pendingOutboundMessages = ObstacleBridgeBoundedFIFO<URLSessionWebSocketTask.Message>(
         limits: .init(maximumItems: 512, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60),
         byteCount: { ObstacleBridgeWebSocketOverlayTransportOwner.messageByteCount($0) }
@@ -724,6 +728,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 wsSubprotocol: wsSubprotocol,
                 proxyActive: false
             )
+            webSocketAdvertisedMaxSize = plan.maxSize
             resolvedPeerHost = resolved.host
             resolvedPeerPort = resolved.port
             resolvedPeerFamily = ObstacleBridgePeerAddressResolver.familyName(resolved.family)
@@ -777,7 +782,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         }
         let webSocketOptions = NWProtocolWebSocket.Options(.version13)
         webSocketOptions.autoReplyPing = true
-        webSocketOptions.maximumMessageSize = plan.maxSize
+        webSocketOptions.maximumMessageSize = Int.max
         var headers = plan.upgradeHeaders.map { (name: $0.key, value: $0.value) }
         let logicalHost = peerHost.contains(":") ? "[\(peerHost)]" : peerHost
         headers.append((name: "Host", value: "\(logicalHost):\(peerPort)"))
@@ -971,6 +976,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 switch result {
                 case .success(let message):
                     do {
+                        owner.reportOversizedWebSocketMessageIfNeeded(
+                            ObstacleBridgeWebSocketOverlayTransportOwner.messageByteCount(message)
+                        )
                         let frame = try owner.overlayRuntime.decodeClientFrame(message)
                         owner.handleWebSocketFrame(frame)
                         owner.receiveFromOverlay()
@@ -1014,6 +1022,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                     owner.receiveFromNetworkWebSocket(connection: connection, generation: generation)
                     return
                 }
+                owner.reportOversizedWebSocketMessageIfNeeded(content.count)
                 do {
                     let message: URLSessionWebSocketTask.Message
                     switch metadata.opcode {
@@ -1040,6 +1049,14 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 owner.receiveFromNetworkWebSocket(connection: connection, generation: generation)
             }
         }
+    }
+
+    private func reportOversizedWebSocketMessageIfNeeded(_ messageBytes: Int) {
+        guard webSocketAdvertisedMaxSize > 0, messageBytes > webSocketAdvertisedMaxSize else { return }
+        eventSink?("ws_overlay_oversized_message_accepted", [
+            "message_bytes": messageBytes,
+            "advertised_max_size": webSocketAdvertisedMaxSize,
+        ])
     }
 
     private func handleWebSocketFrame(_ frame: ObstacleBridgeWebSocketOverlayRuntime.InboundFrame) {

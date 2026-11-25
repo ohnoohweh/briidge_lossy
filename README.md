@@ -597,7 +597,7 @@ The tables below are generated from the current parser registrations in `bridge.
 | `--ws-peer-port` | `8080` | WS peer overlay port |
 | `--ws-subprotocol` | `None` | Optional WebSocket subprotocol (e.g. mux2) |
 | `--ws-tls` | `False` | Use TLS (wss://). Provide cert/key via your deployment. |
-| `--ws-max-size` | `65535` | Maximum binary message size to accept/send (default 65535). |
+| `--ws-max-size` | `65535` | Advertised WebSocket message-size target for peer sending and listener admission (default 65535). Peer clients accept and warn about larger inbound messages for compatibility rather than disconnecting solely on this target. |
 | `--ws-payload-mode` | `binary` | WebSocket payload transfer mode: raw binary frames (default), grouped `semi-text-shape` text frames, base64 text frames, or JSON text frames with the base64 payload in the data field. |
 | `--ws-static-dir` | `./web` | Directory to serve as a static web root on the WS port (default ./web). Set to '' to disable. |
 | `--ws-send-timeout` | `3.0` | Seconds to wait for a WebSocket frame send before forcing reconnect (default 3.0). |
