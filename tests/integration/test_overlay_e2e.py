@@ -5738,6 +5738,35 @@ def run_case_tcp_tcp_stream_survives_reconnect(log_dir: Path) -> None:
         CASES['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels'] = original
 
 
+def run_case_quic_tcp_stream_survives_reconnect(log_dir: Path) -> None:
+    """The QUIC lower connection may reconnect without retiring a TCP service."""
+    base_case = CASES['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels']
+    quic_args = [
+        '--overlay-transport', 'quic', '--quic-bind', '0.0.0.0',
+        '--quic-own-port', '54341', '--quic-reconnect-grace', '5',
+    ]
+    server_args = quic_args + [
+        '--quic-cert', str(LOCALHOST_TLS_FIXTURES / 'cert.pem'),
+        '--quic-key', str(LOCALHOST_TLS_FIXTURES / 'key.pem'),
+    ]
+    client_args = quic_args + [
+        '--quic-peer', '127.0.0.1', '--quic-peer-port', '54341',
+        '--quic-insecure', '--overlay-reconnect-retry-delay-ms', '50',
+    ]
+    case = replace(
+        base_case,
+        name='overlay_quic_tcp_stream_survives_reconnect',
+        bridge_server_args=_append_args(base_case.bridge_server_args, server_args),
+        bridge_client_args=_append_args(base_case.bridge_client_args, client_args),
+    )
+    original = CASES['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels']
+    CASES['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels'] = case
+    try:
+        run_case_ws_tcp_stream_survives_reconnect(log_dir, runtime_mode='python-python')
+    finally:
+        CASES['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels'] = original
+
+
 def run_case_two_peer_clients_listener(
     case: Case,
     log_dir: Path,
@@ -9486,6 +9515,13 @@ def test_overlay_e2e_ws_tcp_stream_survives_reconnect(runtime_mode: str, tmp_pat
 def test_overlay_e2e_tcp_tcp_stream_survives_reconnect(tmp_path: Path) -> None:
     """A TCP lower reconnect must preserve the established TCP service stream."""
     run_case_tcp_tcp_stream_survives_reconnect(tmp_path)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_quic_tcp_stream_survives_reconnect(tmp_path: Path) -> None:
+    """A QUIC lower reconnect must preserve the established TCP service stream."""
+    run_case_quic_tcp_stream_survives_reconnect(tmp_path)
 
 
 @pytest.mark.integration

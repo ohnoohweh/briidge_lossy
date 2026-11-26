@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import importlib.util
 import logging
 import os
@@ -751,17 +752,26 @@ class QuicSession(ISession):
 
     def request_reconnect(self) -> bool:
         if not self._peer_tuple or not self._run_flag:
+            self._log.warning(
+                "[QUIC-SESSION] (%s) reconnect rejected peer_configured=%s running=%s",
+                self._probe_id, bool(self._peer_tuple), self._run_flag,
+            )
             return False
-        proto = self._proto
-        self._proto = None
-        self._quic = None
-        self._stream_id = None
-        if proto is not None:
-            with contextlib.suppress(Exception):
-                proto.close()
-        self._set_overlay_connected(False)
-        self._start_reconnect_loop()
-        return True
+        self._log.info("[QUIC-SESSION] (%s) reconnect requested", self._probe_id)
+        try:
+            proto = self._proto
+            self._proto = None
+            self._quic = None
+            self._stream_id = None
+            if proto is not None:
+                with contextlib.suppress(Exception):
+                    proto.close()
+            self._set_overlay_connected(False)
+            self._start_reconnect_loop()
+            return True
+        except Exception as exc:
+            self._log.exception("[QUIC-SESSION] (%s) reconnect request failed: %r", self._probe_id, exc)
+            return False
 
     def request_connection_rotation(self, reason: str = "") -> ConnectionRotationResult:
         if not self._peer_tuple or not self._run_flag:
@@ -1156,6 +1166,16 @@ class QuicSession(ISession):
     def _resume_server_peer(self, temporary_peer_id: int, temporary_ctx: dict, resume_token: str) -> Optional[Tuple[int, dict]]:
         """Bind this QUIC connection to a suspended logical peer, if any."""
         suspended = self._server_resume_registry.claim(resume_token) if resume_token else None
+        # QUIC can complete the replacement TLS handshake before its prior
+        # connection's termination event is delivered. Accept that overlap as
+        # the same logical peer when its stable resume token already belongs
+        # to an active context; the late old-connection close is fenced below
+        # by ``expected_proto``.
+        if suspended is None and resume_token:
+            for candidate in self._server_peers.values():
+                if candidate is not temporary_ctx and candidate.get("resume_token") == resume_token:
+                    suspended = candidate
+                    break
         if suspended is None:
             temporary_ctx["resume_token"] = resume_token
             return None

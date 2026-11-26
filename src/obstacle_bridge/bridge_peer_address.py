@@ -193,6 +193,13 @@ class PeerAddressProtocolSession(ISession):
         getter = getattr(self._inner, "get_max_app_payload_size", None)
         return int(getter() or 65535) if callable(getter) else 65535
 
+    def request_reconnect(self) -> bool:
+        requester = getattr(self._inner, "request_reconnect", None)
+        if callable(requester):
+            with contextlib.suppress(Exception):
+                return bool(requester())
+        return False
+
     def request_connection_rotation(self, reason: str = ""):
         requester = getattr(self._inner, "request_connection_rotation", None)
         return requester(reason) if callable(requester) else None
