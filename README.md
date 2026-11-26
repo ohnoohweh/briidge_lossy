@@ -648,7 +648,7 @@ Current websocket payload forms:
 | `--quic-cert` | `None` | Server certificate file (PEM) |
 | `--quic-key` | `None` | Server private key file (PEM) |
 
-TCP, WebSocket, and QUIC peer clients retain a stable resume token across a brief lower-transport outage. The listener uses the RTT delivery evidence to resume the original logical peer epoch, so active multiplexed TCP streams continue without replaying already acknowledged frames. Portable Python/Swift parity plans intentionally omit the per-runtime token while validating the same transport behavior.
+TCP, WebSocket, and QUIC peer clients retain a stable resume token across a brief lower-transport outage. The listener uses the RTT delivery evidence to resume the original logical peer epoch, so active multiplexed TCP streams continue without replaying already acknowledged frames. Portable Python/Swift parity plans intentionally omit the per-runtime token while validating the same transport behavior; stopping a native runtime also withdraws its authenticated local services.
 | `--quic-insecure` | `False` | Client: disable certificate verification (TEST ONLY) |
 | `--quic-max-size` | `65535` | Maximum app message size accepted/sent (default 65535). |
 

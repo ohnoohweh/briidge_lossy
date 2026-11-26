@@ -1444,7 +1444,12 @@ final class PythonOverlayPeer {
                     if n==126: n=int.from_bytes(nread(c,2),'big')
                     elif n==127: n=int.from_bytes(nread(c,8),'big')
                     m=nread(c,4); body=bytes(x^m[i%4] for i,x in enumerate(nread(c,n))); assert body[:1]==b'\\0'; return body[1:]
-                n=struct.unpack('!I',nread(c,4))[0]; body=nread(c,n); assert body[:1]==b'\\0'; return body[1:]
+                while True:
+                    n=struct.unpack('!I',nread(c,4))[0]; body=nread(c,n)
+                    if body[:1] == b'\\x03':
+                        assert len(body) > 1
+                        continue
+                    assert body[:1]==b'\\0'; return body[1:]
             def write(c,p):
                 if WS:
                     body=b'\\0'+p
@@ -1502,7 +1507,13 @@ final class PythonOverlayPeer {
                         b+=x
                     return b
                 for j in range(2 if MUX else 1):
-                    h=nread(4); n=struct.unpack('!I',h)[0]; b=nread(n); assert b[:1]==b'\\x00'
+                    while True:
+                        h=nread(4); n=struct.unpack('!I',h)[0]; b=nread(n)
+                        if b[:1] == b'\\x03':
+                            assert len(b) > 1
+                            continue
+                        assert b[:1]==b'\\x00'
+                        break
                     if not DROP_FIRST or i == 1: c.sendall(h+b)
                 c.close()
             s.close()
@@ -1530,7 +1541,14 @@ final class PythonOverlayPeer {
             c.sendall(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: '+accept+b'\\r\\n\\r\\n')
         def read_payload():
             if MODE.startswith('tcp'):
-                h=nread(4); n=struct.unpack('!I',h)[0]; b=nread(n); assert b[:1]==b'\\x00'; return b[1:]
+                while True:
+                    h=nread(4); n=struct.unpack('!I',h)[0]; b=nread(n)
+                    # TCP resume tokens belong to the lower transport. They
+                    # precede SecureLink and are not application payloads.
+                    if b[:1] == b'\\x03':
+                        assert len(b) > 1
+                        continue
+                    assert b[:1]==b'\\x00'; return b[1:]
             a,b=nread(2); assert a==(129 if MODE.startswith('ws-text-') else 130) and b&128; n=b&127
             if n==126: n=int.from_bytes(nread(2),'big')
             elif n==127: n=int.from_bytes(nread(8),'big')

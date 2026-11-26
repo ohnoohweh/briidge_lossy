@@ -427,6 +427,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             apply(coordinator.handle(.stop))
             stopTunOpenReplayTimer()
             stopLivenessProbes()
+            stopServiceOwners()
             proxyProvider?.stop(); proxyProvider = nil
             statusLock.lock(); let worker = proxyWorker; proxyWorker = nil; statusLock.unlock()
             worker?.stop()
