@@ -305,6 +305,7 @@ enum ObstacleBridgeLinuxMain {
                         certificatePath: configuration.webSocketCertificatePath!,
                         privateKeyPath: configuration.webSocketPrivateKeyPath!,
                         webSocketPath: configuration.webSocketPath,
+                        webSocketMaxSize: configuration.webSocketMaxSize,
                         timeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds
                     )
                     let admissionLoop = DispatchWorkItem {

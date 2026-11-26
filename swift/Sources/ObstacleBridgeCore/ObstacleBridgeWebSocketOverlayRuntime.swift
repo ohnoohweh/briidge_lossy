@@ -79,6 +79,7 @@ public final class ObstacleBridgeWebSocketOverlayRuntime {
     }
 
     private let payloadMode: String
+    private let wsMaxSize: Int
     private let corePayloadMode: ObstacleBridgeWebSocketPayloadMode
     private let frameMaxSize: Int
     private let sendTimeoutS: Double
@@ -102,7 +103,8 @@ public final class ObstacleBridgeWebSocketOverlayRuntime {
     ) throws {
         self.payloadMode = payloadMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.corePayloadMode = try ObstacleBridgeWebSocketPayloadCodec.mode(self.payloadMode)
-        self.frameMaxSize = ObstacleBridgeWebSocketPayloadCodec.maximumEncodedSize(wsMaxSize, mode: self.corePayloadMode)
+        self.wsMaxSize = max(1, wsMaxSize)
+        self.frameMaxSize = ObstacleBridgeWebSocketPayloadCodec.maximumEncodedSize(self.wsMaxSize, mode: self.corePayloadMode)
         self.earlyBuf = .init(limits: .init(
             maximumItems: 128,
             maximumBytes: max(1_024, self.frameMaxSize * 16),
@@ -192,7 +194,10 @@ public final class ObstacleBridgeWebSocketOverlayRuntime {
                 serverHostname = peerNameHost
             }
         }
-        let headers = headerKeyAvailable ? ["X-ObstacleBridge-WS-Payload-Mode": payloadMode] : [:]
+        let headers = headerKeyAvailable ? [
+            "X-ObstacleBridge-WS-Payload-Mode": payloadMode,
+            "X-ObstacleBridge-WS-Max-Size": String(wsMaxSize),
+        ] : [:]
         let subprotocols = wsSubprotocol.flatMap { $0.isEmpty ? nil : [$0] }
         return ConnectPlan(
             uri: uri,

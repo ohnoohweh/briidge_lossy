@@ -187,6 +187,7 @@ class _WsConnectionBootstrapError(RuntimeError):
 
 
 class WebSocketSession(ISession):
+    _WS_MAX_SIZE_HEADER = "X-ObstacleBridge-WS-Max-Size"
     """
     Overlay over one WebSocket (binary messages by default, optional base64, grouped semi-text, or JSON+base64 text frames):
       wire := KIND(1) + BYTES...
@@ -533,8 +534,27 @@ class WebSocketSession(ISession):
         return {
             header_key: {
                 self._WS_PAYLOAD_MODE_HEADER: self._ws_payload_mode,
+                self._WS_MAX_SIZE_HEADER: str(self._ws_max_size),
             }
         }
+
+    def _resolve_inbound_ws_max_size(self, requested_size: Optional[str], payload_mode: str) -> int:
+        """Return the encoded frame limit negotiated for one server peer.
+
+        Older clients omit the private header and retain the listener's own
+        configured limit. Invalid advertisements deliberately have the same
+        backward-compatible fallback rather than broadening a server limit.
+        """
+        requested = self._ws_max_size
+        if requested_size:
+            try:
+                candidate = int(str(requested_size).strip())
+                if candidate <= 0:
+                    raise ValueError("must be positive")
+                requested = candidate
+            except (TypeError, ValueError):
+                self._log.warning("[WS-SESSION] (%s) invalid advertised WebSocket maximum %r; using configured %d", self._probe_id, requested_size, self._ws_max_size)
+        return max(0, self._build_ws_payload_codec(payload_mode).max_encoded_size(requested))
 
     def _resolve_ws_codec_context(self, ctx: Optional[dict] = None) -> Tuple[str, WebSocketPayloadCodec]:
         if isinstance(ctx, dict):
@@ -1409,12 +1429,13 @@ class WebSocketSession(ISession):
             return method, req_path, http_version, headers
 
         class _ServerSideWsConnection:
-            def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, req_path: str, subprotocol: Optional[str], payload_mode: str) -> None:
+            def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, req_path: str, subprotocol: Optional[str], payload_mode: str, frame_max_size: int) -> None:
                 self._reader = reader
                 self._writer = writer
                 self.path = req_path
                 self.subprotocol = subprotocol
                 self.payload_mode = payload_mode
+                self.frame_max_size = frame_max_size
                 self.transport = writer.transport
                 self.remote_address = writer.get_extra_info("peername")
                 self.local_address = writer.get_extra_info("sockname")
@@ -1469,7 +1490,7 @@ class WebSocketSession(ISession):
                     length = struct.unpack("!H", await self._reader.readexactly(2))[0]
                 elif length == 127:
                     length = struct.unpack("!Q", await self._reader.readexactly(8))[0]
-                if length > self_ref._ws_frame_max_size:
+                if length > self.frame_max_size:
                     raise RuntimeError(f"websocket frame too large: {length}")
                 mask_key = await self._reader.readexactly(4) if masked else b""
                 payload = await self._reader.readexactly(length) if length else b""
@@ -1546,8 +1567,11 @@ class WebSocketSession(ISession):
             payload_mode = self_ref._resolve_inbound_ws_payload_mode(
                 _headers_get(headers, self_ref._WS_PAYLOAD_MODE_HEADER.lower()),
             )
+            frame_max_size = self_ref._resolve_inbound_ws_max_size(
+                _headers_get(headers, self_ref._WS_MAX_SIZE_HEADER.lower()), payload_mode,
+            )
             await _send_http_response(writer, status=101, headers=response_headers, body=b"")
-            return _ServerSideWsConnection(reader, writer, req_path, chosen_subprotocol, payload_mode)
+            return _ServerSideWsConnection(reader, writer, req_path, chosen_subprotocol, payload_mode, frame_max_size)
 
         async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             upgraded = False
@@ -1733,7 +1757,15 @@ class WebSocketSession(ISession):
             return
         self._next_reconnect_attempt_monotonic = None
         host, port = self._current_peer_endpoint()
-        async def _connect(): await self._connect_to(host, port)
+        async def _connect():
+            # Keep the first bootstrap attempt on the same candidate lifecycle
+            # as later reconnects.  In particular, do not let a failed first
+            # IPv6 attempt leave the candidate selector at index zero while a
+            # supervisor observes the disconnected state and restarts us.
+            await self._connect_to(host, port)
+            if self._run_flag and self._ws is None:
+                self._advance_peer_candidate()
+                self._start_reconnect_loop()
         self._connecting_task = self._loop.create_task(_connect())  # type: ignore
 
     def _start_reconnect_loop(self) -> None:
@@ -1832,6 +1864,7 @@ class WebSocketSession(ISession):
                 "ws": ws,
                 "payload_mode": payload_mode,
                 "payload_codec": self._build_ws_payload_codec(payload_mode),
+                "ws_frame_max_size": int(getattr(ws, "frame_max_size", self._ws_frame_max_size)),
                 "tx_queue": asyncio.Queue(),
                 "tx_task": None,
                 "rx_task": None,
@@ -1847,7 +1880,7 @@ class WebSocketSession(ISession):
             sockname = getattr(ws, "local_address", None)
             self._log.info(
                 f"[WS-SESSION] ({self._probe_id}) accept: peer_id={peer_id} local={sockname} "
-                f"peer={peer} payload_mode={payload_mode}"
+                f"peer={peer} payload_mode={payload_mode} ws_frame_max_size={ctx['ws_frame_max_size']}"
             )
             self._log.info(
                 "[WS-SESSION] (%s) server transport epoch=%d peer_id=%d previous_peer_count=%d",
@@ -2139,7 +2172,13 @@ class WebSocketSession(ISession):
                         uri,
                         ssl=ssl_ctx,
                         subprotocols=subprotocols,
-                        max_size=self._ws_frame_max_size,
+                        # A peer advertising an oversized frame must not be
+                        # able to turn a compatibility mismatch into an
+                        # availability failure.  Receive it, emit a warning
+                        # below, and let the overlay codec decide whether it
+                        # is valid.  The advertised/configured size remains
+                        # the sender-side target and a server-peer limit.
+                        max_size=None,
                         compression=self._ws_compression,
                         ping_interval=None,    # we run our own RTT ping
                         ping_timeout=None,
@@ -2202,8 +2241,6 @@ class WebSocketSession(ISession):
                 )
                 self._record_connection_failure(failure_reason, failure_detail)
                 self._log.warning(f"[WS-SESSION] ({self._probe_id}) connect failed to {uri}: {e!r}")
-                if self._run_flag and self._ws is None:
-                    self._start_reconnect_loop()
             finally:
                 self._connecting_task = None
 
@@ -2603,6 +2640,17 @@ class WebSocketSession(ISession):
                 if active_ws is None:
                     return
                 msg = await active_ws.recv()  # type: ignore
+                if client_mode and self._ws_frame_max_size > 0:
+                    encoded_size = len(msg.encode("utf-8")) if isinstance(msg, str) else len(msg)
+                    if encoded_size > self._ws_frame_max_size:
+                        self._log.warning(
+                            "[WS/RX] (%s) accepting oversized peer WebSocket message "
+                            "encoded_bytes=%d advertised_limit=%d; peer should honor "
+                            "X-ObstacleBridge-WS-Max-Size",
+                            self._probe_id,
+                            encoded_size,
+                            self._ws_frame_max_size,
+                        )
                 b = self._decode_ws_message(msg, ctx=ctx)
                 if b is None:
                     continue

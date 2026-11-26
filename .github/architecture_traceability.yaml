@@ -122,6 +122,17 @@ ARC-CMP-001:
     - tests/unit/test_ws_payload_mode.py::test_open_ws_proxy_socket_blocking_establishes_connect_tunnel
     - tests/unit/test_ws_payload_mode.py::test_connect_proxy_open_timeout_cancels_without_asyncio_callback_error
     - tests/unit/test_ws_payload_mode.py::test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight
+    - tests/unit/test_ws_payload_mode.py::test_initial_failed_address_override_advances_before_reconnect
+    - tests/unit/test_ws_payload_mode.py::test_listener_uses_advertised_maximum_per_peer_and_configured_fallback
+    - tests/unit/test_ws_payload_mode.py::test_connect_tolerates_oversized_peer_frames_for_text_payload_modes
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_ws_runtime_connect_plan_matches_python
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_ws_runtime_proxy_connect_plan_matches_python
+    - ios/tests/test_m3_native_sources.py::test_swift_websocket_clients_advertise_their_configured_message_limit
+    - ios/tests/test_m3_native_sources.py::test_swift_tls_websocket_listener_keeps_a_message_limit_per_connection
+    - tests/unit/test_stream_peer_rotation.py::test_tcp_initial_failed_candidate_advances_before_reconnect
+    - tests/unit/test_stream_peer_rotation.py::test_quic_initial_failed_candidate_advances_before_reconnect
+    - ios/tests/test_m3_native_sources.py::test_swift_tcp_synchronous_open_failure_advances_core_candidate
+    - ios/tests/test_macos_swift_host_runner.py::test_swift_tcp_synchronous_open_failure_uses_core_candidate_fallback
     - tests/unit/test_ws_payload_mode.py::test_proxy_multi_ws_peer_uses_resolved_candidate_for_lookup_and_connect
     - tests/unit/test_ws_payload_mode.py::test_client_accept_resets_stale_rtt_state_before_new_transport_establishes
     - tests/unit/test_ws_payload_mode.py::test_client_accept_rejects_overlapping_websocket_without_closing_active

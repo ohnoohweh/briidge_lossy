@@ -671,12 +671,17 @@ REQ-WSP-010:
     - tests/unit/test_ws_payload_mode.py::test_base64_mode_encodes_and_decodes_text_frames
     - tests/unit/test_ws_payload_mode.py::test_json_base64_mode_encodes_and_decodes_text_frames
     - tests/unit/test_ws_payload_mode.py::test_connect_advertises_payload_mode_in_upgrade_request
-    - tests/unit/test_ws_payload_mode.py::test_connect_uses_encoded_frame_limit_for_text_payload_modes
+    - tests/unit/test_ws_payload_mode.py::test_connect_tolerates_oversized_peer_frames_for_text_payload_modes
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_ws_runtime_connect_plan_matches_python
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_ws_runtime_proxy_connect_plan_matches_python
     - tests/unit/test_ws_payload_mode.py::test_invalid_text_frames_are_rejected
     - tests/unit/test_ws_payload_mode.py::test_invalid_semi_text_shape_frames_are_rejected
     - tests/unit/test_ws_payload_mode.py::test_listener_peer_uses_advertised_payload_mode_for_rx_and_tx
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
     - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
+    - tests/unit/test_ws_payload_mode.py::test_listener_uses_advertised_maximum_per_peer_and_configured_fallback
+    - ios/tests/test_m3_native_sources.py::test_swift_websocket_clients_advertise_their_configured_message_limit
+    - ios/tests/test_m3_native_sources.py::test_swift_tls_websocket_listener_keeps_a_message_limit_per_connection
 
 REQ-WSP-011:
   integration_tests:
@@ -709,8 +714,10 @@ REQ-WSP-013:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_ws_peer_address_list
     - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_uses_literal_endpoint_with_logical_http_and_tls_name
     - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_empty_address_list_preserves_dns_resolution
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_reports_synchronous_open_failures_to_core_for_candidate_fallback
     - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_uses_ws_address_override_without_dns
     - tests/unit/test_ws_payload_mode.py::test_connect_peer_address_override_keeps_logical_host_for_uri_tls_and_http
+    - tests/unit/test_ws_payload_mode.py::test_initial_failed_address_override_advances_before_reconnect
     - tests/unit/test_ws_payload_mode.py::test_empty_peer_address_override_resolves_ws_peer_as_before
     - tests/unit/test_ws_payload_mode.py::test_peer_address_override_rejects_dns_names
 
@@ -885,8 +892,12 @@ REQ-LIFE-002:
     - tests/unit/test_peer_resolution.py::test_udp_session_rotation_rebuilds_client_socket
     - ios/tests/test_m3_native_sources.py::test_udp_overlay_peer_rotation_rebuilds_the_native_socket
     - tests/unit/test_stream_peer_rotation.py::test_tcp_reconnect_cleanup_survives_stopped_event_loop
+    - tests/unit/test_stream_peer_rotation.py::test_tcp_initial_failed_candidate_advances_before_reconnect
     - tests/unit/test_stream_peer_rotation.py::test_ws_reconnect_cleanup_survives_stopped_event_loop
     - tests/unit/test_stream_peer_rotation.py::test_quic_reconnect_cleanup_survives_stopped_event_loop
+    - tests/unit/test_stream_peer_rotation.py::test_quic_initial_failed_candidate_advances_before_reconnect
+    - ios/tests/test_m3_native_sources.py::test_swift_tcp_synchronous_open_failure_advances_core_candidate
+    - ios/tests/test_macos_swift_host_runner.py::test_swift_tcp_synchronous_open_failure_uses_core_candidate_fallback
     - tests/unit/test_ws_payload_mode.py::test_quick_reconnect_cancels_pending_disconnect
     - tests/unit/test_ws_payload_mode.py::test_client_accept_resets_stale_rtt_state_before_new_transport_establishes
     - tests/unit/test_ws_payload_mode.py::test_client_accept_rejects_overlapping_websocket_without_closing_active

@@ -597,7 +597,7 @@ The tables below are generated from the current parser registrations in `bridge.
 | `--ws-peer-port` | `8080` | WS peer overlay port |
 | `--ws-subprotocol` | `None` | Optional WebSocket subprotocol (e.g. mux2) |
 | `--ws-tls` | `False` | Use TLS (wss://). Provide cert/key via your deployment. |
-| `--ws-max-size` | `65535` | Maximum binary message size to accept/send (default 65535). |
+| `--ws-max-size` | `65535` | Advertised WebSocket message-size target for peer sending and listener admission (default 65535). Peer clients keep an unlimited receive-side compatibility path, warning about larger inbound messages rather than disconnecting solely on this target. |
 | `--ws-payload-mode` | `binary` | WebSocket payload transfer mode: raw binary frames (default), grouped `semi-text-shape` text frames, base64 text frames, or JSON text frames with the base64 payload in the data field. |
 | `--ws-static-dir` | `./web` | Directory to serve as a static web root on the WS port (default ./web). Set to '' to disable. |
 | `--ws-send-timeout` | `3.0` | Seconds to wait for a WebSocket frame send before forcing reconnect (default 3.0). |
@@ -1667,9 +1667,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `81` | `1214` |
-| macOS Swift app | `1` | `94` |
-| iOS app/extension | `31` | `237` |
+| Python CLI/runtime, including macOS Python | `81` | `1219` |
+| macOS Swift app | `1` | `96` |
+| iOS app/extension | `31` | `240` |
 
 #### Requirement traceability
 
@@ -1713,7 +1713,7 @@ Desktop-only process ownership is reviewed across macOS and Linux; iOS extension
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
 | Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `94` | `0` | `94` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `35` | `35` |
-| Total parity-oriented evidence | Sum of the lanes above | `106` | `155` | `261` |
+| Total parity-oriented evidence | Sum of the lanes above | `108` | `155` | `263` |
 
 Important caveat:
 

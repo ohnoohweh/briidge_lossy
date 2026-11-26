@@ -619,7 +619,15 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
             resolved = try currentResolvedPeer()
         } catch {
             eventSink?("tcp_overlay_connect_failed", ["error": error.localizedDescription])
-            scheduleReconnect()
+            // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks
+            // Core owns candidate rotation when the layered adapter is
+            // installed.  Report synchronous resolution/setup failures so a
+            // failed preferred IPv6 candidate advances to the next address.
+            if overlayLayerTransportAdapter != nil {
+                overlayLayerTransportAdapter?.handleTransportDisconnected()
+            } else {
+                scheduleReconnect()
+            }
             return
         }
         reconnectScheduled = false
@@ -632,7 +640,11 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
         resolvedPeerFamily = ObstacleBridgePeerAddressResolver.familyName(resolved.family)
         guard let port = NWEndpoint.Port(rawValue: UInt16(resolved.port)) else {
             eventSink?("tcp_overlay_invalid_peer_port", ["port": resolved.port])
-            scheduleReconnect()
+            if overlayLayerTransportAdapter != nil {
+                overlayLayerTransportAdapter?.handleTransportDisconnected()
+            } else {
+                scheduleReconnect()
+            }
             return
         }
         let connection = NWConnection(host: NWEndpoint.Host(resolved.host), port: port, using: .tcp)

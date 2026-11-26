@@ -84,6 +84,35 @@ def _new_quic_session():
 
 
 class StreamPeerRotationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tcp_initial_failed_candidate_advances_before_reconnect(self) -> None:
+        session = TcpStreamSession(_tcp_args())
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+
+        attempts: list[tuple[str, int]] = []
+
+        async def _fake_connect_to(host: str, port: int) -> None:
+            attempts.append((host, port))
+            if host == "198.51.100.20":
+                session._writer = object()
+
+        session._connect_to = _fake_connect_to  # type: ignore[method-assign]
+        session._ensure_connect_once()
+        for _ in range(20):
+            if session._writer is not None:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(attempts[:2], [("192.0.2.10", 54321), ("198.51.100.20", 54321)])
+        self.assertEqual(session._peer_candidate_index, 1)
+
+        session._run_flag = False
+        for task in (session._connecting_task, session._reconnect_task):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
     async def test_tcp_reconnect_loop_rotates_peer_candidates_permanently(self) -> None:
         session = TcpStreamSession(_tcp_args())
         session._loop = asyncio.get_running_loop()
@@ -158,6 +187,35 @@ class StreamPeerRotationTests(unittest.IsolatedAsyncioTestCase):
             session._reconnect_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await session._reconnect_task
+
+    async def test_quic_initial_failed_candidate_advances_before_reconnect(self) -> None:
+        session = _new_quic_session()
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+
+        attempts: list[tuple[str, int]] = []
+
+        async def _fake_connect_to(host: str, port: int) -> None:
+            attempts.append((host, port))
+            if host == "198.51.100.20":
+                session._quic = object()
+
+        session._connect_to = _fake_connect_to  # type: ignore[method-assign]
+        session._ensure_connect_once()
+        for _ in range(20):
+            if session._quic is not None:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(attempts[:2], [("192.0.2.10", 443), ("198.51.100.20", 443)])
+        self.assertEqual(session._peer_candidate_index, 1)
+
+        session._run_flag = False
+        for task in (session._connecting_task, session._reconnect_task):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
 
 class StreamCandidateCycleTests(unittest.TestCase):

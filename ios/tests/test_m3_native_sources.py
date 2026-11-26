@@ -618,6 +618,52 @@ def test_swift_websocket_reconnect_starts_a_fresh_tun_epoch_before_new_task() ->
     )
 
 
+def test_swift_websocket_synchronous_open_failure_advances_core_candidate() -> None:
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    connect_overlay = owner[owner.index("    private func connectOverlay(") : owner.index("    private func currentResolvedPeer")]
+
+    assert "overlayLayerTransportAdapter?.handleTransportDisconnected()" in connect_overlay
+    assert connect_overlay.index("overlayLayerTransportAdapter?.handleTransportDisconnected()") < connect_overlay.index(
+        "scheduleReconnect()"
+    )
+
+
+def test_swift_websocket_clients_advertise_their_configured_message_limit() -> None:
+    core = (CORE_SWIFT_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
+    linux_client = (ROOT / "swift" / "Sources" / "ObstacleBridgeLinux" / "Adapters" / "ObstacleBridgeLinuxOverlayTransport.swift").read_text(encoding="utf-8")
+
+    assert '"X-ObstacleBridge-WS-Max-Size": String(wsMaxSize)' in core
+    assert 'X-ObstacleBridge-WS-Max-Size: \\(wsMaxSize)' in linux_client
+
+
+def test_swift_websocket_clients_accept_and_report_oversized_peer_messages() -> None:
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "webSocketOptions.maximumMessageSize = Int.max" in owner
+    assert 'eventSink?("ws_overlay_oversized_message_accepted"' in owner
+    assert "reportOversizedWebSocketMessageIfNeeded(content.count)" in owner
+
+
+def test_swift_tls_websocket_listener_keeps_a_message_limit_per_connection() -> None:
+    listener = (ROOT / "swift" / "Sources" / "ObstacleBridgeLinux" / "Adapters" / "ObstacleBridgeLinuxTLSWebSocketListener.swift").read_text(encoding="utf-8")
+
+    assert "var webSocketMaxSize = 65535" in listener
+    assert "c.webSocketMaxSize = advertised.map" in listener
+    assert "guard n <= c.webSocketMaxSize" in listener
+
+
+def test_swift_tcp_synchronous_open_failure_advances_core_candidate() -> None:
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    connect_overlay = owner[owner.index("    private func connectOverlay(") : owner.index("    private func startOverlayListener")]
+
+    assert 'eventSink?("tcp_overlay_connect_failed"' in connect_overlay
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks" in connect_overlay
+    assert connect_overlay.count("overlayLayerTransportAdapter?.handleTransportDisconnected()") == 2
+    assert connect_overlay.index("overlayLayerTransportAdapter?.handleTransportDisconnected()") < connect_overlay.index(
+        "scheduleReconnect()"
+    )
+
+
 def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
     tun_runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
     overlay_core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")

@@ -289,8 +289,9 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     /// Local explicit-proxy provider; unlike overlay services it is available
     /// before the remote peer authenticates.
     public let proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration
+    public let webSocketMaxSize: Int
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, secureLinkRekeyAfterFrames: Int = 0, secureLinkRekeyAfterSeconds: TimeInterval = 0, receiveIdleTimeoutMilliseconds: Int = 5_000, debugLoggingEnabled: Bool = false, channelMuxLogLevel: ObstacleBridgeRuntimeDiagnosticLevel = .info, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, listenerRemoteServicePublicationEnabled: Bool = false, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil, tunHelperSessionToken: String? = nil, launchSwiftTunHelper: Bool = false, tunHelperExecutable: String? = nil, tunInterfaceName: String = "obtun0", packetTunnelEnabled: Bool = false, packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan? = nil, proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration = .init()) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketMaxSize: Int = 65535, webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, secureLinkRekeyAfterFrames: Int = 0, secureLinkRekeyAfterSeconds: TimeInterval = 0, receiveIdleTimeoutMilliseconds: Int = 5_000, debugLoggingEnabled: Bool = false, channelMuxLogLevel: ObstacleBridgeRuntimeDiagnosticLevel = .info, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, listenerRemoteServicePublicationEnabled: Bool = false, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil, tunHelperSessionToken: String? = nil, launchSwiftTunHelper: Bool = false, tunHelperExecutable: String? = nil, tunInterfaceName: String = "obtun0", packetTunnelEnabled: Bool = false, packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan? = nil, proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration = .init()) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = ObstacleBridgePeerAddressPort.configuredPeerCandidates(host)
@@ -298,6 +299,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.port = port
         self.webSocketPath = webSocketPath
         self.webSocketPayloadMode = webSocketPayloadMode
+        self.webSocketMaxSize = max(1, webSocketMaxSize)
         self.webSocketTLS = webSocketTLS
         self.webSocketTrustRootsPath = webSocketTrustRootsPath
         self.webSocketCertificatePath = webSocketCertificatePath
@@ -572,6 +574,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             listenerMode: listenerMode,
             webSocketPath: string(session["ws_path"]) ?? "/",
             webSocketPayloadMode: string(session["ws_payload_mode"]) ?? "binary",
+            webSocketMaxSize: max(1, integer(session["ws_max_size"]) ?? 65535),
             webSocketTLS: wsTLS,
             webSocketTrustRootsPath: string(session["ws_ca_cert"]),
             webSocketCertificatePath: wsCertificate,

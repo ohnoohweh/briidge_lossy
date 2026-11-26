@@ -541,7 +541,9 @@ private func websocketPayloadCodecSummaryObject(
 private func wsOverlayConnectPlanObject(_ snapshot: ObstacleBridgeWebSocketOverlayRuntime.ConnectPlan) -> [String: Any] {
     return [
         "uri": snapshot.uri,
-        "max_size": snapshot.maxSize,
+        // `maxSize` remains the advertised sender target.  Peer clients no
+        // longer impose it as a receive-side availability cutoff.
+        "max_size": NSNull(),
         "compression_disabled": snapshot.compressionDisabled,
         "upgrade_headers": snapshot.upgradeHeaders,
         "preflight_required": snapshot.preflightRequired,
