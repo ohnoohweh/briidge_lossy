@@ -52,6 +52,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
     private let tunPacketSink: TunPacketSink?
     private let muxInstanceID: UInt64
     private let muxConnectionSeq: UInt32
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue
     private let quicResumeToken = UUID().uuidString.lowercased()
     private var overlayConnection: NWConnection?
     private let serviceCatalog = ObstacleBridgeAppleServiceCatalog()
@@ -657,6 +658,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
         }
     }
 
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue
     private func detachLowerTransportForResume() {
         logicalEpochRetainedForResume = true
         lowerLayerFallbackWorkItem?.cancel()

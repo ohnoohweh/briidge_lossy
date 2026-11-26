@@ -1516,6 +1516,7 @@ def test_tcp_overlay_transport_owner_source_exists() -> None:
     assert "private func detachLowerTransportForResume()" in runtime
     assert "sendRawOverlayWire(tcpResumeWire())" in runtime
     assert "RTT PONG on the new" in runtime
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks" in runtime
 
 
 def test_quic_overlay_transport_owner_retains_logical_epoch_for_resume() -> None:
@@ -1525,6 +1526,7 @@ def test_quic_overlay_transport_owner_retains_logical_epoch_for_resume() -> None
     assert "sendRawOverlayWire(quicResumeWire())" in runtime
     assert "private func detachLowerTransportForResume()" in runtime
     assert "logicalEpochRetainedForResume = true" in runtime
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue" in runtime
 
 
 def test_channel_mux_tcp_transport_owner_source_exists() -> None:

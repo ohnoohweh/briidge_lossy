@@ -1780,6 +1780,7 @@ def test_swift_tcp_reconnect_retains_logical_epoch_and_sends_resume_record() -> 
     assert "sendRawOverlayWire(tcpResumeWire())" in tcp_owner
     assert "private func detachLowerTransportForResume()" in tcp_owner
     assert "logicalEpochRetainedForResume = true" in tcp_owner
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks" in tcp_owner
 
 
 def test_swift_quic_reconnect_retains_logical_epoch_and_sends_resume_record() -> None:
@@ -1788,6 +1789,7 @@ def test_swift_quic_reconnect_retains_logical_epoch_and_sends_resume_record() ->
     assert "private let quicResumeToken = UUID().uuidString.lowercased()" in quic_owner
     assert "sendRawOverlayWire(quicResumeWire())" in quic_owner
     assert "private func detachLowerTransportForResume()" in quic_owner
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue" in quic_owner
 
 
 def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:

@@ -48,6 +48,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
     private let muxConnectionSeq: UInt32
     /// Stable across lower TCP sockets for this owner lifetime.  The Python
     /// listener uses it to reclaim a grace-window logical peer.
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks
     private let tcpResumeToken = UUID().uuidString.lowercased()
 
     private var udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
@@ -1021,6 +1022,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
     /// Keeps the authenticated overlay/session and ChannelMux service owners
     /// alive while the concrete TCP socket reconnects. RTT PONG on the new
     /// stream is still the liveness evidence before normal traffic proceeds.
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks
     private func detachLowerTransportForResume() {
         logicalEpochRetainedForResume = true
         lowerLayerFallbackWorkItem?.cancel()
