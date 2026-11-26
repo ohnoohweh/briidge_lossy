@@ -30,6 +30,10 @@ private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
     /// publication, and connection epoch are per concrete owner. The
     /// configured runtime only reads this admission for its redacted status.
     private let admission: ObstacleBridgeLinuxConnectionAdmission
+    /// Belongs to this logical lifecycle owner rather than a concrete socket.
+    /// A WebSocket reconnect therefore identifies the same peer at a listener
+    /// during its resume grace interval.
+    private let wsResumeToken = UUID().uuidString.lowercased()
     private let lock = NSLock()
     private var activeEpoch: UInt64?
     private var retryTimer: DispatchSourceTimer?
@@ -63,6 +67,7 @@ private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
                     wsProxy: configuration.webSocketProxy, quicALPN: configuration.quicALPN,
                     quicInsecure: configuration.quicInsecure, quicTrustRootsPath: configuration.quicTrustRootsPath,
                     receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds,
+                    wsResumeToken: expectedTransport == .ws ? self.wsResumeToken : nil,
                     diagnosticSink: { [weak runtime] level, event, fields in
                         runtime?.recordCoreDiagnostic(level, event: event, fields: fields)
                     }
@@ -199,6 +204,16 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     // The timer and adapter are both confined to `queue`.
     private var tunOpenReplayTimer: DispatchSourceTimer?
     private var activeCoordinatorEpoch: UInt64?
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests
+    /// The service/mux lifetime is intentionally distinct from the socket
+    /// lifetime. Today all transports still select `.retire`, but keeping the
+    /// decision at this boundary lets WS, TCP and QUIC adopt resumable lower
+    /// connections without making a socket interruption redefine service
+    /// ownership or channel identity.
+    private enum LogicalEpochInterruptionPolicy {
+        case retire
+        case retainForResume
+    }
     private var lastFailureDiagnosticSignature: String?
     /// Listener-owned child sessions are retired by their shared listener;
     /// they must never turn a peer close into an outbound reconnect attempt.
@@ -698,18 +713,26 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                     self.drainPendingSecureLinkPayload(from: connectedSession)
                 }
             }
-            let mux = try ObstacleBridgeLinuxChannelMuxSession(
-                runtime: configuredRuntime, session: connectedSession,
-                diagnosticSink: { [weak self] level, event, fields in
-                    self?.queue.async { [weak self] in self?.emitChannelMuxDiagnostic(level, event: event, fields: fields) }
+            let resumingLogicalEpoch = interruptionPolicy() == .retainForResume && channelMux != nil
+            let mux: ObstacleBridgeLinuxChannelMuxSession
+            if resumingLogicalEpoch, let retainedMux = channelMux {
+                try retainedMux.resume(on: connectedSession)
+                mux = retainedMux
+                emitDiagnostic("overlay.logical_epoch.resumed", fields: ["epoch": String(epoch)])
+            } else {
+                mux = try ObstacleBridgeLinuxChannelMuxSession(
+                    runtime: configuredRuntime, session: connectedSession,
+                    diagnosticSink: { [weak self] level, event, fields in
+                        self?.queue.async { [weak self] in self?.emitChannelMuxDiagnostic(level, event: event, fields: fields) }
+                    }
+                )
+                mux.onUnsolicitedFrame = { [weak self] frame in
+                    self?.queue.async { [weak self] in self?.routeInboundFrame(frame) }
                 }
-            )
-            mux.onUnsolicitedFrame = { [weak self] frame in
-                self?.queue.async { [weak self] in self?.routeInboundFrame(frame) }
+                mux.activateReceiveOwner()
+                channelMux = mux
             }
-            mux.activateReceiveOwner()
             connectedSession.activateReceiveOwner()
-            channelMux = mux
             // Refresh the adapter projection before Core publishes ready so
             // an Admin reader cannot observe a connected lifecycle paired
             // with the preceding transport epoch.
@@ -737,12 +760,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             // The session is already cryptographically admitted, so its
             // receive owner can safely start before the public transition.
             startReceiveWorker(session: connectedSession, mux: mux, coordinatorEpoch: epoch)
-            phase = "remote_catalog"
-            try publishRemoteCatalog()
-            phase = "service_owners"
-            try startOwnServiceOwners()
-            phase = "packet_tunnel"
-            _ = startPacketDeviceIfNeeded()
+            if !resumingLogicalEpoch {
+                phase = "remote_catalog"
+                try publishRemoteCatalog()
+                phase = "service_owners"
+                try startOwnServiceOwners()
+                phase = "packet_tunnel"
+                _ = startPacketDeviceIfNeeded()
+            }
             apply(coordinator.handle(.authenticated(epoch: epoch)))
             emitDiagnostic("overlay.post_auth.ready", fields: ["epoch": String(epoch)])
         } catch ObstacleBridgeLinuxOverlayTransportError.cancelled {
@@ -755,6 +780,42 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             ])
             apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
         }
+    }
+
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests
+    private func interruptionPolicy() -> LogicalEpochInterruptionPolicy {
+        // TCP and QUIC deliberately share this policy seam but remain
+        // conservative until their peer-resume handshakes are specified.
+        // WebSocket has an explicit resume token and listener grace contract.
+        switch configuredRuntime.configuration.transport {
+        case .ws: return .retainForResume
+        case .tcp, .quic: return .retire
+        case .myudp: return .retire
+        }
+    }
+
+    /// Drops only the lower transport/session. A resumable transport will use
+    /// this path while retaining `channelMux` and service owners.
+    private func detachLowerTransport(epoch: UInt64) {
+        session?.close()
+        session = nil
+        replaceReceiveWorker(with: nil)
+        transportLifecycleOwner.cancel(epoch: epoch)
+        configuredRuntime.advanceCandidate()
+    }
+
+    /// Retires the logical ChannelMux/service epoch. This is deliberately
+    /// separate from lower-transport cleanup so it is never implicit in a
+    /// WebSocket, TCP, or QUIC socket callback.
+    private func retireLogicalServiceEpoch() {
+        channelMux = nil
+        muxEgressScheduler.removeAll()
+        muxEgressDrainScheduled = false
+        stopPacketDevice()
+        activeCoordinatorEpoch = nil
+        stopServiceOwners()
+        stopRemoteServiceOwners()
+        _ = remoteCatalogStore.withdraw()
     }
 
     private func scheduleRetry(token: UInt64, afterMilliseconds delay: Int) {
@@ -801,19 +862,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 openTransport(epoch: epoch)
             case .cancelTransport(let epoch):
                 guard activeCoordinatorEpoch == nil || activeCoordinatorEpoch == epoch else { continue }
-                session?.close()
-                session = nil
-                channelMux = nil
-                muxEgressScheduler.removeAll()
-                muxEgressDrainScheduled = false
-                stopPacketDevice()
-                activeCoordinatorEpoch = nil
-                replaceReceiveWorker(with: nil)
-                stopServiceOwners()
-                stopRemoteServiceOwners()
-                _ = remoteCatalogStore.withdraw()
-                transportLifecycleOwner.cancel(epoch: epoch)
-                configuredRuntime.advanceCandidate()
+                detachLowerTransport(epoch: epoch)
+                if interruptionPolicy() == .retire {
+                    retireLogicalServiceEpoch()
+                }
                 refreshStatusProjection()
             case .startReceive(let epoch):
                 guard coordinator.snapshot.epoch == epoch, let session, let channelMux else { continue }

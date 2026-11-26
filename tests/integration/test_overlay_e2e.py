@@ -2694,6 +2694,7 @@ def _runtime_config_from_bridge_args(
         '--ws-peer': ('ws_peer', str),
         '--ws-peer-port': ('ws_peer_port', int),
         '--ws-own-port': ('ws_own_port', int),
+            '--ws-reconnect-grace': ('ws_reconnect_grace', float),
         '--quic-bind': ('quic_bind', str),
         '--quic-peer': ('quic_peer', str),
         '--quic-peer-port': ('quic_peer_port', int),
@@ -5585,6 +5586,119 @@ def run_case_reconnect(case: Case, log_dir: Path, case_index: int, settle_s: Opt
         phase('13. Verify per-connection metrics updated after 01 34 / 02 34 exchange')
         wait_connections_metrics_updated(server_proc.admin_port or 0, timeout=8.0, label='server')
         wait_connections_metrics_updated(client_proc.admin_port or 0, timeout=8.0, label='client')
+    finally:
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        bounce.stop()
+
+
+def run_case_ws_tcp_stream_survives_reconnect(
+    log_dir: Path,
+    *,
+    runtime_mode: str = 'python-python',
+) -> None:
+    """Keep one TCP service stream alive while the client replaces its WS.
+
+    The request is deliberately made through the supported Admin reconnect
+    endpoint, rather than by restarting either bridge process: restarting a
+    process necessarily destroys its local TCP socket. A short WebSocket
+    interruption is recovered within ``--ws-reconnect-grace`` and therefore
+    must not close the ChannelMux TCP channel or lose either direction's
+    ordered bytes.
+    """
+    case_index = 660
+    base_case = CASES['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels']
+    case = materialize_case_ports(
+        replace(
+            base_case,
+            name='overlay_ws_tcp_stream_survives_reconnect',
+            bridge_server_args=_append_args(
+                base_case.bridge_server_args,
+                # The listener must retain the accepted logical peer while
+                # its lower WebSocket is replaced.
+                ['--ws-reconnect-grace', '5'],
+            ),
+            bridge_client_args=_append_args(
+                base_case.bridge_client_args,
+                ['--overlay-reconnect-retry-delay-ms', '50', '--ws-reconnect-grace', '5'],
+            ),
+        ),
+        case_index,
+    )
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce', proto='tcp', bind_host=case.bounce_bind,
+        port=case.bounce_port, log_path=log_dir / f'{case.name}_bounce.log',
+    )
+    server_proc: Optional[Proc] = None
+    client_proc: Optional[Proc] = None
+
+    def exchange(stream: socket.socket, payload: bytes) -> None:
+        expected = response_payload(payload)
+        stream.sendall(payload)
+        received = bytearray()
+        while len(received) < len(expected):
+            chunk = stream.recv(len(expected) - len(received))
+            if not chunk:
+                raise RuntimeError(
+                    'persistent TCP service stream closed during WebSocket recovery '
+                    f'after {len(received)} of {len(expected)} reply bytes'
+                )
+            received.extend(chunk)
+        if bytes(received) != expected:
+            raise RuntimeError(
+                f'persistent TCP service stream lost/corrupted bytes: '
+                f'got={bytes(received)!r} expected={expected!r}'
+            )
+
+    try:
+        bounce.start()
+        server_spec, client_spec = build_commands(
+            case, log_dir, case_index, enable_admin=True, runtime_mode=runtime_mode,
+        )
+        server_name, server_cmd, server_env, server_admin = server_spec
+        client_name, client_cmd, client_env, client_admin = client_spec
+        server_proc = start_proc(server_name, server_cmd, log_dir, env_extra=server_env, admin_port=server_admin)
+        client_proc = start_proc(client_name, client_cmd, log_dir, env_extra=client_env, admin_port=client_admin)
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        server_proc, client_proc = wait_both_connected(server_proc, client_proc, log_dir, timeout=25.0)
+        wait_tcp_listen(case.probe_host, case.probe_port, timeout=8.0)
+
+        with socket.create_connection((case.probe_host, case.probe_port), timeout=8.0) as stream:
+            stream.settimeout(15.0)
+            # Both phases traverse the same client TCP socket and the same
+            # server-origin socket; each echoed response asserts reverse as
+            # well as forward delivery.
+            exchange(stream, b'\x01before-ws-reconnect')
+            code, result = post_json(
+                f'http://127.0.0.1:{client_proc.admin_port}/api/reconnect', timeout=5.0,
+            )
+            accepted = bool(result.get('ok')) and (
+                int(result.get('requested') or 0) >= 1 or bool(result.get('reconnect_requested'))
+            )
+            if code != 200 or not accepted:
+                raise RuntimeError(f'WebSocket reconnect request was rejected: code={code} payload={result!r}')
+
+            # RTT PONG is the transport's delivery fence. Do not resume the
+            # ordered TCP source until both replacement WebSocket endpoints
+            # have reported a fresh connected RTT state.
+            time.sleep(1.1)
+            server_proc, client_proc = wait_both_connected(
+                server_proc, client_proc, log_dir, timeout=12.0,
+            )
+            assert_running(server_proc)
+            assert_running(client_proc)
+            exchange(stream, b'\x01after-ws-reconnect')
+
+            received = bounce.received_payloads()
+            expected_requests = [b'\x01before-ws-reconnect', b'\x01after-ws-reconnect']
+            if received != expected_requests:
+                raise RuntimeError(
+                    f'TCP server did not receive persistent-stream records exactly once: '
+                    f'got={received!r} expected={expected_requests!r}'
+                )
     finally:
         if client_proc is not None:
             stop_proc(client_proc)
@@ -9311,6 +9425,29 @@ def test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip(tmp_
 @pytest.mark.parametrize("case_name", RECONNECT_CASES)
 def test_overlay_e2e_reconnect(case_name: str, tmp_path: Path) -> None:
     run_case_reconnect(CASES[case_name], tmp_path, CASE_INDEX_BASE_RECONNECT + ALL_CASES.index(case_name))
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    'runtime_mode',
+    [
+        pytest.param('python-python', id='python'),
+        pytest.param('swift-server-python-client', id='swift-server-python-client'),
+        pytest.param('python-server-swift-client', id='python-server-swift-client'),
+        pytest.param('python-server-linux-native-client', id='linux-swift-client'),
+    ],
+)
+def test_overlay_e2e_ws_tcp_stream_survives_reconnect(runtime_mode: str, tmp_path: Path) -> None:
+    """A restored WebSocket must not interrupt an established TCP service stream."""
+    if runtime_mode in {'swift-server-python-client', 'python-server-swift-client'}:
+        _require_macos_swift_host_runner()
+    if runtime_mode == 'python-server-linux-native-client':
+        if not sys.platform.startswith('linux'):
+            pytest.skip('Linux Swift process E2E coverage requires Linux')
+        if not shutil.which('swift'):
+            pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
+    run_case_ws_tcp_stream_survives_reconnect(tmp_path, runtime_mode=runtime_mode)
 
 
 @pytest.mark.integration

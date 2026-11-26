@@ -22,6 +22,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private let useTLS: Bool
     private let wsPath: String
     private let wsSubprotocol: String?
+    /// Stable for this owner lifetime; used solely to reattach a replacement
+    /// WebSocket to a grace-retained logical peer on the listener.
+    private let wsResumeToken: String
     private let overlayRuntime: ObstacleBridgeWebSocketOverlayRuntime
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let startupMuxFrames: ObstacleBridgeBoundedDataFIFO
@@ -52,6 +55,11 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private var websocketTask: URLSessionWebSocketTask?
     private var websocketConnection: NWConnection?
     private var websocketTransportGeneration = 0
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_swift_websocket_reconnect_retains_logical_epoch_before_transport_generation
+    /// A lower WebSocket replacement is not a ChannelMux/service epoch change.
+    /// TCP and QUIC owners use the same distinction when their resume protocol
+    /// is enabled; WebSocket is the first transport to exercise it.
+    private var logicalEpochRetainedForResume = false
     private var overlayConnected = false
     private var coreReceiveEpoch: UInt64?
     private var coreRetryToken: UInt64?
@@ -167,6 +175,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         self.useTLS = useTLS
         self.wsPath = wsPath.isEmpty ? "/" : wsPath
         self.wsSubprotocol = wsSubprotocol?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.wsResumeToken = UUID().uuidString.lowercased()
         self.overlayRuntime = overlayRuntime
         self.reconnectRetryDelayMS = max(0, reconnectRetryDelayMS)
         self.sessionMaxAppPayload = max(0, sessionMaxAppPayload)
@@ -621,7 +630,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self.websocketTask = nil
             self.websocketSession = nil
             self.websocketTransportGeneration += 1
-            self.resetOverlayTransportEpoch()
+            self.detachLowerTransportForResume()
             self.scheduleReconnect()
         }
     }
@@ -634,7 +643,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self.websocketTask = nil
             self.websocketSession = nil
             self.websocketTransportGeneration += 1
-            self.resetOverlayTransportEpoch()
+            self.detachLowerTransportForResume()
             if let error {
                 self.eventSink?("ws_overlay_connection_failed", ["error": error.localizedDescription])
             }
@@ -698,14 +707,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         reconnectWorkItem = nil
         reconnectAttempts += 1
 
-        // A URLSession/NWConnection replacement is a new ChannelMux peer
-        // epoch even when the previous WebSocket did not deliver a close or
-        // completion callback.  The remote peer has discarded its channel
-        // table in that case; retaining the local preferred TUN channel would
-        // emit DATA without the OPEN required to bind Shared TUN routing.
-        // Reset before allocating the task so the first local packet on this
-        // connection necessarily emits a fresh TUN OPEN followed by DATA.
-        resetOverlayTransportEpoch(notifyCore: false)
+        // A reconnect reuses the logical peer admitted by the WebSocket
+        // resume token. Do not retire TCP/UDP/TUN ownership in that case.
+        if !logicalEpochRetainedForResume { resetOverlayTransportEpoch(notifyCore: false) }
         websocketTransportGeneration += 1
         let generation = websocketTransportGeneration
         do {
@@ -744,6 +748,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             for (key, value) in plan.upgradeHeaders {
                 request.setValue(value, forHTTPHeaderField: key)
             }
+            request.setValue(wsResumeToken, forHTTPHeaderField: "X-ObstacleBridge-WS-Resume-Token")
             if let subprotocols = plan.subprotocols, !subprotocols.isEmpty {
                 request.setValue(subprotocols.joined(separator: ", "), forHTTPHeaderField: "Sec-WebSocket-Protocol")
             }
@@ -784,6 +789,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         webSocketOptions.autoReplyPing = true
         webSocketOptions.maximumMessageSize = Int.max
         var headers = plan.upgradeHeaders.map { (name: $0.key, value: $0.value) }
+        headers.append((name: "X-ObstacleBridge-WS-Resume-Token", value: wsResumeToken))
         let logicalHost = peerHost.contains(":") ? "[\(peerHost)]" : peerHost
         headers.append((name: "Host", value: "\(logicalHost):\(peerPort)"))
         webSocketOptions.setAdditionalHeaders(headers)
@@ -839,6 +845,10 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private func handleWebSocketTransportConnected(generation: Int) {
         guard started, websocketTransportGeneration == generation else { return }
         overlayConnected = true
+        // The replacement lower transport is now live. A failed attempt must
+        // leave this marker set so its next retry still preserves the logical
+        // ChannelMux epoch.
+        logicalEpochRetainedForResume = false
         reconnectScheduled = false
         nextReconnectAttemptDeadlineNS = nil
         eventSink?("ws_overlay_connected", [
@@ -866,7 +876,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         websocketConnection = nil
         websocketTransportGeneration += 1
         connection.cancel()
-        resetOverlayTransportEpoch()
+        detachLowerTransportForResume()
         eventSink?("ws_overlay_connection_failed", ["error": error.localizedDescription])
         scheduleReconnect()
     }
@@ -993,7 +1003,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                     owner.websocketTask = nil
                     owner.websocketSession = nil
                     owner.websocketTransportGeneration += 1
-                    owner.resetOverlayTransportEpoch()
+                    owner.detachLowerTransportForResume()
                     owner.eventSink?("ws_overlay_receive_failed", ["error": error.localizedDescription])
                     owner.scheduleReconnect()
                 }
@@ -1117,6 +1127,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func resetOverlayTransportEpoch(notifyCore: Bool = true) {
+        logicalEpochRetainedForResume = false
         withdrawRemoteServiceCatalog()
         if notifyCore { overlayLayerTransportAdapter?.handleTransportDisconnected() }
         tunRuntime?.resetTransportEpoch()
@@ -1130,6 +1141,20 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         pendingOutboundMessages.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
         overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
+        lastPeerPingTxNS = 0
+        lastRttOkNS = 0
+        rttEstMS = nil
+    }
+
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_swift_websocket_reconnect_retains_logical_epoch_before_transport_generation
+    /// Clears only lower-transport observations. The logical ChannelMux epoch,
+    /// service sockets, and protected-session state stay alive until explicit
+    /// stop or a resume grace failure requires full retirement.
+    private func detachLowerTransportForResume() {
+        logicalEpochRetainedForResume = true
+        lowerLayerFallbackWorkItem?.cancel()
+        lowerLayerFallbackWorkItem = nil
+        lowerLayerFallbackDeadlineNS = nil
         lastPeerPingTxNS = 0
         lastRttOkNS = 0
         rttEstMS = nil
@@ -1186,7 +1211,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         websocketConnection?.cancel()
         websocketConnection = nil
         websocketTransportGeneration += 1
-        resetOverlayTransportEpoch()
+        detachLowerTransportForResume()
         scheduleReconnect()
     }
 

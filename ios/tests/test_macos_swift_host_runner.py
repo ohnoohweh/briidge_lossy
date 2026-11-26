@@ -1723,16 +1723,20 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert 'runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]' in host_runner
 
 
-def test_swift_websocket_reconnect_resets_tun_state_before_transport_generation() -> None:
+def test_swift_websocket_reconnect_retains_logical_epoch_before_transport_generation() -> None:
     ws_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
     connect_overlay = ws_owner[
         ws_owner.index("    private func connectOverlay(coreCandidateIndex:") : ws_owner.index("    private func connectNetworkWebSocket(")
     ]
 
-    assert "resetOverlayTransportEpoch(notifyCore: false)" in connect_overlay
-    assert connect_overlay.index("resetOverlayTransportEpoch(notifyCore: false)") < connect_overlay.index(
+    assert "logicalEpochRetainedForResume" in connect_overlay
+    assert "if !logicalEpochRetainedForResume { resetOverlayTransportEpoch(notifyCore: false) }" in connect_overlay
+    assert connect_overlay.index("if !logicalEpochRetainedForResume") < connect_overlay.index(
         "websocketTransportGeneration += 1"
     )
+    assert "private func detachLowerTransportForResume()" in ws_owner
+    assert "logicalEpochRetainedForResume = true" in ws_owner
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_swift_websocket_reconnect_retains_logical_epoch_before_transport_generation" in ws_owner
 
 
 def test_swift_websocket_synchronous_open_failure_uses_core_candidate_fallback() -> None:

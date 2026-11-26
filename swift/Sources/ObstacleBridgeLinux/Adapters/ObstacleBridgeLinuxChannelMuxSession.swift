@@ -12,8 +12,11 @@ public enum ObstacleBridgeLinuxChannelMuxError: Error, Equatable {
 /// queue/backpressure runtime is introduced with TUN ownership.
 public final class ObstacleBridgeLinuxChannelMuxSession {
     private let runtime: ObstacleBridgeLinuxConfiguredRuntime
-    private let session: ObstacleBridgeLinuxConfiguredSession
-    private let epoch: UInt64
+    /// Both fields are replaced together on the live runtime's serialized
+    /// owner queue. The lock makes an in-flight receive callback observe one
+    /// coherent lower-session/epoch pair.
+    private var session: ObstacleBridgeLinuxConfiguredSession
+    private var epoch: UInt64
     private let compressionPolicy: ObstacleBridgeMuxCompressionPolicy
     private let compressionTelemetry: ObstacleBridgeMuxCompressionTelemetry
     /// Uses the shared Core severity contract so ChannelMux, SecureLink, and
@@ -103,6 +106,25 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     /// lower descriptor a second time.
     public func activateReceiveOwner() {
         replyPolicy.activateReceiveOwner()
+    }
+
+    /// Reattach this logical ChannelMux to an authenticated replacement lower
+    /// stream. Channel and service ownership deliberately remain untouched;
+    /// the peer's WebSocket resume token has already admitted the same logical
+    /// peer before this method is called.
+    public func resume(on replacementSession: ObstacleBridgeLinuxConfiguredSession) throws {
+        guard runtime.status().appReady else { throw ObstacleBridgeLinuxChannelMuxError.notReady }
+        lock.lock()
+        session = replacementSession
+        epoch = runtime.connectionEpoch
+        reply = nil
+        awaited = nil
+        let pendingReply = replySignal
+        replySignal = nil
+        let resumedEpoch = epoch
+        lock.unlock()
+        pendingReply?.signal()
+        diagnostic(.info, "channel_mux.epoch_resumed", extra: ["epoch": String(resumedEpoch)])
     }
 
     /// The sole ChannelMux decode boundary for this epoch. Compression belongs
