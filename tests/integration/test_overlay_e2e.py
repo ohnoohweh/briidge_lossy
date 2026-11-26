@@ -290,11 +290,20 @@ class LinuxSwiftSecureLinkPeer:
 
         def receive() -> bytes:
             if self.transport == 'tcp':
-                length = struct.unpack('!I', self._read_exact(connection, 4))[0]
-                payload = self._read_exact(connection, length)
-                if payload[:1] != b'\x00':
-                    raise RuntimeError('Linux Swift TCP framing marker mismatch')
-                return payload[1:]
+                while True:
+                    length = struct.unpack('!I', self._read_exact(connection, 4))[0]
+                    payload = self._read_exact(connection, length)
+                    if payload[:1] == b'\x03':
+                        # TCP reconnects precede the SecureLink HELLO with a
+                        # transport-level resume token. It has no SecureLink
+                        # payload and is deliberately consumed by this
+                        # reference peer before the application marker.
+                        if len(payload) < 2:
+                            raise RuntimeError('Linux Swift TCP resume token missing')
+                        continue
+                    if payload[:1] != b'\x00':
+                        raise RuntimeError('Linux Swift TCP framing marker mismatch')
+                    return payload[1:]
             first, second = self._read_exact(connection, 2)
             if first != 0x82 or not second & 0x80:
                 raise RuntimeError('Linux Swift WebSocket frame mismatch')

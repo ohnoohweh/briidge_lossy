@@ -596,7 +596,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
                 port: resolvedPeerPort == 0 ? peerPort : resolvedPeerPort,
                 socketPresent: true
             )
-            sendRawOverlayWire(quicResumeWire())
+            enqueueOutboundWire(quicResumeWire())
             eventSink?("quic_overlay_connected", [
                 "peer_host": snapshot.peerHost,
                 "peer_port": snapshot.peerPort,

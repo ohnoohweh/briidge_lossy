@@ -647,6 +647,8 @@ Current websocket payload forms:
 | `--quic-peer-port` | `443` | QUIC peer overlay port |
 | `--quic-cert` | `None` | Server certificate file (PEM) |
 | `--quic-key` | `None` | Server private key file (PEM) |
+
+TCP, WebSocket, and QUIC peer clients retain a stable resume token across a brief lower-transport outage. The listener uses the RTT delivery evidence to resume the original logical peer epoch, so active multiplexed TCP streams continue without replaying already acknowledged frames.
 | `--quic-insecure` | `False` | Client: disable certificate verification (TEST ONLY) |
 | `--quic-max-size` | `65535` | Maximum app message size accepted/sent (default 65535). |
 

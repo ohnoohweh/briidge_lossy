@@ -1523,7 +1523,7 @@ def test_quic_overlay_transport_owner_retains_logical_epoch_for_resume() -> None
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8")
 
     assert "private let quicResumeToken = UUID().uuidString.lowercased()" in runtime
-    assert "sendRawOverlayWire(quicResumeWire())" in runtime
+    assert "enqueueOutboundWire(quicResumeWire())" in runtime
     assert "private func detachLowerTransportForResume()" in runtime
     assert "logicalEpochRetainedForResume = true" in runtime
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue" in runtime

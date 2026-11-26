@@ -1787,7 +1787,7 @@ def test_swift_quic_reconnect_retains_logical_epoch_and_sends_resume_record() ->
     quic_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8")
 
     assert "private let quicResumeToken = UUID().uuidString.lowercased()" in quic_owner
-    assert "sendRawOverlayWire(quicResumeWire())" in quic_owner
+    assert "enqueueOutboundWire(quicResumeWire())" in quic_owner
     assert "private func detachLowerTransportForResume()" in quic_owner
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue" in quic_owner
 
