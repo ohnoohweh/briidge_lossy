@@ -39,6 +39,7 @@ from .bridge_proxy_common import (
 )
 from .bridge_transport_common import (
     EgressThroughputTracker,
+    StreamResumeRegistry,
     StreamRTT,
     StreamRTTRuntime,
     _listener_family_for_host,
@@ -438,7 +439,7 @@ class WebSocketSession(ISession):
         self._last_rx_ns: int = 0
         self._server_connected_evt = asyncio.Event()
         self._server_peers: Dict[int, dict] = {}
-        self._server_suspended_by_resume_token: Dict[str, dict] = {}
+        self._server_resume_registry = StreamResumeRegistry()
         self._server_peer_by_ws_id: Dict[int, int] = {}
         self._server_next_peer_id: int = 1
         self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
@@ -533,17 +534,21 @@ class WebSocketSession(ISession):
                 return "extra_headers"
         return None
 
-    def _build_ws_upgrade_headers(self, connect_callable: Any) -> dict:
+    def _build_ws_upgrade_headers(self, connect_callable: Any, *, include_resume_token: bool = False) -> dict:
         header_key = self._websockets_header_kwarg(connect_callable)
         if not header_key:
             return {}
-        return {
-            header_key: {
-                self._WS_PAYLOAD_MODE_HEADER: self._ws_payload_mode,
-                self._WS_MAX_SIZE_HEADER: str(self._ws_max_size),
-                self._WS_RESUME_TOKEN_HEADER: self._ws_resume_token,
-            }
+        headers = {
+            self._WS_PAYLOAD_MODE_HEADER: self._ws_payload_mode,
+            self._WS_MAX_SIZE_HEADER: str(self._ws_max_size),
         }
+        # The token identifies this concrete lower transport to the listener;
+        # it is intentionally absent from the portable connect-plan surface.
+        # Swift owners inject the same transport-local value at their upgrade
+        # boundary, so plan parity remains deterministic across products.
+        if include_resume_token and self._ws_resume_token:
+            headers[self._WS_RESUME_TOKEN_HEADER] = self._ws_resume_token
+        return {header_key: headers}
 
     def _resolve_inbound_ws_max_size(self, requested_size: Optional[str], payload_mode: str) -> int:
         """Return the encoded frame limit negotiated for one server peer.
@@ -1863,12 +1868,9 @@ class WebSocketSession(ISession):
     async def _on_accept(self, ws) -> None:
         if not self._peer_tuple:
             resume_token = str(getattr(ws, "resume_token", "") or "")
-            suspended = self._server_suspended_by_resume_token.pop(resume_token, None) if resume_token else None
+            suspended = self._server_resume_registry.claim(resume_token) if resume_token else None
             if suspended is not None:
                 peer_id = int(suspended["peer_id"])
-                expiry = suspended.pop("resume_expiry_task", None)
-                if expiry is not None:
-                    expiry.cancel()
                 suspended["ws"] = ws
                 suspended["payload_mode"] = self._resolve_inbound_ws_payload_mode(getattr(ws, "payload_mode", None))
                 suspended["payload_codec"] = self._build_ws_payload_codec(suspended["payload_mode"])
@@ -2008,22 +2010,18 @@ class WebSocketSession(ISession):
         if not immediate and resume_token and self._ws_reconnect_grace_s > 0:
             self._server_peer_by_ws_id.pop(id(ctx.get("ws")), None)
             ctx["ws"] = None
-            self._server_suspended_by_resume_token[resume_token] = ctx
-            async def _expire() -> None:
-                try:
-                    await asyncio.sleep(self._ws_reconnect_grace_s)
-                    if self._server_suspended_by_resume_token.get(resume_token) is ctx:
-                        self._server_suspended_by_resume_token.pop(resume_token, None)
-                        await self._close_server_peer(peer_id, immediate=True)
-                except asyncio.CancelledError:
-                    return
-            ctx["resume_expiry_task"] = self._loop.create_task(_expire())
+            self._server_resume_registry.suspend(
+                resume_token,
+                ctx,
+                grace_seconds=self._ws_reconnect_grace_s,
+                on_expire=lambda _ctx: self._close_server_peer(peer_id, immediate=True),
+            )
             if self._ws is expected_ws or self._ws is None:
                 self._ws = None
             self._update_server_overlay_connected()
             return
         self._server_peers.pop(peer_id, None)
-        self._server_suspended_by_resume_token.pop(resume_token, None)
+        self._server_resume_registry.discard(resume_token, ctx)
         self._server_peer_by_ws_id.pop(id(ctx.get("ws")), None)
         self._server_unregister_peer_channels(peer_id)
         rtt_rt = ctx.get("rtt_rt")
@@ -2227,7 +2225,7 @@ class WebSocketSession(ISession):
                     self._log.debug(f"[WS-SESSION] ({self._probe_id}) skipping HTTP preflight because proxy tunneling is active")
                 t0 = time.perf_counter()
                 with self._suspend_library_proxy_env():
-                    connect_kwargs.update(self._build_ws_upgrade_headers(websockets.connect))
+                    connect_kwargs.update(self._build_ws_upgrade_headers(websockets.connect, include_resume_token=True))
                     ws = await websockets.connect(
                         uri,
                         ssl=ssl_ctx,

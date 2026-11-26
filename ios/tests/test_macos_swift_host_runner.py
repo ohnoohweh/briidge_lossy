@@ -1773,6 +1773,23 @@ def test_swift_tcp_synchronous_open_failure_uses_core_candidate_fallback() -> No
     )
 
 
+def test_swift_tcp_reconnect_retains_logical_epoch_and_sends_resume_record() -> None:
+    tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "private let tcpResumeToken = UUID().uuidString.lowercased()" in tcp_owner
+    assert "sendRawOverlayWire(tcpResumeWire())" in tcp_owner
+    assert "private func detachLowerTransportForResume()" in tcp_owner
+    assert "logicalEpochRetainedForResume = true" in tcp_owner
+
+
+def test_swift_quic_reconnect_retains_logical_epoch_and_sends_resume_record() -> None:
+    quic_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "private let quicResumeToken = UUID().uuidString.lowercased()" in quic_owner
+    assert "sendRawOverlayWire(quicResumeWire())" in quic_owner
+    assert "private func detachLowerTransportForResume()" in quic_owner
+
+
 def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
     core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     backpressure = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayBackpressure.swift").read_text(encoding="utf-8")

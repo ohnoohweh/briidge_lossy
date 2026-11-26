@@ -5707,6 +5707,37 @@ def run_case_ws_tcp_stream_survives_reconnect(
         bounce.stop()
 
 
+def run_case_tcp_tcp_stream_survives_reconnect(log_dir: Path) -> None:
+    """The TCP lower stream may reconnect without retiring a TCP service.
+
+    This reuses the exact persistent-stream proof used for WebSocket.  TCP's
+    resume record is sent before the first RTT PING, while the PONG remains
+    the fence before the second application record is admitted.
+    """
+    base_case = CASES['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels']
+    tcp_args = [
+        '--overlay-transport', 'tcp', '--tcp-bind', '0.0.0.0',
+        '--tcp-own-port', '54341', '--tcp-reconnect-grace', '5',
+    ]
+    case = replace(
+        base_case,
+        name='overlay_tcp_tcp_stream_survives_reconnect',
+        bridge_server_args=_append_args(base_case.bridge_server_args, tcp_args),
+        bridge_client_args=_append_args(
+            base_case.bridge_client_args,
+            tcp_args + ['--tcp-peer', '127.0.0.1', '--tcp-peer-port', '54341', '--overlay-reconnect-retry-delay-ms', '50'],
+        ),
+    )
+    # The WebSocket helper is deliberately transport-neutral after process
+    # construction; keep its exact bidirectional/no-loss assertions here.
+    original = CASES['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels']
+    CASES['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels'] = case
+    try:
+        run_case_ws_tcp_stream_survives_reconnect(log_dir, runtime_mode='python-python')
+    finally:
+        CASES['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels'] = original
+
+
 def run_case_two_peer_clients_listener(
     case: Case,
     log_dir: Path,
@@ -9448,6 +9479,13 @@ def test_overlay_e2e_ws_tcp_stream_survives_reconnect(runtime_mode: str, tmp_pat
         if not shutil.which('swift'):
             pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
     run_case_ws_tcp_stream_survives_reconnect(tmp_path, runtime_mode=runtime_mode)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_tcp_stream_survives_reconnect(tmp_path: Path) -> None:
+    """A TCP lower reconnect must preserve the established TCP service stream."""
+    run_case_tcp_tcp_stream_survives_reconnect(tmp_path)
 
 
 @pytest.mark.integration

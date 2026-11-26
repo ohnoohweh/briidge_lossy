@@ -52,9 +52,11 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
     private let tunPacketSink: TunPacketSink?
     private let muxInstanceID: UInt64
     private let muxConnectionSeq: UInt32
+    private let quicResumeToken = UUID().uuidString.lowercased()
     private var overlayConnection: NWConnection?
     private let serviceCatalog = ObstacleBridgeAppleServiceCatalog()
     private var overlayConnected = false
+    private var logicalEpochRetainedForResume = false
     private var receiveBuffer = Data()
     private let pendingOutboundWires = ObstacleBridgeBoundedDataFIFO(limits: .init(
         maximumItems: 512, maximumBytes: 2 * 1_024 * 1_024, maximumAge: 60
@@ -585,25 +587,30 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
         switch state {
         case .ready:
             overlayConnected = true
+            let resumingLogicalEpoch = logicalEpochRetainedForResume
+            logicalEpochRetainedForResume = false
             nextReconnectAttemptDeadlineNS = nil
             let snapshot = overlayRuntime.connect(
                 host: resolvedPeerHost.isEmpty ? peerHost : resolvedPeerHost,
                 port: resolvedPeerPort == 0 ? peerPort : resolvedPeerPort,
                 socketPresent: true
             )
+            sendRawOverlayWire(quicResumeWire())
             eventSink?("quic_overlay_connected", [
                 "peer_host": snapshot.peerHost,
                 "peer_port": snapshot.peerPort,
                 "resolved_peer_family": resolvedPeerFamily,
             ])
             do {
-                if let adapter = overlayLayerTransportAdapter {
+                if !resumingLogicalEpoch, let adapter = overlayLayerTransportAdapter {
                     let adapterSnapshot = try adapter.handleTransportConnected()
                     updateLowerLayerFallback()
                     sendTransportFrames(adapterSnapshot.emittedFrames)
                 }
-                flushStartupMuxFramesIfNeeded()
-                maybeOpenConfiguredTunIfReady()
+                if !resumingLogicalEpoch {
+                    flushStartupMuxFramesIfNeeded()
+                    maybeOpenConfiguredTunIfReady()
+                }
             } catch {
                 eventSink?("quic_overlay_transport_adapter_connect_failed", ["error": error.localizedDescription])
             }
@@ -618,6 +625,14 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
     }
 
     private func handleDisconnected(schedule: Bool) {
+        if started {
+            detachLowerTransportForResume()
+            overlayConnected = false
+            overlayConnection?.cancel()
+            overlayConnection = nil
+            if schedule, overlayLayerTransportAdapter == nil { scheduleReconnect() }
+            return
+        }
         withdrawRemoteServiceCatalog()
         tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
         tunRuntime?.resetTransportEpoch()
@@ -640,6 +655,22 @@ final class ObstacleBridgeQuicOverlayTransportOwner: @unchecked Sendable {
         if schedule, overlayLayerTransportAdapter == nil {
             scheduleReconnect()
         }
+    }
+
+    private func detachLowerTransportForResume() {
+        logicalEpochRetainedForResume = true
+        lowerLayerFallbackWorkItem?.cancel()
+        lowerLayerFallbackWorkItem = nil
+        lowerLayerFallbackDeadlineNS = nil
+    }
+
+    private func quicResumeWire() -> Data {
+        let token = Data(quicResumeToken.utf8)
+        var length = UInt32(token.count + 1).bigEndian
+        var wire = Data(bytes: &length, count: MemoryLayout<UInt32>.size)
+        wire.append(0x03)
+        wire.append(token)
+        return wire
     }
 
     private func withdrawRemoteServiceCatalog() {

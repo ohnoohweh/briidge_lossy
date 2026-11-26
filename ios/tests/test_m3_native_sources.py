@@ -1512,6 +1512,19 @@ def test_tcp_overlay_transport_owner_source_exists() -> None:
     assert "ObstacleBridgeOverlayLayerTransportAdapter" in runtime
     assert "handleInboundBytes(" in runtime
     assert "sendMuxFrames(" in runtime
+    assert "private let tcpResumeToken = UUID().uuidString.lowercased()" in runtime
+    assert "private func detachLowerTransportForResume()" in runtime
+    assert "sendRawOverlayWire(tcpResumeWire())" in runtime
+    assert "RTT PONG on the new" in runtime
+
+
+def test_quic_overlay_transport_owner_retains_logical_epoch_for_resume() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "private let quicResumeToken = UUID().uuidString.lowercased()" in runtime
+    assert "sendRawOverlayWire(quicResumeWire())" in runtime
+    assert "private func detachLowerTransportForResume()" in runtime
+    assert "logicalEpochRetainedForResume = true" in runtime
 
 
 def test_channel_mux_tcp_transport_owner_source_exists() -> None:

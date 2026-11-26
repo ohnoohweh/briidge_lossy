@@ -87,6 +87,10 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     /// it only to reattach a grace-window replacement WebSocket to the same
     /// logical ChannelMux peer; it is not an authentication credential.
     private let wsResumeToken: String
+    /// Same logical-peer token as the WebSocket owner, carried in a private
+    /// TCP control record before the first RTT/application frame.
+    private let tcpResumeToken: String
+    private let quicResumeToken: String
     private let wsTLS: Bool
     private let wsTrustRootsPath: String?
     private let wsProxy: ObstacleBridgeLinuxHTTPProxy
@@ -149,6 +153,8 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         self.wsPayloadMode = try ObstacleBridgeWebSocketPayloadCodec.mode(wsPayloadMode)
         self.wsMaxSize = max(1, wsMaxSize)
         self.wsResumeToken = wsResumeToken ?? UUID().uuidString.lowercased()
+        self.tcpResumeToken = UUID().uuidString.lowercased()
+        self.quicResumeToken = UUID().uuidString.lowercased()
         self.webSocketOverlayRuntime = try ObstacleBridgeWebSocketOverlayRuntime(payloadMode: wsPayloadMode, wsMaxSize: self.wsMaxSize)
         self.wsTLS = wsTLS
         let normalizedWebSocketTrustRoots = wsTrustRootsPath?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -178,6 +184,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 case .tcp:
                     let connection = try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
                     defer { connection.close() }
+                    try connection.write(tcpResumeWire())
                     for pending in tcpOverlayRuntime.connectionOpened(host: host, port: port, socketPresent: true) {
                         try connection.write(pending)
                     }
@@ -206,6 +213,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 case .quic:
                     let connection = try ObstacleBridgeLinuxQUICSession(host: host, port: port, alpn: quicALPN, insecure: quicInsecure, trustRootsPath: quicTrustRootsPath, receiveTimeoutMilliseconds: receiveTimeoutMilliseconds)
                     defer { connection.close() }
+                    try connection.write(quicResumeWire())
                     for pending in quicOverlayRuntime.connectionOpened(host: host, port: port, socketPresent: true) {
                         try connection.write(pending)
                     }
@@ -262,6 +270,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             if transport == .quic {
                 let liveness = LivenessProbeTracker()
                 let quic = try ObstacleBridgeLinuxQUICSession(host: host, port: port, alpn: quicALPN, insecure: quicInsecure, trustRootsPath: quicTrustRootsPath, receiveTimeoutMilliseconds: receiveTimeoutMilliseconds)
+                try quic.write(quicResumeWire())
                 for pending in quicOverlayRuntime.connectionOpened(host: host, port: port, socketPresent: true) {
                     try quic.write(pending)
                 }
@@ -344,6 +353,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             }
             let connection = transport == .ws ? try openWebSocketConnection() : try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
             if transport == .tcp {
+                try connection.write(tcpResumeWire())
                 for pending in tcpOverlayRuntime.connectionOpened(host: host, port: port, socketPresent: true) {
                     try connection.write(pending)
                 }
@@ -453,6 +463,24 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         guard let wire = effect.writtenBuffers.first else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
         }
+        return wire
+    }
+
+    private func tcpResumeWire() -> Data {
+        let token = Data(tcpResumeToken.utf8)
+        var length = UInt32(token.count + 1).bigEndian
+        var wire = Data(bytes: &length, count: MemoryLayout<UInt32>.size)
+        wire.append(0x03) // Python TcpStreamSession._K_RESUME
+        wire.append(token)
+        return wire
+    }
+
+    private func quicResumeWire() -> Data {
+        let token = Data(quicResumeToken.utf8)
+        var length = UInt32(token.count + 1).bigEndian
+        var wire = Data(bytes: &length, count: MemoryLayout<UInt32>.size)
+        wire.append(0x03) // Python QuicSession._K_RESUME
+        wire.append(token)
         return wire
     }
 

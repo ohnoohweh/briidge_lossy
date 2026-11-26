@@ -784,12 +784,12 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
 
     // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxLiveRuntimeTests
     private func interruptionPolicy() -> LogicalEpochInterruptionPolicy {
-        // TCP and QUIC deliberately share this policy seam but remain
-        // conservative until their peer-resume handshakes are specified.
-        // WebSocket has an explicit resume token and listener grace contract.
+        // TCP, WebSocket, and QUIC now carry a stable lower-stream resume token;
+        // their replacement sockets therefore retain the live ChannelMux
+        // epoch until RTT confirms the new lower stream. QUIC stays
+        // QUIC uses the same record framing after TLS admission.
         switch configuredRuntime.configuration.transport {
-        case .ws: return .retainForResume
-        case .tcp, .quic: return .retire
+        case .tcp, .ws, .quic: return .retainForResume
         case .myudp: return .retire
         }
     }
