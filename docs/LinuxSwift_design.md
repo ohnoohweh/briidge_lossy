@@ -14,6 +14,40 @@ Build the optimized Linux artifacts from the repository root:
 ./scripts/build_linux_app.sh
 ```
 
+### Fedora prerequisites
+
+On a supported current Fedora release, install the distribution Swift
+toolchain and the repository build prerequisites:
+
+```bash
+sudo dnf install swift-lang gcc gcc-c++ zlib-devel git
+swift --version
+swiftc --version
+```
+
+`swift-lang` provides both `swift` and `swiftc`; `gcc`/`gcc-c++` build the C
+dependencies fetched by SwiftPM; `zlib-devel` provides the `zlib.h` header
+used by the package's `CZlib` system-library target; and `git` lets SwiftPM
+resolve the pinned package dependencies. The project requires a Swift 6
+toolchain because `Package.swift` declares Swift tools version 6.0.
+
+If Fedora's packaged toolchain is unavailable or too old, use the official
+Swift Fedora tarball for the matching Fedora release. Before unpacking it,
+install its documented toolchain dependencies as well:
+
+```bash
+sudo dnf install binutils gcc gcc-c++ git libcurl-devel libedit-devel \
+  libicu-devel libuuid-devel libxml2-devel ncurses-devel python3-devel \
+  sqlite-devel tzdata zlib-devel
+```
+
+After signature verification and extraction, prepend the tarball's `usr/bin`
+directory to `PATH`, then rerun `swift --version` and
+`./scripts/build_linux_app.sh`. The [official Swift Fedora installation
+guide](https://www.swift.org/install/linux/fedora/41/) selects the correct
+archive for the installed Fedora release; use its tarball instructions for
+signature verification and extraction.
+
 The script builds `ObstacleBridgeLinux`, `ObstacleBridgeProxyWorker`, and
 `ObstacleBridgeLogCollector`, then places them in `build/linux/` with the
 matching Admin Web assets and build metadata. Use `--debug` for a debug build

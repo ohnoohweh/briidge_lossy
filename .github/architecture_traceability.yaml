@@ -125,6 +125,8 @@ ARC-CMP-001:
     - tests/unit/test_ws_payload_mode.py::test_initial_failed_address_override_advances_before_reconnect
     - tests/unit/test_ws_payload_mode.py::test_listener_uses_advertised_maximum_per_peer_and_configured_fallback
     - tests/unit/test_ws_payload_mode.py::test_connect_tolerates_oversized_peer_frames_for_text_payload_modes
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_ws_runtime_connect_plan_matches_python
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_ws_runtime_proxy_connect_plan_matches_python
     - ios/tests/test_m3_native_sources.py::test_swift_websocket_clients_advertise_their_configured_message_limit
     - ios/tests/test_m3_native_sources.py::test_swift_tls_websocket_listener_keeps_a_message_limit_per_connection
     - tests/unit/test_stream_peer_rotation.py::test_tcp_initial_failed_candidate_advances_before_reconnect
