@@ -101,7 +101,10 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
                                 randomBytes: { count in Data(repeating: 0x11, count: count) },
                                 sessionIDProvider: { 0x0102030405060708 }
                             )
-                        )
+                        ),
+                        // This probe isolates transform ordering; stream
+                        // delivery-fence coverage is exercised separately.
+                        deliveryFenceEnabled: false
                     )
                     let server = ObstacleBridgeOverlayLayerTransportAdapter(
                         compressRuntime: serverCompress,
@@ -112,7 +115,8 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
                                 randomBytes: { count in Data(repeating: 0x22, count: count) },
                                 sessionIDProvider: { 0 }
                             )
-                        )
+                        ),
+                        deliveryFenceEnabled: false
                     )
 
                     let clientMux = try ObstacleBridgeChannelMuxCodec.packMux(
