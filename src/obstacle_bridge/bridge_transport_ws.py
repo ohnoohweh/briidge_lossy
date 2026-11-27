@@ -1844,6 +1844,17 @@ class WebSocketSession(ISession):
             restart_required=accepted and self._peer_candidate_cycle >= 3,
         )
 
+    def retire_server_peer_epoch(self, peer_id: int, *, reason: str = "") -> bool:
+        """Close one listener peer while leaving the WebSocket listener ready."""
+        if self._peer_tuple or int(peer_id) not in self._server_peers:
+            return False
+        self._log.warning("[WS-SESSION] (%s) retiring server peer_id=%s reason=%s", self._probe_id, peer_id, reason or "unspecified")
+        try:
+            self._loop.create_task(self._close_server_peer(int(peer_id)))  # type: ignore[union-attr]
+            return True
+        except Exception:
+            return False
+
     def _current_peer_endpoint(self) -> Tuple[str, int]:
         if self._peer_candidates:
             host, port, _family = self._peer_candidates[self._peer_candidate_index]

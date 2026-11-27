@@ -446,6 +446,10 @@ class SecureLinkPskSession(ISession):
             float(int(getattr(args, "secure_link_retry_backoff_max_ms", 5000) or 0)) / 1000.0,
         )
         self._peer_states: Dict[int, _SecureLinkPeerState] = {}
+        # Listener transports can be RTT-live before their peer sends its
+        # first SecureLink frame.  Track that admission separately: there is
+        # no peer state to time out until a CLIENT_HELLO arrives.
+        self._server_peer_handshake_started_unix_ts: Dict[int, float] = {}
         self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
         self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
         self._server_next_mux_chan: int = 1
@@ -1375,6 +1379,7 @@ class SecureLinkPskSession(ISession):
         if timeout_s <= 0.0:
             return
         now = time.time()
+        self._expire_unstarted_server_handshakes(now=now, timeout_s=timeout_s)
         for key, state in list(self._peer_states.items()):
             if int(state.auth_fail_code or 0) > 0:
                 continue
@@ -1424,6 +1429,55 @@ class SecureLinkPskSession(ISession):
                     session_id=int(state.pending_session_id or 0),
                     phase="rekey",
                 )
+
+    def _expire_unstarted_server_handshakes(self, *, now: float, timeout_s: float) -> None:
+        """Retire listener peers that are transport-live but never authenticate.
+
+        RTT PING/PONG proves only that a socket is responsive.  It must not
+        indefinitely retain a server peer/ChannelMux epoch when that peer has
+        not begun SecureLink authentication.
+        """
+        if self._client_mode or self._transport_name not in {"tcp", "ws", "quic"}:
+            return
+        getter = getattr(self._inner, "get_overlay_peers_snapshot", None)
+        if not callable(getter):
+            return
+        try:
+            rows = list(getter() or [])
+        except Exception:
+            return
+        live_peer_ids: set[int] = set()
+        for row in rows:
+            if not isinstance(row, dict) or bool(row.get("listening")):
+                continue
+            try:
+                peer_id = int(row.get("peer_id"))
+            except (TypeError, ValueError):
+                continue
+            if peer_id < 0 or not bool(row.get("connected")):
+                continue
+            live_peer_ids.add(peer_id)
+            state = self._peer_states.get(self._peer_key(peer_id))
+            if state is not None and state.peer_confirmed_authenticated:
+                self._server_peer_handshake_started_unix_ts.pop(peer_id, None)
+                continue
+            started = self._server_peer_handshake_started_unix_ts.setdefault(peer_id, now)
+            if now - started < timeout_s:
+                continue
+            self._mark_handshake_timeout(peer_id, session_id=int(state.session_id or 0) if state else 0, phase="handshake")
+            retire = getattr(self._inner, "retire_server_peer_epoch", None)
+            retired = False
+            if callable(retire):
+                with contextlib.suppress(Exception):
+                    retired = bool(retire(peer_id, reason="secure_link_handshake_timeout"))
+            self._log.warning(
+                "[SECURE-LINK] retiring unauthenticated server peer transport=%s peer_id=%s timeout_s=%.1f retired=%s",
+                self._transport_name, peer_id, timeout_s, retired,
+            )
+            self._server_peer_handshake_started_unix_ts.pop(peer_id, None)
+        for peer_id in list(self._server_peer_handshake_started_unix_ts):
+            if peer_id not in live_peer_ids:
+                self._server_peer_handshake_started_unix_ts.pop(peer_id, None)
 
     async def _handshake_watchdog(self) -> None:
         try:
