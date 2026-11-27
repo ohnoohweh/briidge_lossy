@@ -28,8 +28,8 @@ def test_swift_overlay_transport_owners_publish_layered_readiness() -> None:
         assert '"app_ready": ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayers)' in source or 'snapshot["app_ready"] = ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayers)' in source
         assert 'self?.inflowAllowed() ?? false' in source
         assert 'overlayConnected: inflowAllowed()' in source
-        assert "connectionRotationDue(candidateCount:" in source
-        assert "lifecycle_restart_required" in source
+        assert "applyCoreEffects" in source
+        assert "reportTransportLiveness" in source
         assert "ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace" in source
 
 
@@ -58,10 +58,7 @@ def test_swift_layered_readiness_gates_inflow_on_outer_app_ready() -> None:
     assert 'return (last["app_ready"] as? Bool) ?? false' in adapter
     assert "return appReady(from: layers)" in adapter
     assert "struct ObstacleBridgeConnectionLifecycleEvent" in adapter
-    assert "struct ObstacleBridgeConnectionRotationResult" in adapter
-    assert "func connectionRotationDue(candidateCount: Int)" in adapter
     assert "static let outerReadinessGrace: TimeInterval = 15.0" in adapter
-    assert "connectionRotationDelay: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace" in adapter
     assert 'layers[index]["lifecycle_state"] = outerLifecycle.state.rawValue' in adapter
     assert '"layer": "peer_address_protocol"' in adapter
     assert '"app_ready": transportLifecycle.state == .connected' in adapter
@@ -109,16 +106,16 @@ def test_swift_sustained_transport_delay_rotation_matches_python_channelmux_poli
     assert "static let defaultTransportDelayRotationGrace: TimeInterval = 30.0" in adapter
     assert "let transportDelayRotationThresholdMS: Double" in adapter
     assert "let transportDelayRotationGrace: TimeInterval" in adapter
-    assert 'reason: "channelmux_transport_delay"' in adapter
+    coordinator = (CORE_ROOT / "ObstacleBridgeOverlayCoordinator.swift").read_text(encoding="utf-8")
+    assert 'failActiveEpoch(reason: "transport_liveness_expired")' in coordinator
     for owner in owners:
-        assert "transportDelayRotationDue(" in owner
-    assert "func rotationAttemptRejected(_ result: ObstacleBridgeConnectionRotationResult)" in adapter
-    assert "adapter.rotationAttemptRejected(result)" in owners[0]
+        assert "reportTransportLiveness" in owner
+        assert "applyCoreEffects" in owner
 
 
 def test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic() -> None:
     channel_core = (CORE_ROOT / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
-    provider = _read("IPServer", "PacketTunnelProvider.swift")
+    provider = _read("ObstacleBridgeiOS", "PacketTunnelProvider.swift")
 
     assert "guard overlayConnected else" in channel_core
     assert 'reason: "overlay_not_connected"' in channel_core
@@ -133,8 +130,8 @@ def test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic(
 
 
 def test_swift_admin_surfaces_consume_layered_readiness() -> None:
-    host_runner = _read("ObstacleBridgeApp", "ObstacleBridgeHostRunner.swift")
-    packet_tunnel = _read("IPServer", "PacketTunnelProvider.swift")
+    host_runner = _read("ObstacleBridgeMacOS", "ObstacleBridgeHostRunner.swift")
+    packet_tunnel = _read("ObstacleBridgeiOS", "PacketTunnelProvider.swift")
     admin_support = (CORE_ROOT / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
 
     assert "func connectionLayersSnapshot() -> [[String: Any]]" in host_runner

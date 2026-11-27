@@ -820,6 +820,17 @@ class TcpStreamSession(ISession):
             restart_required=accepted and self._peer_candidate_cycle >= 3,
         )
 
+    def retire_server_peer_epoch(self, peer_id: int, *, reason: str = "") -> bool:
+        """Close one listener peer while keeping the TCP acceptor available."""
+        if self._peer_tuple or int(peer_id) not in self._server_peers:
+            return False
+        self._log.warning("[TCP-SESSION] (%s) retiring server peer_id=%s reason=%s", self._probe_id, peer_id, reason or "unspecified")
+        try:
+            self._loop.create_task(self._close_server_peer(int(peer_id)))
+            return True
+        except Exception:
+            return False
+
     def _enable_os_keepalive(self, writer: asyncio.StreamWriter) -> None:
         try:
             transport = writer.transport  # type: ignore[attr-defined]

@@ -29,6 +29,8 @@ class FakeInnerSession:
         self.frames_to_securelink = 0
         self.frames_from_securelink = 0
         self.drop_next_securelink_type = None
+        self.server_peer_rows = None
+        self.retired_server_peers = []
 
     def connect_peer(self, peer):
         self._peer = peer
@@ -101,6 +103,8 @@ class FakeInnerSession:
         return SessionMetrics()
 
     def get_overlay_peers_snapshot(self):
+        if self.server_peer_rows is not None:
+            return list(self.server_peer_rows)
         return [{
             "peer_id": 0,
             "connected": bool(self._connected),
@@ -109,6 +113,10 @@ class FakeInnerSession:
             "mux_chans": [],
             "rtt_est_ms": None,
         }]
+
+    def retire_server_peer_epoch(self, peer_id, *, reason=""):
+        self.retired_server_peers.append((int(peer_id), str(reason)))
+        return True
 
     def get_connection_layers_snapshot(self):
         return [{
@@ -160,6 +168,26 @@ def _args(**overrides):
 
 
 class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_server_retires_rtt_live_peer_that_never_starts_secure_link_handshake(self):
+        inner = FakeInnerSession(connected=True)
+        inner.server_peer_rows = [{
+            "peer_id": 3,
+            "connected": True,
+            "state": "connected",
+            "peer": "203.0.113.9:443",
+            "mux_chans": [],
+        }]
+        server = SecureLinkPskSession(inner, _args(), "ws")
+
+        server._expire_unstarted_server_handshakes(now=100.0, timeout_s=60.0)
+        self.assertEqual(inner.retired_server_peers, [])
+        server._expire_unstarted_server_handshakes(now=160.1, timeout_s=60.0)
+
+        self.assertEqual(inner.retired_server_peers, [(3, "secure_link_handshake_timeout")])
+        state = server._peer_states[3]
+        self.assertEqual(state.auth_fail_reason, "lifecycle")
+        self.assertEqual(state.last_event, "handshake_timeout")
+
     async def _assert_rekey_recovers_after_dropped_control(self, *, drop_sender: str, frame_type: int) -> None:
         client_inner = FakeInnerSession()
         server_inner = FakeInnerSession()
