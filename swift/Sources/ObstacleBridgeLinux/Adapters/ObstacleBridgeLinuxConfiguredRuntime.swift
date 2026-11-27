@@ -654,6 +654,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                         clientPSK: String(decoding: psk, as: UTF8.self),
                         rekeyAfterFrames: configuration.secureLinkRekeyAfterFrames,
                         rekeyAfterSeconds: configuration.secureLinkRekeyAfterSeconds,
+                        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeCryptoTests
                         deliveryFenceEnabled: configuration.transport != .myudp,
                         diagnosticSink: { [weak self] level, event, fields in
                             self?.recordCoreDiagnostic(level, event: event, fields: fields)
@@ -662,6 +663,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 } else {
                     adapter = ObstacleBridgeOverlayLayerTransportAdapter(
                         cleartext: true,
+                        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeCryptoTests
                         deliveryFenceEnabled: configuration.transport != .myudp
                     )
                 }
