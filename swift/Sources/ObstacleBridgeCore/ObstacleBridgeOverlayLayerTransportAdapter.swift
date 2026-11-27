@@ -36,6 +36,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
 
     private let compressRuntime: ObstacleBridgeCompressLayerRuntime?
     private let secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter?
+    private let deliveryFenceRuntime: ObstacleBridgeDeliveryFenceRuntime
     private let peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime?
     private let diagnosticSink: ObstacleBridgeSecureLinkPskTransportAdapter.DiagnosticSink?
     private let lifecycleTimeProvider: () -> TimeInterval
@@ -52,6 +53,10 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     private var compressionFailureEpoch: UInt64?
     private var disconnectedSince: TimeInterval?
     private var transportDisconnectTotal: UInt64 = 0
+    // SecureLink can replace a protected session while a listener keeps its
+    // logical lower peer alive. The delivery fence must still replay retained
+    // plaintext through that new protection epoch.
+    private var deliveryFenceSecureLinkSessionID: UInt64?
 
     init(
         compressRuntime: ObstacleBridgeCompressLayerRuntime? = nil,
@@ -64,6 +69,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     ) {
         self.compressRuntime = compressRuntime
         self.secureLinkAdapter = secureLinkAdapter
+        self.deliveryFenceRuntime = .init()
         self.peerAddressRuntime = peerAddressRuntime
         self.diagnosticSink = diagnosticSink
         self.lifecycleTimeProvider = lifecycleTimeProvider ?? { Date().timeIntervalSince1970 }
@@ -106,6 +112,12 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
             peerAddressRuntime: .init(clientMode: true),
             diagnosticSink: diagnosticSink
         )
+    }
+
+    /// Cleartext overlays still use the delivery fence.  SecureLink is an
+    /// optional protection layer below it, not an alternate RTT mechanism.
+    public convenience init(cleartext: Bool) {
+        self.init()
     }
 
     func setCoreEffectSink(_ sink: @escaping ([ObstacleBridgeOverlayCoordinatorEffect]) -> Void) {
@@ -335,6 +347,13 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
             layers[index]["lifecycle_reason"] = outerLifecycle.reason
             layers[index]["lifecycle_changed_at"] = outerLifecycle.changedAt
         }
+        layers.append([
+            "layer": "delivery_fence",
+            "state": deliveryFenceRuntime.isConnected ? "connected" : "connecting",
+            "connected": deliveryFenceRuntime.isConnected,
+            "app_ready": deliveryFenceRuntime.isConnected,
+            "pending_bytes": deliveryFenceRuntime.pendingByteCount,
+        ])
         return layers
     }
 
@@ -348,6 +367,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         ])
         peerAddressRuntime?.handleTransportDisconnected()
         secureLinkAdapter?.handleTransportDisconnected()
+        deliveryFenceRuntime.lowerDisconnected()
         observeTransportState(connected: false, reason: "transport_disconnected")
         if let epoch = coreCoordinator.snapshot.epoch {
             applyCore(.transportFailed(epoch: epoch, reason: "transport_disconnected"))
@@ -381,6 +401,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         ])
         peerAddressRuntime?.handleTransportDisconnected()
         secureLinkAdapter?.handleTransportDisconnected()
+        deliveryFenceRuntime.lowerDisconnected()
         applyCore(.start)
         transportLifecycle = ObstacleBridgeConnectionLifecycleEvent(
             state: .disconnected,
@@ -398,7 +419,9 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         }
         guard let secureLinkAdapter else {
             refreshOuterLifecycle(secureLinkStatus: nil)
-            return OutboundSnapshot(emittedFrames: peerAddressRuntime?.handleTransportConnected() ?? [])
+            var frames = peerAddressRuntime?.handleTransportConnected() ?? []
+            frames.append(contentsOf: protectFenceRecords(deliveryFenceRuntime.lowerReady(nowNanoseconds: DispatchTime.now().uptimeNanoseconds)))
+            return OutboundSnapshot(emittedFrames: frames)
         }
         let snapshot = try secureLinkAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce)
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter.statusSnapshot())
@@ -406,7 +429,10 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     }
 
     public func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
-        let outboundPayload = compressRuntime?.handleSendPayload(payload).wirePayload ?? payload
+        guard let fencedPayload = deliveryFenceRuntime.enqueue(payload) else {
+            return OutboundSnapshot(emittedFrames: [], queuedPayloads: 1)
+        }
+        let outboundPayload = compressRuntime?.handleSendPayload(fencedPayload).wirePayload ?? fencedPayload
         if let secureLinkAdapter {
             let snapshot = try secureLinkAdapter.handleOutboundPayload(outboundPayload)
             return OutboundSnapshot(emittedFrames: snapshot.emittedFrames, queuedPayloads: snapshot.queuedPayloads)
@@ -444,15 +470,27 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         }
 
         for delivered in secureDelivered {
+            let decompressed: Data
             if let compressRuntime {
                 let snapshot = compressRuntime.handleInboundPayload(delivered)
                 if let payload = snapshot.deliveredPayload, !snapshot.dropped {
-                    deliveredPayloads.append(payload)
+                    decompressed = payload
                 } else if snapshot.dropped {
                     compressionFailureEpoch = transportLifecycle.epoch
+                    continue
+                } else {
+                    continue
                 }
             } else {
-                deliveredPayloads.append(delivered)
+                decompressed = delivered
+            }
+            if let fence = deliveryFenceRuntime.handleInbound(decompressed) {
+                emittedFrames.append(contentsOf: protectFenceRecords(fence.emittedRecords))
+                deliveredPayloads.append(contentsOf: fence.deliveredPayloads)
+            } else {
+                // A mixed-version peer has no outer fence.  Preserve the
+                // previous behavior while it negotiates out of the fleet.
+                deliveredPayloads.append(decompressed)
             }
         }
 
@@ -467,9 +505,29 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         // client request only after the protected handshake is authenticated;
         // otherwise a strict peer waiting for CLIENT_HELLO would block.
         if secureLinkAdapter?.protocolState?.authenticated == true {
+            let secureSessionID = secureLinkAdapter?.statusSnapshot().sessionID ?? 0
+            if deliveryFenceSecureLinkSessionID != secureSessionID {
+                deliveryFenceSecureLinkSessionID = secureSessionID
+                deliveryFenceRuntime.lowerDisconnected()
+            }
             emittedFrames.append(contentsOf: peerAddressRuntime?.handleTransportConnected() ?? [])
+            if !deliveryFenceRuntime.isConnected {
+                emittedFrames.append(contentsOf: protectFenceRecords(
+                    deliveryFenceRuntime.lowerReady(nowNanoseconds: DispatchTime.now().uptimeNanoseconds)
+                ))
+            }
         }
         return InboundSnapshot(emittedFrames: emittedFrames, deliveredPayloads: deliveredPayloads)
+    }
+
+    private func protectFenceRecords(_ records: [Data]) -> [Data] {
+        records.flatMap { record in
+            let compressed = compressRuntime?.handleSendPayload(record).wirePayload ?? record
+            if let secureLinkAdapter, let snapshot = try? secureLinkAdapter.handleOutboundPayload(compressed) {
+                return snapshot.emittedFrames
+            }
+            return secureLinkAdapter == nil ? [compressed] : []
+        }
     }
 
     /// Runs exactly one queued SecureLink application payload.  This method is
@@ -516,7 +574,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         }
         let coreReady = coreCoordinator.snapshot.appReady
         let compressionReady = compressionFailureEpoch != transportLifecycle.epoch
-        let connected = transportReady && secureReady && coreReady && compressionReady
+        let connected = transportReady && secureReady && coreReady && compressionReady && deliveryFenceRuntime.isConnected
         let nextState: ObstacleBridgeConnectionLifecycleState = connected ? .connected : .disconnected
         guard outerLifecycle.state != nextState || outerLifecycle.epoch != transportLifecycle.epoch else {
             return

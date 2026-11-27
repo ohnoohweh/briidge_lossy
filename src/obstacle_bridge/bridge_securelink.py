@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ._bridge_import import export_bridge_globals
 from .bridge_connection_lifecycle import ConnectionLifecycleEmitter, ConnectionRotationResult, ConnectionState
-from .bridge_transport_common import _has_configured_overlay_peer
+from .bridge_transport_common import DeliveryFenceCodec, _has_configured_overlay_peer
 from .runtime_metrics import bounded_runtime_scope
 
 _bridge = export_bridge_globals(globals())
@@ -467,6 +467,7 @@ class SecureLinkPskSession(ISession):
         self._last_terminal_failure_unix_ts: Optional[float] = None
         self._last_terminal_failure_session_id: Optional[int] = None
         self._last_transport_epoch_change_unix_ts: Optional[float] = None
+        self._last_observed_inner_epoch = 0
         self._last_disconnect_reason: str = ""
         self._last_disconnect_detail: str = ""
         self._last_secure_link_event: str = ""
@@ -1244,6 +1245,15 @@ class SecureLinkPskSession(ISession):
             int(self._authenticated_sessions_total or 0),
             int(self._rekeys_completed_total or 0),
         )
+        # A new SecureLink session is a new protection epoch even when a
+        # listener retained its logical peer across the lower-stream handoff.
+        # Re-publish authenticated readiness so the outer delivery fence
+        # replays its still-unconfirmed plaintext through these fresh keys.
+        # Without this edge a preserved listener stays boolean-connected and
+        # can retain reply records indefinitely after a WebSocket/TCP/QUIC
+        # replacement.
+        self._last_connected = False
+        self._refresh_connected_state()
 
     def _mark_peer_confirmed_authenticated(
         self,
@@ -2770,6 +2780,14 @@ class SecureLinkPskSession(ISession):
             self._clear_all_states()
             return
         if self._client_mode and self._started:
+            # WS/TCP grace reconnection retains ChannelMux streams, so it must
+            # not use the public hard-reset callback.  Its raw owner still
+            # advances connection_epoch; that is sufficient to retire only
+            # stale SecureLink ciphertext before beginning a new handshake.
+            inner_epoch = int(getattr(self._inner, "connection_epoch", 0) or 0)
+            if inner_epoch > 0 and inner_epoch != self._last_observed_inner_epoch:
+                self._last_observed_inner_epoch = inner_epoch
+                self._clear_all_states()
             self._maybe_begin_client_handshake()
 
     def _on_inner_connection_lifecycle(self, event) -> None:
@@ -2896,6 +2914,10 @@ class SecureLinkPskSession(ISession):
         return hdr.pack(new_chan, proto, counter, mtype, dlen) + payload[hdr.size:hdr.size + dlen]
 
     def _server_rewrite_inbound_app(self, peer_id: int, payload: bytes) -> bytes:
+        # Delivery-fence records sit above SecureLink.  They are deliberately
+        # opaque here: their leading bytes are not a ChannelMux header.
+        if DeliveryFenceCodec.decode(payload) is not None:
+            return payload
         hdr = struct.Struct(">HBHBH")
         if len(payload) < hdr.size:
             return payload
@@ -2924,6 +2946,16 @@ class SecureLinkPskSession(ISession):
             self._server_chan_to_peer.pop(mux_chan, None)
 
     def _resolve_server_send_target(self, payload: bytes, peer_id: Optional[int] = None) -> Optional[Tuple[int, bytes]]:
+        # See _server_rewrite_inbound_app.  Preserve the fence record byte for
+        # byte while selecting an authenticated destination.
+        if DeliveryFenceCodec.decode(payload) is not None:
+            target_peer_id = int(peer_id) if peer_id is not None else None
+            if target_peer_id is None and len(self._peer_states) == 1:
+                target_peer_id = next(iter(self._peer_states.keys()))
+            if target_peer_id is None:
+                return None
+            state = self._peer_states.get(target_peer_id)
+            return (target_peer_id, payload) if state is not None and state.authenticated else None
         hdr = struct.Struct(">HBHBH")
         if len(payload) < hdr.size:
             return None

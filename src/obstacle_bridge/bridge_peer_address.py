@@ -109,6 +109,11 @@ class PeerAddressProtocolSession(ISession):
         if callable(setter):
             setter(cb)
 
+    def set_app_payload_passthrough(self, enabled: bool) -> None:
+        setter = getattr(self._inner, "set_app_payload_passthrough", None)
+        if callable(setter):
+            setter(enabled)
+
     def _on_inner_state_change(self, connected: bool) -> None:
         if not connected:
             self._request_sent = False

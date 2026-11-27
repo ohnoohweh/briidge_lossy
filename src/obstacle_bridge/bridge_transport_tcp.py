@@ -233,8 +233,8 @@ class TcpStreamSession(ISession):
         self._run_flag = True
 
         if self._peer_tuple:
-            # CLIENT: proactive connect so RTT can flow immediately
-            self._rtt_rt.attach(send_ping_fn=None, on_state_change=self._on_rtt_state_change)
+            # CLIENT: proactive connect.  Authenticated liveness is owned by
+            # the outer delivery fence, above compression and SecureLink.
             self._peer_host, self._peer_port = self._peer_tuple
             self._log.info(f"[TCP-SESSION] ({self._probe_id}) start; CLIENT bind={self._listen_host}:{self._listen_port} peer={self._peer_tuple}")
             self._ensure_connect_once()
@@ -257,7 +257,6 @@ class TcpStreamSession(ISession):
         self._run_flag = False
 
         # tear down timers / tasks
-        self._rtt_rt.detach()
         for t in (self._connecting_task, self._reconnect_task):
             if t: t.cancel()
         self._connecting_task = None
@@ -307,12 +306,17 @@ class TcpStreamSession(ISession):
                 return True
             except asyncio.TimeoutError:
                 return False
-        return await self._rtt_rt.wait_connected(timeout)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while self._run_flag and self._writer is None:
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.02)
+        return self._writer is not None
 
     def is_connected(self) -> bool:
         if not self._peer_tuple:
             return bool(self._server_peers)
-        return self._rtt.is_connected()
+        return self._writer is not None
 
     def get_connection_layers_snapshot(self) -> list[dict[str, object]]:
         connected = bool(self.is_connected())
@@ -671,13 +675,7 @@ class TcpStreamSession(ISession):
                 suspended["reader"] = reader
                 suspended["writer"] = writer
                 suspended["addr"] = p if isinstance(p, tuple) and len(p) >= 2 else None
-                suspended["rtt"] = StreamRTT(log=self._log.getChild(f"rtt.{peer_id}"))
-                suspended["rtt_rt"] = StreamRTTRuntime(suspended["rtt"])
                 self._enable_os_keepalive(writer)
-                suspended["rtt_rt"].attach(
-                    send_ping_fn=lambda payload, _peer_id=peer_id: self._send_ping_frame_for_peer(_peer_id, payload),
-                    on_state_change=lambda connected, _peer_id=peer_id: self._on_state_change_for_peer(_peer_id, connected),
-                )
                 suspended["rx_task"] = self._loop.create_task(self._rx_pump_for_peer(peer_id, writer, initial_body))  # type: ignore[union-attr]
                 for wire in suspended.pop("pending_wires", []):
                     writer.write(wire)
@@ -685,16 +683,12 @@ class TcpStreamSession(ISession):
                 self._update_server_overlay_connected()
                 return
             peer_id = self._alloc_server_peer_id()
-            rtt = StreamRTT(log=self._log.getChild(f"rtt.{peer_id}"))
-            rtt_rt = StreamRTTRuntime(rtt)
             ctx = {
                 "peer_id": peer_id,
                 "reader": reader,
                 "writer": writer,
                 "addr": p if isinstance(p, tuple) and len(p) >= 2 else None,
-                "connected": False,
-                "rtt": rtt,
-                "rtt_rt": rtt_rt,
+                "connected": True,
                 "rx_bytes": 0,
                 "tx_bytes": 0,
                 "rx_crc32": 0,
@@ -713,10 +707,6 @@ class TcpStreamSession(ISession):
             except Exception:
                 pass
             self._enable_os_keepalive(writer)
-            rtt_rt.attach(
-                send_ping_fn=lambda payload, _peer_id=peer_id: self._send_ping_frame_for_peer(_peer_id, payload),
-                on_state_change=lambda connected, _peer_id=peer_id: self._on_state_change_for_peer(_peer_id, connected),
-            )
             ctx["rx_task"] = self._loop.create_task(self._rx_pump_for_peer(peer_id, writer, initial_body))  # type: ignore[union-attr]
             self._update_server_overlay_connected()
             return
@@ -741,12 +731,10 @@ class TcpStreamSession(ISession):
         self._reset_counters()
         self._ensure_bp_task()
 
-        # give RTT runtime the send function (PING)
-        self._rtt_rt.attach(self._send_ping_frame, on_state_change=self._on_rtt_state_change)
-
         # start RX and flush any buffered APP frames
         self._rx_task = self._loop.create_task(self._rx_pump())
         self._flush_early()
+        self._set_overlay_connected(True)
 
     def _ensure_connect_once(self) -> None:
         if self._connecting_task is not None or not self._peer_tuple or not self._run_flag:
@@ -865,10 +853,11 @@ class TcpStreamSession(ISession):
             self._reset_counters()
             self._ensure_bp_task()
 
-            # attach RTT sender and start RX; buffered APP gets flushed
-            self._rtt_rt.attach(self._send_ping_frame, on_state_change=self._on_rtt_state_change)
+            # The socket is available; the outer delivery fence establishes
+            # authenticated liveness and owns all replay probes.
             self._rx_task = loop.create_task(self._rx_pump())
             self._flush_early()
+            self._set_overlay_connected(True)
         except Exception as e:
             self._log.warning(f"[TCP-SESSION] ({self._probe_id}) connect failed to {host}:{port}: {e!r}")
         finally:
@@ -1151,7 +1140,7 @@ class TcpStreamSession(ISession):
 
                 # per-direction meters
                 if self._on_peer_rx:
-                    try: self._on_peer_rx(len(hdr) + len(body))
+                    try: self._on_peer_rx(self._LEN.size + len(body))
                     except Exception: pass
 
                 # demux kinds
@@ -1226,7 +1215,6 @@ class TcpStreamSession(ISession):
             return
         reader = ctx.get("reader")
         writer = ctx.get("writer")
-        rtt = ctx.get("rtt")
         self._log.debug(f"[TCP/RX] ({self._probe_id}) server pump start peer_id={peer_id}")
         try:
             pending_body = initial_body
@@ -1249,7 +1237,10 @@ class TcpStreamSession(ISession):
                 payload = body[1:]
 
                 if self._on_peer_rx:
-                    try: self._on_peer_rx(len(hdr) + len(body))
+                    # The first accepted record has already been consumed by
+                    # _read_initial_resume_record(), so no local ``hdr``
+                    # exists for that iteration.
+                    try: self._on_peer_rx(self._LEN.size + len(body))
                     except Exception: pass
 
                 if kind == self._K_APP:
@@ -1263,17 +1254,11 @@ class TcpStreamSession(ISession):
                             except TypeError: self._on_app(rewritten)
                         except Exception as e:
                             self._log.debug(f"[TCP/RX] ({self._probe_id}) server app callback err peer_id={peer_id}: {e!r}")
-                elif kind == self._K_PING:
-                    if len(payload) >= 16 and rtt is not None:
-                        tx_ns, echo_ns = struct.unpack(">QQ", payload[:16])
-                        rtt.on_ping_received(tx_ns)
-                        if echo_ns:
-                            rtt.on_pong_received(echo_ns)
-                        self._send_pong_frame_for_peer(peer_id, tx_ns)
-                elif kind == self._K_PONG:
-                    if len(payload) >= 8 and rtt is not None:
-                        (echo_tx_ns,) = struct.unpack(">Q", payload[:8])
-                        rtt.on_pong_received(echo_tx_ns)
+                elif kind in (self._K_PING, self._K_PONG):
+                    # Lower transport RTT was retired in favour of the
+                    # authenticated delivery fence.  Ignore residual frames
+                    # from an older peer rather than treating them as state.
+                    continue
         except asyncio.IncompleteReadError:
             pass
         except asyncio.CancelledError:
@@ -1357,10 +1342,6 @@ class TcpStreamSession(ISession):
             return
         self._server_resume_registry.discard(resume_token, ctx)
         self._server_unregister_peer_channels(peer_id)
-        rtt_rt = ctx.get("rtt_rt")
-        if rtt_rt is not None:
-            with contextlib.suppress(Exception):
-                rtt_rt.detach()
         rx_task = ctx.get("rx_task")
         if rx_task and rx_task is not asyncio.current_task():
             rx_task.cancel()

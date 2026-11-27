@@ -939,9 +939,10 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(8):
             await asyncio.sleep(0)
 
-        # The app handshake pauses, but SecureLink reports one continuous
-        # connected lifecycle state to its outer wrapper during reauthentication.
-        self.assertEqual(client_states, [True])
+        # The public state remains connected, but reauthentication publishes a
+        # fresh readiness edge so the outer delivery fence can replay only
+        # plaintext records not yet peer-confirmed under the new keys.
+        self.assertEqual(client_states, [True, True])
         self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
         secure_layer = client.get_connection_layers_snapshot()[-1]
         self.assertTrue(secure_layer["connected"])

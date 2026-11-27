@@ -20,8 +20,9 @@ ARC-CMP-001:
   # The focused native pressure case keeps TCP DATA frames inside the myUDP
   # record cap by segmenting at the shared ChannelMux envelope boundary.
   # The Linux listener service probe consumes the common Admin peer wrapper.
-  # Stream-resume evidence consumes TCP/QUIC control prefaces below SecureLink
-  # before asserting retained ChannelMux TCP carriage after RTT confirmation;
+  # Stream-resume evidence uses the delivery fence above compression and
+  # SecureLink before asserting retained ChannelMux TCP carriage after peer
+  # confirmation;
   # portable plan comparisons deliberately omit per-process token material;
   # foreground stop withdraws service-socket ownership deterministically.
   # Receive-idle coverage keeps a delayed UDP port-unreachable retryable.
@@ -39,6 +40,7 @@ ARC-CMP-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_receive_idle_client_parity
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_tcp_service_survives_ten_live_rekeys
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_tcp_stream_survives_reconnect_without_secure_link
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_tcp_stream_resumes_unconfirmed_random_bytes
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_tcp_stream_survives_reconnect
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_quic_tcp_stream_survives_reconnect
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_myudp_python_tcp_service_survives_ten_rekeys_with_two_clients

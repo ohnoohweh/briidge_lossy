@@ -1642,7 +1642,8 @@ def response_payload(data: bytes) -> bytes:
 
 
 class BounceBackServer:
-    def __init__(self, name: str, proto: str, bind_host: str, port: int, log_path: Path):
+    def __init__(self, name: str, proto: str, bind_host: str, port: int, log_path: Path,
+                 response_transform: Callable[[bytes], bytes] = response_payload):
         self.name = name
         self.proto = proto
         self.bind_host = bind_host
@@ -1656,6 +1657,7 @@ class BounceBackServer:
         self._received_payloads: list[bytes] = []
         self._received_lock = threading.Lock()
         self.tcp_expected_request_bytes = 0
+        self.response_transform = response_transform
 
     def _log(self, msg: str) -> None:
         with self.log_path.open('a', encoding='utf-8', errors='replace') as fp:
@@ -1705,7 +1707,7 @@ class BounceBackServer:
                 break
             with self._received_lock:
                 self._received_payloads.append(bytes(data))
-            reply = response_payload(data)
+            reply = self.response_transform(data)
             self._log(f'RX {data.hex(" ")} from {addr!r} -> TX {reply.hex(" ")}')
             try:
                 self.sock.sendto(reply, addr)
@@ -1755,7 +1757,7 @@ class BounceBackServer:
                     data = bytes(accumulated)
                 with self._received_lock:
                     self._received_payloads.append(bytes(data))
-                reply = response_payload(data)
+                reply = self.response_transform(data)
                 self._log(f'RX {data.hex(" ")} from {addr!r} -> TX {reply.hex(" ")}')
                 try:
                     conn.sendall(reply)
@@ -5607,8 +5609,9 @@ def run_case_ws_tcp_stream_survives_reconnect(
     log_dir: Path,
     *,
     runtime_mode: str = 'python-python',
+    secure_link: bool = False,
 ) -> None:
-    """Keep one cleartext TCP service stream alive while the client replaces WS.
+    """Keep one TCP service stream alive while the client replaces WS.
 
     The request is deliberately made through the supported Admin reconnect
     endpoint, rather than by restarting either bridge process: restarting a
@@ -5622,21 +5625,26 @@ def run_case_ws_tcp_stream_survives_reconnect(
     case = materialize_case_ports(
         replace(
             base_case,
-            name='overlay_ws_tcp_stream_survives_reconnect_without_secure_link',
+            name=(
+                'overlay_ws_tcp_stream_survives_reconnect_with_secure_link'
+                if secure_link else 'overlay_ws_tcp_stream_survives_reconnect_without_secure_link'
+            ),
             bridge_server_args=_append_args(
                 base_case.bridge_server_args,
-                # The listener must retain the accepted logical peer while
-                # its lower WebSocket is replaced.  Keep SecureLink
-                # explicitly disabled: this is the lifecycle contract for a
-                # cleartext overlay, not an implicit default-setting test.
-                ['--ws-reconnect-grace', '5', '--secure-link-mode', 'off'],
+                ['--ws-reconnect-grace', '5'] + (
+                    ['--secure-link-mode', 'psk', '--secure-link-psk', 'stream-resume-e2e-psk']
+                    if secure_link else ['--secure-link-mode', 'off']
+                ),
             ),
             bridge_client_args=_append_args(
                 base_case.bridge_client_args,
                 [
                     '--overlay-reconnect-retry-delay-ms', '50',
-                    '--ws-reconnect-grace', '5', '--secure-link-mode', 'off',
-                ],
+                    '--ws-reconnect-grace', '5',
+                ] + (
+                    ['--secure-link-mode', 'psk', '--secure-link-psk', 'stream-resume-e2e-psk']
+                    if secure_link else ['--secure-link-mode', 'off']
+                ),
             ),
         ),
         case_index,
@@ -5644,12 +5652,13 @@ def run_case_ws_tcp_stream_survives_reconnect(
     bounce = BounceBackServer(
         name=f'{case.name}_bounce', proto='tcp', bind_host=case.bounce_bind,
         port=case.bounce_port, log_path=log_dir / f'{case.name}_bounce.log',
+        response_transform=(lambda payload: payload) if secure_link else response_payload,
     )
     server_proc: Optional[Proc] = None
     client_proc: Optional[Proc] = None
 
     def exchange(stream: socket.socket, payload: bytes) -> None:
-        expected = response_payload(payload)
+        expected = payload if secure_link else response_payload(payload)
         stream.sendall(payload)
         received = bytearray()
         while len(received) < len(expected):
@@ -5686,6 +5695,12 @@ def run_case_ws_tcp_stream_survives_reconnect(
             # server-origin socket; each echoed response asserts reverse as
             # well as forward delivery.
             exchange(stream, b'\x01before-ws-reconnect')
+            if secure_link:
+                # A deterministic pseudo-random sequence makes every byte
+                # position observable. Start it immediately before lower
+                # transport rotation, while records remain in flight.
+                in_transit = hashlib.shake_256(b'secure-ws-resume-byte-proof-v1').digest(4 * 1024)
+                stream.sendall(in_transit)
             code, result = post_json(
                 f'http://127.0.0.1:{client_proc.admin_port}/api/reconnect', timeout=5.0,
             )
@@ -5704,14 +5719,31 @@ def run_case_ws_tcp_stream_survives_reconnect(
             )
             assert_running(server_proc)
             assert_running(client_proc)
+            if secure_link:
+                received = bytearray()
+                while len(received) < len(in_transit):
+                    chunk = stream.recv(len(in_transit) - len(received))
+                    if not chunk:
+                        raise RuntimeError(
+                            'persistent TCP service stream closed while secure WebSocket '
+                            f'recovery still owed {len(in_transit) - len(received)} byte(s)'
+                        )
+                    received.extend(chunk)
+                if bytes(received) != in_transit:
+                    raise RuntimeError('secure WebSocket recovery lost or altered in-transit bytes')
             exchange(stream, b'\x01after-ws-reconnect')
 
             received = bounce.received_payloads()
-            expected_requests = [b'\x01before-ws-reconnect', b'\x01after-ws-reconnect']
-            if received != expected_requests:
+            expected_requests = [b'\x01before-ws-reconnect']
+            if secure_link:
+                expected_requests.append(in_transit)
+            expected_requests.append(b'\x01after-ws-reconnect')
+            received_for_comparison = b''.join(received) if secure_link else received
+            expected_for_comparison = b''.join(expected_requests) if secure_link else expected_requests
+            if received_for_comparison != expected_for_comparison:
                 raise RuntimeError(
                     f'TCP server did not receive persistent-stream records exactly once: '
-                    f'got={received!r} expected={expected_requests!r}'
+                    f'got={received_for_comparison!r} expected={expected_for_comparison!r}'
                 )
     finally:
         if client_proc is not None:
@@ -9522,6 +9554,13 @@ def test_overlay_e2e_ws_tcp_stream_survives_reconnect_without_secure_link(runtim
         if not shutil.which('swift'):
             pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
     run_case_ws_tcp_stream_survives_reconnect(tmp_path, runtime_mode=runtime_mode)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_secure_tcp_stream_resumes_unconfirmed_random_bytes(tmp_path: Path) -> None:
+    """A new SecureLink epoch replays only byte-exact unconfirmed records."""
+    run_case_ws_tcp_stream_survives_reconnect(tmp_path, secure_link=True)
 
 
 @pytest.mark.integration

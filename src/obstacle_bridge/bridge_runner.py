@@ -3756,6 +3756,14 @@ class Runner:
         return CompressLayerSession(session, args, transport_name)
 
     @staticmethod
+    def _wrap_delivery_fence(transport_name: str, session: ISession) -> ISession:
+        """Place authenticated RTT/delivery above compression and SecureLink."""
+        if transport_name not in {"tcp", "ws", "quic"}:
+            return session
+        from .bridge_delivery_fence import DeliveryFenceSession
+        return DeliveryFenceSession(session)
+
+    @staticmethod
     def build_sessions_from_overlay(args: argparse.Namespace) -> List[Tuple[str, ISession]]:
         """
         Return the ISession(s) that implement the chosen overlay transport(s).
@@ -3781,6 +3789,7 @@ class Runner:
             wrapped = Runner._wrap_peer_address_protocol(session_args, choice, session)
             wrapped = Runner._maybe_wrap_secure_link(session_args, choice, wrapped)
             wrapped = Runner._maybe_wrap_compress_layer(session_args, choice, wrapped)
+            wrapped = Runner._wrap_delivery_fence(choice, wrapped)
             out.append((choice, wrapped))
         return out
 

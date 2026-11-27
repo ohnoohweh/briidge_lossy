@@ -199,7 +199,7 @@ class WebSocketSession(ISession):
     Features:
       - Client mode (proactive connect) and Server mode (accept multiple overlay peers)
       - Auto-reconnect (client) with backoff
-      - RTT estimation via StreamRTT/StreamRTTRuntime (drives overlay 'connected')
+      - socket lifecycle only; the outer delivery fence owns RTT and delivery
       - Per-connection counters + running CRC32 over wire bytes (KIND+payload)
       - Early-buffer for APP frames sent before WS is up
       - Loud/structured DEBUG logging mirroring TcpStreamSession style
@@ -620,10 +620,6 @@ class WebSocketSession(ISession):
         self._loop = asyncio.get_running_loop()
         self._run_flag = True
 
-        # Attach RTT driver (send function gets attached when WS is up)
-        if self._peer_tuple:
-            self._rtt_rt.attach(send_ping_fn=None, on_state_change=self._on_rtt_state_change)
-
         if self._peer_tuple:
             # CLIENT
             self._peer_host = self._peer_tuple[0]
@@ -642,9 +638,6 @@ class WebSocketSession(ISession):
     async def stop(self) -> None:
         self._log.info(f"[WS-SESSION] ({self._probe_id}) stopping")
         self._run_flag = False
-
-        if self._peer_tuple:
-            self._rtt_rt.detach()
 
         for t in (self._connecting_task, self._reconnect_task):
             if t: t.cancel()
@@ -693,12 +686,17 @@ class WebSocketSession(ISession):
                 return True
             except asyncio.TimeoutError:
                 return False
-        return await self._rtt_rt.wait_connected(timeout)
+        deadline = time.monotonic() + float(timeout or 0.0)
+        while timeout is None or time.monotonic() < deadline:
+            if self._ws is not None:
+                return True
+            await asyncio.sleep(0.02)
+        return self._ws is not None
 
     def is_connected(self) -> bool:
         if not self._peer_tuple:
             return bool(self._server_peers)
-        return self._rtt.is_connected()
+        return self._ws is not None
 
     def get_connection_layers_snapshot(self) -> list[dict[str, object]]:
         connected = bool(self.is_connected())
@@ -1892,10 +1890,6 @@ class WebSocketSession(ISession):
                 self._server_peers[peer_id] = suspended
                 self._server_peer_by_ws_id[id(ws)] = peer_id
                 self._configure_ws_socket(ws)
-                suspended["rtt_rt"].attach(
-                    send_ping_fn=lambda payload, _peer_id=peer_id: self._send_ping_frame_for_peer(_peer_id, payload),
-                    on_state_change=lambda connected, _peer_id=peer_id: self._on_server_peer_rtt_state(_peer_id, connected),
-                )
                 suspended["rx_task"] = self._loop.create_task(self._rx_pump(ws=ws, peer_id=peer_id))  # type: ignore
                 self._ws = ws
                 self._rx_task = suspended["rx_task"]
@@ -1947,10 +1941,6 @@ class WebSocketSession(ISession):
                 pass
             self._reset_counters()
             self._ensure_server_tx_task(ctx)
-            rtt_rt.attach(
-                send_ping_fn=lambda payload, _peer_id=peer_id: self._send_ping_frame_for_peer(_peer_id, payload),
-                on_state_change=lambda connected, _peer_id=peer_id: self._on_server_peer_rtt_state(_peer_id, connected),
-            )
             ctx["liveness_task"] = self._loop.create_task(
                 self._server_peer_initial_liveness_watchdog(peer_id)
             )
@@ -1978,13 +1968,8 @@ class WebSocketSession(ISession):
         if self._disconnect_task:
             self._disconnect_task.cancel()
             self._disconnect_task = None
-        # A reconnect starts a fresh transport epoch. Drop any RTT connectedness
-        # inherited from the previous socket so a stale runtime tick cannot flip
-        # the new websocket back to DISCONNECTED before its first PONG arrives.
-        # Also clear the internal overlay-connected latch so the first healthy
-        # PONG on the replacement socket emits a fresh CONNECTED edge to any
-        # wrapper session (for example SecureLink) waiting on the new transport
-        # epoch rather than inheriting the prior socket's connected state.
+        # A reconnect starts a fresh lower transport epoch.  The outer delivery
+        # fence, not this socket layer, establishes application readiness.
         if had_previous_connection:
             self._overlay_connected = False
         self._rtt.reset()
@@ -2001,9 +1986,11 @@ class WebSocketSession(ISession):
             pass
 
         self._reset_counters()
-        self._rtt_rt.attach(self._send_ping_frame, on_state_change=self._on_rtt_state_change)
-        self._log.debug(f"[WS/GUARD] ({self._probe_id}) on_accept ready; starting RX pump and RTT runtime")
         self._ensure_tx_task()
+        # SecureLink may emit CLIENT_HELLO synchronously from the state edge;
+        # make the sender available before publishing that lower socket edge.
+        self._set_overlay_connected(True)
+        self._log.debug(f"[WS/GUARD] ({self._probe_id}) on_accept ready; starting RX pump")
         self._rx_task = self._loop.create_task(self._rx_pump())      # type: ignore
         self._flush_early()
 

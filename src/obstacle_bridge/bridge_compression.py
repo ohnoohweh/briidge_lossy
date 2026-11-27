@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ._bridge_import import export_bridge_globals
 from .bridge_connection_lifecycle import ConnectionLifecycleEmitter, ConnectionRotationResult, ConnectionState
+from .bridge_transport_common import DeliveryFenceCodec
 from .runtime_metrics import bounded_runtime_scope
 
 _bridge = export_bridge_globals(globals())
@@ -277,6 +278,12 @@ class CompressLayerSession(ISession):
             self._on_inner_payload_timed(payload, peer_id)
 
     def _on_inner_payload_timed(self, payload: bytes, peer_id: Optional[int] = None) -> None:
+        # The delivery fence encloses ChannelMux. It must not be mistaken for
+        # a mux header merely because its fixed magic happens to be long
+        # enough to parse as one.
+        if DeliveryFenceCodec.decode(payload) is not None:
+            self._deliver_outer_app(payload, peer_id)
+            return
         parsed = self._parse_mux_frame(payload)
         if parsed is None:
             self._deliver_outer_app(payload, peer_id)
@@ -324,6 +331,9 @@ class CompressLayerSession(ISession):
     def _send_app_timed(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         if self._compression_error_epoch == self._connection_lifecycle_epoch:
             return 0
+        if DeliveryFenceCodec.decode(payload) is not None:
+            sent = self._inner.send_app(payload, peer_id=peer_id)
+            return len(payload) if sent else 0
         parsed = self._parse_mux_frame(payload)
         if parsed is None:
             sent = self._inner.send_app(payload, peer_id=peer_id)
@@ -379,6 +389,11 @@ class CompressLayerSession(ISession):
     def set_on_peer_disconnect(self, cb): self._outer_on_peer_disconnect = cb
     def set_on_app_from_peer_bytes(self, cb): self._outer_on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._outer_on_transport_epoch_change = cb
+
+    def set_app_payload_passthrough(self, enabled: bool) -> None:
+        setter = getattr(self._inner, "set_app_payload_passthrough", None)
+        if callable(setter):
+            setter(enabled)
 
     async def start(self) -> None:
         self._inner.set_on_app_payload(self._on_inner_payload)

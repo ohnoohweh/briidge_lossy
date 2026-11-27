@@ -432,7 +432,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
             for payload in delivered { _ = handshakeDeliveredPayloads.append(payload) }
             requestLock.unlock()
         }
-        guard overlayAdapter.secureLinkProtocolState()?.authenticated == true else {
+        guard overlayAdapter.secureLinkProtocolState() == nil
+                || overlayAdapter.secureLinkProtocolState()?.authenticated == true
+        else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
         }
     }
@@ -644,9 +646,10 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             do {
                 let (lower, lowerSession) = try openLowerSession(host)
                 let session: ObstacleBridgeLinuxConfiguredSession
+                let adapter: ObstacleBridgeOverlayLayerTransportAdapter
                 if let psk = configuration.secureLinkPSK {
                     debug("secure_link.handshake.started", ["transport": configuration.transport.rawValue])
-                    let adapter = ObstacleBridgeOverlayLayerTransportAdapter(
+                    adapter = ObstacleBridgeOverlayLayerTransportAdapter(
                         clientPSK: String(decoding: psk, as: UTF8.self),
                         rekeyAfterFrames: configuration.secureLinkRekeyAfterFrames,
                         rekeyAfterSeconds: configuration.secureLinkRekeyAfterSeconds,
@@ -654,18 +657,19 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                             self?.recordCoreDiagnostic(level, event: event, fields: fields)
                         }
                     )
-                    session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, overlayAdapter: adapter, transport: configuration.transport)
-                    guard admission.installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
-                    try session.completeClientHandshake(sessionID: sessionID, clientNonce: clientNonce)
+                } else {
+                    adapter = ObstacleBridgeOverlayLayerTransportAdapter(cleartext: true)
+                }
+                session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, overlayAdapter: adapter, transport: configuration.transport)
+                guard admission.installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
+                try session.completeClientHandshake(sessionID: sessionID, clientNonce: clientNonce)
+                if configuration.secureLinkPSK != nil {
                     debug("secure_link.handshake.completed", ["transport": configuration.transport.rawValue])
                     admission.secureLinkState = "authenticated"
-                    admission.clearInFlightConnection(session)
                 } else {
-                    session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, secureLink: nil, transport: configuration.transport)
-                    guard admission.installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
                     admission.secureLinkState = "off"
-                    admission.clearInFlightConnection(session)
                 }
+                admission.clearInFlightConnection(session)
                 admission.snapshot = .init(transport: configuration.transport.rawValue, state: "connected", attempts: index + 1, failureReason: nil)
                 admission.connectionEpoch &+= 1
                 admission.activeHost = host

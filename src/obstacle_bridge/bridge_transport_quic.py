@@ -262,8 +262,9 @@ class QuicSession(ISession):
         self._loop = asyncio.get_running_loop()
         self._run_flag = True
         if self._peer_tuple:
-            # Attach RTT driver; we’ll attach send_pings once we have a stream
-            self._rtt_rt.attach(send_ping_fn=None, on_state_change=self._on_rtt_state_change)
+            # The lower QUIC transport reports stream availability only.
+            # Authenticated liveness and replay are provided by the outer
+            # delivery fence above compression and SecureLink.
             # CLIENT
             self._peer_host = self._peer_tuple[0]
             self._peer_port = self._peer_tuple[1]
@@ -281,8 +282,6 @@ class QuicSession(ISession):
     async def stop(self) -> None:
         self._log.info(f"[QUIC-SESSION] ({self._probe_id}) stopping")
         self._run_flag = False
-        if self._peer_tuple:
-            self._rtt_rt.detach()
         for t in (self._connecting_task, self._reconnect_task):
             if t: t.cancel()
         self._connecting_task = None
@@ -326,12 +325,17 @@ class QuicSession(ISession):
                 return True
             except asyncio.TimeoutError:
                 return False
-        return await self._rtt_rt.wait_connected(timeout)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while self._run_flag and self._proto is None:
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.02)
+        return self._proto is not None
 
     def is_connected(self) -> bool:
         if not self._peer_tuple:
             return bool(self._server_peers)
-        return self._rtt.is_connected()
+        return self._proto is not None and self._stream_id is not None
 
     def get_connection_layers_snapshot(self) -> list[dict[str, object]]:
         connected = bool(self.is_connected())
@@ -970,14 +974,13 @@ class QuicSession(ISession):
                 self._log.debug(f"[QUIC/STREAM] ({self._probe_id}) get_next_available_stream_id() failed: {e!r}")
             self._send_resume_record()
 
-        # Attach RTT sender now that we can (it will only send if stream_id exists)
-        self._rtt_rt.attach(self._send_ping_frame, on_state_change=self._on_rtt_state_change)
-
         # Keep a dummy task to align lifecycle (keeps client connect() context alive)
         self._rx_task = self._loop.create_task(self._rx_dummy())  # type: ignore
 
         # Flush any early APP frames if we already have a stream
         self._flush_early()
+        if self._stream_id is not None:
+            self._set_overlay_connected(True)
 
     async def _rx_dummy(self):
         try:
@@ -1055,9 +1058,8 @@ class QuicSession(ISession):
             # If we don't have a stream, adopt the incoming one.
             if self._stream_id is None:
                 self._stream_id = sid
-                # Ensure RTT sender is attached now that we have a stream id
-                self._rtt_rt.attach(self._send_ping_frame, on_state_change=self._on_rtt_state_change)
                 self._log.info(f"[QUIC/STREAM] ({self._probe_id}) adopted incoming stream_id={sid}")
+                self._set_overlay_connected(True)
 
             # If we picked a different stream earlier (e.g., both sides opened one),
             # switch to the incoming id so that both sides converge on ONE stream.
