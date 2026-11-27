@@ -257,6 +257,7 @@ def test_macos_host_runner_projects_shared_runtime_metrics() -> None:
     assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=projectsPythonCompatibleBoundedMemoryMetrics" in source
     assert "ObstacleBridgeRuntimeHealthRing" not in source
     assert '"runtime_health_recent_records"' not in source
+    assert 'deliveryFenceEnabled: settings.transport != "myudp"' in source
 
 
 def test_macos_runtime_metrics_keep_atomic_leaf_boundaries() -> None:

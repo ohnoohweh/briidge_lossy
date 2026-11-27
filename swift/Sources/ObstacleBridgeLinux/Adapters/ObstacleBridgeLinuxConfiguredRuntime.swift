@@ -654,12 +654,16 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                         clientPSK: String(decoding: psk, as: UTF8.self),
                         rekeyAfterFrames: configuration.secureLinkRekeyAfterFrames,
                         rekeyAfterSeconds: configuration.secureLinkRekeyAfterSeconds,
+                        deliveryFenceEnabled: configuration.transport != .myudp,
                         diagnosticSink: { [weak self] level, event, fields in
                             self?.recordCoreDiagnostic(level, event: event, fields: fields)
                         }
                     )
                 } else {
-                    adapter = ObstacleBridgeOverlayLayerTransportAdapter(cleartext: true)
+                    adapter = ObstacleBridgeOverlayLayerTransportAdapter(
+                        cleartext: true,
+                        deliveryFenceEnabled: configuration.transport != .myudp
+                    )
                 }
                 session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, overlayAdapter: adapter, transport: configuration.transport)
                 guard admission.installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }

@@ -85,6 +85,7 @@ from obstacle_bridge.bridge import (
     SecureLinkPskSession,
 )
 from obstacle_bridge.core import ObstacleBridgeClient
+from obstacle_bridge.bridge_transport_common import DeliveryFenceCodec
 from obstacle_bridge.bridge_tun_helper_client import TunHelperClient
 
 log = logging.getLogger()
@@ -514,58 +515,99 @@ class LinuxSwiftSecureLinkPeer:
         if address_request != b'OBPA\x02\x01\x00':
             raise RuntimeError('Linux Swift peer-address request mismatch')
         send(b'OBPA\x02\x02\x04\x7f\x00\x00\x01' + (443).to_bytes(2, 'big'))
-        if self.keep_open and not self.mux_echo:
-            while not self._closing.is_set():
-                try:
-                    receive()
-                except TimeoutError:
-                    continue
-                except ConnectionResetError:
-                    return
-                except OSError:
-                    if self._closing.is_set():
-                        return
-                    raise
-                except RuntimeError as exc:
-                    if str(exc) == 'unexpected EOF from Linux Swift client':
-                        return
-                    raise
-                raise RuntimeError('unexpected application payload from idle Linux Swift runtime')
-            return
-        if self.mux_echo:
+        if self.transport == 'myudp':
+            # myUDP retains its own datagram acknowledgement path.  The outer
+            # fence is reserved for resumable stream transports.
             counter = 2
             while not self._closing.is_set():
                 try:
                     application = receive()
                 except TimeoutError:
                     continue
-                except ConnectionResetError:
+                except (ConnectionResetError, OSError):
                     return
-                except OSError:
-                    if self._closing.is_set():
-                        return
-                    raise
-                except RuntimeError as exc:
-                    if str(exc) == 'unexpected EOF from Linux Swift client':
-                        return
-                    raise
                 plaintext = ChaCha20Poly1305(client_to_server).decrypt(
                     b'\0' * 4 + counter.to_bytes(8, 'big'), application[20:], application[:20],
                 )
-                if len(plaintext) >= 8 and plaintext[:2] == b'O5' and plaintext[5] == 1:
-                    reply_plaintext = plaintext[:5] + b'\0\0\0'
-                else:
-                    reply_plaintext = plaintext
+                if self.keep_open and not self.mux_echo:
+                    raise RuntimeError('unexpected application payload from idle Linux Swift runtime')
+                reply = (
+                    plaintext[:5] + b'\0\0\0'
+                    if self.mux_echo and len(plaintext) >= 8 and plaintext[:2] == b'O5' and plaintext[5] == 1
+                    else plaintext if self.mux_echo else b'python-e2e:' + plaintext
+                )
                 response = self._header(4, session_id, counter)
                 send(response + ChaCha20Poly1305(server_to_client).encrypt(
-                    b'\0' * 4 + counter.to_bytes(8, 'big'), reply_plaintext, response,
+                    b'\0' * 4 + counter.to_bytes(8, 'big'), reply, response,
                 ))
                 counter += 1
+                if not self.mux_echo:
+                    return
             return
-        application = receive()
-        plaintext = ChaCha20Poly1305(client_to_server).decrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), application[20:], application[:20])
-        response = self._header(4, session_id, 2)
-        send(response + ChaCha20Poly1305(server_to_client).encrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), b'python-e2e:' + plaintext, response))
+        # Stream products use the common delivery fence above SecureLink.
+        # This reference peer therefore acknowledges fence probes and returns
+        # fence DATA, rather than treating its envelope as legacy application
+        # traffic. myUDP retains its own lower-layer reliability separately.
+        client_counter = 2
+        server_counter = 2
+        delivered_client_sequence = 0
+        server_sequence = 0
+
+        def decrypt_application(application: bytes) -> bytes:
+            nonlocal client_counter
+            plaintext = ChaCha20Poly1305(client_to_server).decrypt(
+                b'\0' * 4 + client_counter.to_bytes(8, 'big'), application[20:], application[:20],
+            )
+            client_counter += 1
+            return plaintext
+
+        def send_plaintext(plaintext: bytes) -> None:
+            nonlocal server_counter
+            response = self._header(4, session_id, server_counter)
+            send(response + ChaCha20Poly1305(server_to_client).encrypt(
+                b'\0' * 4 + server_counter.to_bytes(8, 'big'), plaintext, response,
+            ))
+            server_counter += 1
+
+        while not self._closing.is_set():
+            try:
+                plaintext = decrypt_application(receive())
+            except TimeoutError:
+                continue
+            except ConnectionResetError:
+                return
+            except OSError:
+                if self._closing.is_set():
+                    return
+                raise
+            except RuntimeError as exc:
+                if str(exc) == 'unexpected EOF from Linux Swift client':
+                    return
+                raise
+            decoded = DeliveryFenceCodec.decode(plaintext)
+            if decoded is None:
+                raise RuntimeError('Linux Swift application did not use delivery fence')
+            kind, sequence, body = decoded
+            if kind == DeliveryFenceCodec.KIND_PING:
+                send_plaintext(DeliveryFenceCodec.encode_pong(
+                    DeliveryFenceCodec.decode_ping(body)[0], delivered_client_sequence,
+                ))
+                continue
+            if kind != DeliveryFenceCodec.KIND_DATA:
+                raise RuntimeError('Linux Swift delivery fence record kind mismatch')
+            if sequence > delivered_client_sequence:
+                delivered_client_sequence = sequence
+            if self.keep_open and not self.mux_echo:
+                raise RuntimeError('unexpected application payload from idle Linux Swift runtime')
+            if self.mux_echo:
+                reply_body = body[:5] + b'\0\0\0' if len(body) >= 8 and body[:2] == b'O5' and body[5] == 1 else body
+            else:
+                reply_body = b'python-e2e:' + body
+            server_sequence += 1
+            send_plaintext(DeliveryFenceCodec.encode_data(server_sequence, reply_body))
+            send_plaintext(DeliveryFenceCodec.encode_pong(0, delivered_client_sequence))
+            if not self.mux_echo:
+                return
 
 
 def test_linux_swift_keep_open_peer_accept_poll_exits_cleanly() -> None:

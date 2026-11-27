@@ -37,6 +37,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     private let compressRuntime: ObstacleBridgeCompressLayerRuntime?
     private let secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter?
     private let deliveryFenceRuntime: ObstacleBridgeDeliveryFenceRuntime
+    private let deliveryFenceEnabled: Bool
     private let peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime?
     private let diagnosticSink: ObstacleBridgeSecureLinkPskTransportAdapter.DiagnosticSink?
     private let lifecycleTimeProvider: () -> TimeInterval
@@ -62,6 +63,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         compressRuntime: ObstacleBridgeCompressLayerRuntime? = nil,
         secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter? = nil,
         peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime? = nil,
+        deliveryFenceEnabled: Bool = true,
         transportDelayRotationThresholdMS: Double = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationThresholdMS,
         transportDelayRotationGrace: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationGrace,
         lifecycleTimeProvider: (() -> TimeInterval)? = nil,
@@ -70,6 +72,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         self.compressRuntime = compressRuntime
         self.secureLinkAdapter = secureLinkAdapter
         self.deliveryFenceRuntime = .init()
+        self.deliveryFenceEnabled = deliveryFenceEnabled
         self.peerAddressRuntime = peerAddressRuntime
         self.diagnosticSink = diagnosticSink
         self.lifecycleTimeProvider = lifecycleTimeProvider ?? { Date().timeIntervalSince1970 }
@@ -100,6 +103,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         clientPSK: String,
         rekeyAfterFrames: Int = 0,
         rekeyAfterSeconds: TimeInterval = 0,
+        deliveryFenceEnabled: Bool = true,
         diagnosticSink: ObstacleBridgeSecureLinkPskTransportAdapter.DiagnosticSink? = nil
     ) {
         self.init(
@@ -110,14 +114,15 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
                 diagnosticSink: diagnosticSink
             ),
             peerAddressRuntime: .init(clientMode: true),
+            deliveryFenceEnabled: deliveryFenceEnabled,
             diagnosticSink: diagnosticSink
         )
     }
 
     /// Cleartext overlays still use the delivery fence.  SecureLink is an
     /// optional protection layer below it, not an alternate RTT mechanism.
-    public convenience init(cleartext: Bool) {
-        self.init()
+    public convenience init(cleartext: Bool, deliveryFenceEnabled: Bool = true) {
+        self.init(deliveryFenceEnabled: deliveryFenceEnabled)
     }
 
     func setCoreEffectSink(_ sink: @escaping ([ObstacleBridgeOverlayCoordinatorEffect]) -> Void) {
@@ -347,13 +352,15 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
             layers[index]["lifecycle_reason"] = outerLifecycle.reason
             layers[index]["lifecycle_changed_at"] = outerLifecycle.changedAt
         }
-        layers.append([
-            "layer": "delivery_fence",
-            "state": deliveryFenceRuntime.isConnected ? "connected" : "connecting",
-            "connected": deliveryFenceRuntime.isConnected,
-            "app_ready": deliveryFenceRuntime.isConnected,
-            "pending_bytes": deliveryFenceRuntime.pendingByteCount,
-        ])
+        if deliveryFenceEnabled {
+            layers.append([
+                "layer": "delivery_fence",
+                "state": deliveryFenceRuntime.isConnected ? "connected" : "connecting",
+                "connected": deliveryFenceRuntime.isConnected,
+                "app_ready": deliveryFenceRuntime.isConnected,
+                "pending_bytes": deliveryFenceRuntime.pendingByteCount,
+            ])
+        }
         return layers
     }
 
@@ -420,7 +427,9 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         guard let secureLinkAdapter else {
             refreshOuterLifecycle(secureLinkStatus: nil)
             var frames = peerAddressRuntime?.handleTransportConnected() ?? []
-            frames.append(contentsOf: protectFenceRecords(deliveryFenceRuntime.lowerReady(nowNanoseconds: DispatchTime.now().uptimeNanoseconds)))
+            if deliveryFenceEnabled {
+                frames.append(contentsOf: protectFenceRecords(deliveryFenceRuntime.lowerReady(nowNanoseconds: DispatchTime.now().uptimeNanoseconds)))
+            }
             return OutboundSnapshot(emittedFrames: frames)
         }
         let snapshot = try secureLinkAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce)
@@ -429,8 +438,14 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     }
 
     public func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
-        guard let fencedPayload = deliveryFenceRuntime.enqueue(payload) else {
-            return OutboundSnapshot(emittedFrames: [], queuedPayloads: 1)
+        let fencedPayload: Data
+        if deliveryFenceEnabled {
+            guard let record = deliveryFenceRuntime.enqueue(payload) else {
+                return OutboundSnapshot(emittedFrames: [], queuedPayloads: 1)
+            }
+            fencedPayload = record
+        } else {
+            fencedPayload = payload
         }
         let outboundPayload = compressRuntime?.handleSendPayload(fencedPayload).wirePayload ?? fencedPayload
         if let secureLinkAdapter {
@@ -484,7 +499,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
             } else {
                 decompressed = delivered
             }
-            if let fence = deliveryFenceRuntime.handleInbound(decompressed) {
+            if deliveryFenceEnabled, let fence = deliveryFenceRuntime.handleInbound(decompressed) {
                 emittedFrames.append(contentsOf: protectFenceRecords(fence.emittedRecords))
                 deliveredPayloads.append(contentsOf: fence.deliveredPayloads)
             } else {
@@ -506,12 +521,12 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         // otherwise a strict peer waiting for CLIENT_HELLO would block.
         if secureLinkAdapter?.protocolState?.authenticated == true {
             let secureSessionID = secureLinkAdapter?.statusSnapshot().sessionID ?? 0
-            if deliveryFenceSecureLinkSessionID != secureSessionID {
+            if deliveryFenceEnabled, deliveryFenceSecureLinkSessionID != secureSessionID {
                 deliveryFenceSecureLinkSessionID = secureSessionID
                 deliveryFenceRuntime.lowerDisconnected()
             }
             emittedFrames.append(contentsOf: peerAddressRuntime?.handleTransportConnected() ?? [])
-            if !deliveryFenceRuntime.isConnected {
+            if deliveryFenceEnabled && !deliveryFenceRuntime.isConnected {
                 emittedFrames.append(contentsOf: protectFenceRecords(
                     deliveryFenceRuntime.lowerReady(nowNanoseconds: DispatchTime.now().uptimeNanoseconds)
                 ))
@@ -574,7 +589,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         }
         let coreReady = coreCoordinator.snapshot.appReady
         let compressionReady = compressionFailureEpoch != transportLifecycle.epoch
-        let connected = transportReady && secureReady && coreReady && compressionReady && deliveryFenceRuntime.isConnected
+        let connected = transportReady && secureReady && coreReady && compressionReady && (!deliveryFenceEnabled || deliveryFenceRuntime.isConnected)
         let nextState: ObstacleBridgeConnectionLifecycleState = connected ? .connected : .disconnected
         guard outerLifecycle.state != nextState || outerLifecycle.epoch != transportLifecycle.epoch else {
             return

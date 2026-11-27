@@ -22,6 +22,7 @@ REQ-OVL-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_server_linux_native_client_myudp_basic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_native_python_myudp_window_pressure
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_overlay_stack_compress_above_secure_link_matches_python
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_address_sanitizer_reports_no_leaks
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_address_sanitizer_webadmin_and_logging_report_no_leaks
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_address_sanitizer_tun_helper_reports_no_leaks
