@@ -5608,7 +5608,7 @@ def run_case_ws_tcp_stream_survives_reconnect(
     *,
     runtime_mode: str = 'python-python',
 ) -> None:
-    """Keep one TCP service stream alive while the client replaces its WS.
+    """Keep one cleartext TCP service stream alive while the client replaces WS.
 
     The request is deliberately made through the supported Admin reconnect
     endpoint, rather than by restarting either bridge process: restarting a
@@ -5622,16 +5622,21 @@ def run_case_ws_tcp_stream_survives_reconnect(
     case = materialize_case_ports(
         replace(
             base_case,
-            name='overlay_ws_tcp_stream_survives_reconnect',
+            name='overlay_ws_tcp_stream_survives_reconnect_without_secure_link',
             bridge_server_args=_append_args(
                 base_case.bridge_server_args,
                 # The listener must retain the accepted logical peer while
-                # its lower WebSocket is replaced.
-                ['--ws-reconnect-grace', '5'],
+                # its lower WebSocket is replaced.  Keep SecureLink
+                # explicitly disabled: this is the lifecycle contract for a
+                # cleartext overlay, not an implicit default-setting test.
+                ['--ws-reconnect-grace', '5', '--secure-link-mode', 'off'],
             ),
             bridge_client_args=_append_args(
                 base_case.bridge_client_args,
-                ['--overlay-reconnect-retry-delay-ms', '50', '--ws-reconnect-grace', '5'],
+                [
+                    '--overlay-reconnect-retry-delay-ms', '50',
+                    '--ws-reconnect-grace', '5', '--secure-link-mode', 'off',
+                ],
             ),
         ),
         case_index,
@@ -9507,8 +9512,8 @@ def test_overlay_e2e_reconnect(case_name: str, tmp_path: Path) -> None:
         pytest.param('python-server-linux-native-client', id='linux-swift-client'),
     ],
 )
-def test_overlay_e2e_ws_tcp_stream_survives_reconnect(runtime_mode: str, tmp_path: Path) -> None:
-    """A restored WebSocket must not interrupt an established TCP service stream."""
+def test_overlay_e2e_ws_tcp_stream_survives_reconnect_without_secure_link(runtime_mode: str, tmp_path: Path) -> None:
+    """A cleartext restored WebSocket must retain an established TCP service stream."""
     if runtime_mode in {'swift-server-python-client', 'python-server-swift-client'}:
         _require_macos_swift_host_runner()
     if runtime_mode == 'python-server-linux-native-client':
