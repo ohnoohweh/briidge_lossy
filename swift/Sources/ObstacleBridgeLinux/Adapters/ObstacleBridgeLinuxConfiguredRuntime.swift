@@ -646,6 +646,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             do {
                 let (lower, lowerSession) = try openLowerSession(host)
                 let session: ObstacleBridgeLinuxConfiguredSession
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeCryptoTests (the configured session owns adapter protocol mutation under protocolLock)
                 let adapter: ObstacleBridgeOverlayLayerTransportAdapter
                 if let psk = configuration.secureLinkPSK {
                     debug("secure_link.handshake.started", ["transport": configuration.transport.rawValue])

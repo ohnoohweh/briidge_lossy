@@ -5,7 +5,7 @@ import Foundation
 /// Records enter this runtime before compression and SecureLink.  Pending
 /// entries are therefore plaintext ChannelMux records and can be protected by
 /// a replacement SecureLink session after a lower transport epoch changes.
-public final class ObstacleBridgeDeliveryFenceRuntime: @unchecked Sendable {
+public final class ObstacleBridgeDeliveryFenceRuntime {
     public struct InboundResult: Sendable {
         public let emittedRecords: [Data]
         public let deliveredPayloads: [Data]
