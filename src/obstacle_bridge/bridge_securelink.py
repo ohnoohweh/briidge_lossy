@@ -2849,6 +2849,15 @@ class SecureLinkPskSession(ISession):
             int(self._authenticated_sessions_total or 0),
             len(self._peer_states),
         )
+        # Tell the outer delivery fence before withdrawing authenticated
+        # state.  That fence preserves live ChannelMux streams across the
+        # lower replacement and must therefore suppress the transient
+        # security_disconnected edge emitted by _clear_all_states().
+        if callable(self._outer_on_transport_epoch_change):
+            try:
+                self._outer_on_transport_epoch_change(epoch)
+            except Exception:
+                pass
         self._preserve_connected_during_epoch_restart = bool(preserve_connected_epoch_restart)
         if not preserve_client_handshake:
             self._clear_all_states()
@@ -2859,11 +2868,6 @@ class SecureLinkPskSession(ISession):
             and not preserve_client_handshake
         ):
             self._maybe_begin_client_handshake()
-        if callable(self._outer_on_transport_epoch_change):
-            try:
-                self._outer_on_transport_epoch_change(epoch)
-            except Exception:
-                pass
 
     def _on_inner_peer_disconnect(self, peer_id: int) -> None:
         state = self._peer_states.get(self._peer_key(peer_id))

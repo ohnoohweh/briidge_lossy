@@ -69,3 +69,26 @@ def test_delivery_fence_acks_data_and_suppresses_its_replay_after_peer_confirmat
     kind, _sequence, body = DeliveryFenceCodec.decode(inner.sent[-1][0]) or (-1, -1, b"")
     assert kind == DeliveryFenceCodec.KIND_PONG
     assert DeliveryFenceCodec.decode_pong(body)[1] == 1
+
+
+def test_delivery_fence_routes_colliding_listener_mux_channels_without_exposing_its_envelope():
+    inner = _Inner()
+    fence = DeliveryFenceSession(inner)
+    received = []
+    fence.set_on_app_payload(lambda payload, peer_id=None: received.append((payload, peer_id)))
+
+    mux_one = fence._MUX_HDR.pack(1, 1, 0, 1, 1) + b"a"
+    mux_other = fence._MUX_HDR.pack(1, 1, 0, 1, 1) + b"b"
+    fence._on_inner_app(DeliveryFenceCodec.encode_data(1, mux_one), peer_id=11)
+    fence._on_inner_app(DeliveryFenceCodec.encode_data(1, mux_other), peer_id=12)
+
+    first_channel = fence._MUX_HDR.unpack(received[0][0][:fence._MUX_HDR.size])[0]
+    second_channel = fence._MUX_HDR.unpack(received[1][0][:fence._MUX_HDR.size])[0]
+    assert (first_channel, second_channel) == (1, 3)
+    assert [peer_id for _payload, peer_id in received] == [11, 12]
+
+    fence._on_inner_state(True)
+    assert fence.send_app(received[1][0]) == len(received[1][0])
+    _kind, _sequence, body = DeliveryFenceCodec.decode(inner.sent[-1][0]) or (-1, -1, b"")
+    assert fence._MUX_HDR.unpack(body[:fence._MUX_HDR.size])[0] == 1
+    assert inner.sent[-1][1] == 12

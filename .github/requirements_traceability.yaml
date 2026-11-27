@@ -928,6 +928,8 @@ REQ-LIFE-003:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_runtime_linux_swift_service_round_trip
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_bidirectional_sessions_deliver_independent_payloads
+    - tests/unit/test_delivery_fence_codec.py::test_delivery_fence_replays_only_unconfirmed_plaintext_after_reconnect
+    - tests/unit/test_delivery_fence_codec.py::test_delivery_fence_routes_colliding_listener_mux_channels_without_exposing_its_envelope
     # The helper probe compiles RuntimeConfig with its Core configuration dependencies.
     - ios/tests/test_ios_swift_udp_tun_helper.py::test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path
 

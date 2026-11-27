@@ -2527,6 +2527,7 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeSecureLinkPskTransportAdapter.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgePeerAddressProtocolRuntime.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeOverlayLayerTransportAdapter.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeDeliveryFenceRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeMacOSTunHelperService.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeTunHelperContract.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunHelperXPCTransport.swift'),
@@ -5632,7 +5633,7 @@ def run_case_ws_tcp_stream_survives_reconnect(
             bridge_server_args=_append_args(
                 base_case.bridge_server_args,
                 ['--ws-reconnect-grace', '5'] + (
-                    ['--secure-link-mode', 'psk', '--secure-link-psk', 'stream-resume-e2e-psk']
+                    ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'stream-resume-e2e-psk']
                     if secure_link else ['--secure-link-mode', 'off']
                 ),
             ),
@@ -5642,7 +5643,7 @@ def run_case_ws_tcp_stream_survives_reconnect(
                     '--overlay-reconnect-retry-delay-ms', '50',
                     '--ws-reconnect-grace', '5',
                 ] + (
-                    ['--secure-link-mode', 'psk', '--secure-link-psk', 'stream-resume-e2e-psk']
+                    ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'stream-resume-e2e-psk']
                     if secure_link else ['--secure-link-mode', 'off']
                 ),
             ),

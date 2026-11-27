@@ -1895,6 +1895,17 @@ class WebSocketSession(ISession):
                 self._rx_task = suspended["rx_task"]
                 self._tx_task = suspended.get("tx_task")
                 self._log.info("[WS-SESSION] (%s) resumed peer_id=%s across websocket reconnect", self._probe_id, peer_id)
+                # The logical peer and its ChannelMux streams survive the
+                # grace window, but its byte transport did not.  Security and
+                # the outer delivery fence must see a new lower epoch so they
+                # discard stale protection state and replay only records the
+                # peer has not confirmed.
+                self.connection_epoch += 1
+                if callable(self._on_transport_epoch_change):
+                    try:
+                        self._on_transport_epoch_change(self.connection_epoch)
+                    except Exception:
+                        self._log.debug("[WS-SESSION] (%s) resume epoch callback failed", self._probe_id, exc_info=True)
                 self._update_server_overlay_connected()
                 return
             payload_mode = self._resolve_inbound_ws_payload_mode(getattr(ws, "payload_mode", None))
