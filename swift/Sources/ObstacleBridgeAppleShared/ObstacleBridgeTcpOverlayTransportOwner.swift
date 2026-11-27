@@ -46,6 +46,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
     private let tunPacketSink: TunPacketSink?
     private let muxInstanceID: UInt64
     private let muxConnectionSeq: UInt32
+    /// Stable across lower TCP sockets for this owner lifetime.  The Python
+    /// listener uses it to reclaim a grace-window logical peer.
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks
+    private let tcpResumeToken = UUID().uuidString.lowercased()
 
     private var udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
     private let serviceCatalog = ObstacleBridgeAppleServiceCatalog()
@@ -54,6 +58,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
     private var overlayConnection: NWConnection?
     private var overlayPeerID: Int?
     private var overlayConnected = false
+    private var logicalEpochRetainedForResume = false
     private var coreReceiveEpoch: UInt64?
     private var coreRetryToken: UInt64?
     private var receiveBuffer = Data()
@@ -749,46 +754,51 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
         } else {
             overlayConnected = false
         }
-        resetOverlayTransportEpoch()
+        detachLowerTransportForResume()
     }
 
     private func handleOverlayState(_ state: NWConnection.State) {
         switch state {
         case .ready:
             overlayConnected = true
+            let resumingLogicalEpoch = logicalEpochRetainedForResume
+            logicalEpochRetainedForResume = false
             reconnectScheduled = false
             nextReconnectAttemptDeadlineNS = nil
             eventSink?("tcp_overlay_connected", [
                 "peer_host": resolvedPeerHost,
                 "peer_port": resolvedPeerPort,
             ])
+            sendRawOverlayWire(tcpResumeWire())
             let snapshot = overlayRuntime.connect(host: resolvedPeerHost, port: resolvedPeerPort, socketPresent: true)
             for payload in snapshot.flushedBuffers {
                 sendRawOverlayWire(payload)
             }
-            maybePrimeSecureLinkHandshake()
-            maybeSendStartupMuxFrames()
-            maybeOpenConfiguredTunIfReady()
+            if !resumingLogicalEpoch {
+                maybePrimeSecureLinkHandshake()
+                maybeSendStartupMuxFrames()
+                maybeOpenConfiguredTunIfReady()
+            }
             if overlayLayerTransportAdapter == nil { receiveFromOverlay() }
         case .failed(let error):
             overlayConnected = false
             overlayConnection = nil
             tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: overlayPeerID)
-            resetOverlayTransportEpoch()
+            detachLowerTransportForResume()
             eventSink?("tcp_overlay_connection_failed", ["error": error.localizedDescription])
             scheduleReconnect()
         case .waiting(let error):
             overlayConnected = false
             overlayConnection = nil
             tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: overlayPeerID)
-            resetOverlayTransportEpoch()
+            detachLowerTransportForResume()
             eventSink?("tcp_overlay_connection_waiting", ["error": error.localizedDescription])
             scheduleReconnect()
         case .cancelled:
             overlayConnected = false
             overlayConnection = nil
             tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: overlayPeerID)
-            resetOverlayTransportEpoch()
+            detachLowerTransportForResume()
             scheduleReconnect()
         default:
             break
@@ -993,6 +1003,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
     }
 
     private func resetOverlayTransportEpoch() {
+        logicalEpochRetainedForResume = false
         withdrawRemoteServiceCatalog()
         overlayLayerTransportAdapter?.handleTransportDisconnected()
         tunRuntime?.resetTransportEpoch()
@@ -1006,6 +1017,26 @@ final class ObstacleBridgeTcpOverlayTransportOwner: @unchecked Sendable {
         pendingOutboundWires.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
         overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
+    }
+
+    /// Keeps the authenticated overlay/session and ChannelMux service owners
+    /// alive while the concrete TCP socket reconnects. RTT PONG on the new
+    /// stream is still the liveness evidence before normal traffic proceeds.
+    // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks
+    private func detachLowerTransportForResume() {
+        logicalEpochRetainedForResume = true
+        lowerLayerFallbackWorkItem?.cancel()
+        lowerLayerFallbackWorkItem = nil
+        lowerLayerFallbackDeadlineNS = nil
+    }
+
+    private func tcpResumeWire() -> Data {
+        let token = Data(tcpResumeToken.utf8)
+        var length = UInt32(token.count + 1).bigEndian
+        var wire = Data(bytes: &length, count: MemoryLayout<UInt32>.size)
+        wire.append(0x03)
+        wire.append(token)
+        return wire
     }
 
     private func withdrawRemoteServiceCatalog() {

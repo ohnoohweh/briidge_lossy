@@ -723,7 +723,7 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         #expect(connected.wait(timeout: .now() + 3) == .success)
         #expect(runtime.localServicePorts()[1] ?? 0 > 0)
         runtime.stop()
-        #expect(runtime.localServicePorts().isEmpty)
+        #expect(waitUntil { runtime.localServicePorts().isEmpty })
     }
 
     @Test func liveRuntimeInstallsAndWithdrawsPeerRemoteCatalog() throws {

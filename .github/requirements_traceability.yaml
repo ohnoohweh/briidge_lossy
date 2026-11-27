@@ -913,8 +913,15 @@ REQ-LIFE-002:
     - tests/unit/test_linux_native_main.py::test_foreground_restart_request_is_actor_owned_before_shutdown_signal
 
 REQ-LIFE-003:
+  # Stream-resume E2Es consume the TCP/QUIC control preface before SecureLink
+  # framing, then prove the retained logical epoch carries live TCP bytes;
+  # portable parity excludes the per-process token from plan comparisons and
+  # native stop withdraws the retained local-service owners.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_tcp_stream_survives_reconnect
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_tcp_stream_survives_reconnect
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_quic_tcp_stream_survives_reconnect
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_runtime_linux_swift_service_round_trip
   unit_tests:

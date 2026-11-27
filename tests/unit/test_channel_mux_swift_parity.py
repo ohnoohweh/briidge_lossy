@@ -708,7 +708,14 @@ def _python_ws_runtime_connect_plan_summary(*, mode: str, proxy_active: bool = F
             "uri": seen.get("uri"),
             "max_size": seen.get("max_size"),
             "compression_disabled": seen.get("compression") is None,
-            "upgrade_headers": seen.get("additional_headers") or {},
+            # Resume tokens are process-instance secrets.  The portable Swift
+            # plan intentionally omits them, while the Python connection path
+            # injects one immediately before opening the lower transport.
+            "upgrade_headers": {
+                key: value
+                for key, value in (seen.get("additional_headers") or {}).items()
+                if key.lower() != "x-obstaclebridge-ws-resume-token"
+            },
             "preflight_required": preflight.await_count == 1,
             "uses_proxy_socket": "sock" in (seen.get("kwargs") or {}),
         }
@@ -823,7 +830,13 @@ def _python_tcp_runtime_connect_summary() -> dict[str, object]:
             "keepalive_enabled": (__import__("socket").SOL_SOCKET, __import__("socket").SO_KEEPALIVE, 1) in sock.calls,
             "overlay_connected": session._overlay_connected,
             "bp_task_started": session._bp_task is not None,
-            "flushed_hex": [frame.hex() for frame in transport.written],
+            # The stable TCP resume token is intentionally per runtime, so
+            # compare only portable application wires to the Swift plan.
+            "flushed_hex": [
+                frame.hex()
+                for frame in transport.written
+                if len(frame) < 5 or frame[4] != 0x03
+            ],
             "early_buf_bytes": len(session._early_buf),
         }
 
@@ -903,6 +916,9 @@ def _python_tcp_runtime_server_accept_summary() -> dict[str, object]:
         )
         writer = _FakeTCPStreamWriter(transport)
         reader = asyncio.StreamReader()
+        # Listener bootstrap consumes one framed record to distinguish the
+        # optional resume preface from a legacy first application record.
+        reader.feed_data(session._LEN.pack(1) + b"\x00")
         await session._on_accept(reader, writer)
         snapshot = {
             "peer_id": 1,
@@ -912,7 +928,7 @@ def _python_tcp_runtime_server_accept_summary() -> dict[str, object]:
             "overlay_connected": session._overlay_connected,
             "server_peer_ids": sorted(session._server_peers.keys()),
         }
-        await session._close_server_peer(1)
+        await session._close_server_peer(1, immediate=True)
         session._run_flag = False
         return snapshot
 
@@ -928,8 +944,9 @@ def _python_tcp_runtime_server_close_summary() -> dict[str, object]:
         transport = _FakeTCPTransport(sockname=("127.0.0.1", 8081), peername=("127.0.0.1", 54321))
         writer = _FakeTCPStreamWriter(transport)
         reader = asyncio.StreamReader()
+        reader.feed_data(session._LEN.pack(1) + b"\x00")
         await session._on_accept(reader, writer)
-        await session._close_server_peer(1)
+        await session._close_server_peer(1, immediate=True)
         session._run_flag = False
         return {
             "overlay_connected": session._overlay_connected,

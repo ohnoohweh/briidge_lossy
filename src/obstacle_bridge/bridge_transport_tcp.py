@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import struct
 
 from ._bridge_import import export_bridge_globals
@@ -7,6 +8,7 @@ from .bridge_transport_common import (
     EgressThroughputTracker,
     StreamRTT,
     StreamRTTRuntime,
+    StreamResumeRegistry,
     _listener_family_for_host,
     _resolve_cli_peer_candidates,
     _resolve_cli_peer,
@@ -39,6 +41,10 @@ class TcpStreamSession(ISession):
     _K_APP  = 0x00
     _K_PING = 0x01
     _K_PONG = 0x02
+    # A lower-stream-only identity record. It is never delivered to the
+    # SecureLink/ChannelMux payload and lets a listener reattach a short-lived
+    # replacement TCP socket to its existing logical peer.
+    _K_RESUME = 0x03
 
     @staticmethod
     def register_cli(p: argparse.ArgumentParser) -> None:
@@ -70,6 +76,9 @@ class TcpStreamSession(ISession):
                 default='prefer-ipv6',
                 help='TCP peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.'
             )
+        if not _has('--tcp-reconnect-grace'):
+            p.add_argument('--tcp-reconnect-grace', type=float, default=3.0,
+                help='Seconds a TCP listener retains a logical peer for a resumable reconnect (default 3).')
 
         if not _has('--tcp-bp-wbuf-threshold'):
             p.add_argument('--tcp-bp-wbuf-threshold', type=int, default=128 * 1024,
@@ -146,6 +155,7 @@ class TcpStreamSession(ISession):
         self._peer_host, self._peer_port = "", 0
         self._server_connected_evt: asyncio.Event = asyncio.Event()
         self._server_peers: Dict[int, dict] = {}
+        self._server_resume_registry = StreamResumeRegistry()
         self._server_next_peer_id: int = 1
         self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
         self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
@@ -185,6 +195,8 @@ class TcpStreamSession(ISession):
             0.0,
             float(int(getattr(self._args, "overlay_reconnect_retry_delay_ms", 30000) or 0)) / 1000.0,
         )
+        self._tcp_reconnect_grace_s: float = max(0.0, float(getattr(self._args, "tcp_reconnect_grace", 3.0) or 0.0))
+        self._tcp_resume_token = os.urandom(16).hex() if self._peer_tuple else ""
 
         # cosmetics
         self._probe_id = f"{id(self)&0xFFFF:04x}"
@@ -252,7 +264,7 @@ class TcpStreamSession(ISession):
         self._reconnect_task = None
 
         for peer_id in list(self._server_peers.keys()):
-            await self._close_server_peer(peer_id)
+            await self._close_server_peer(peer_id, immediate=True)
         self._server_connected_evt.clear()
 
         if self._bp_task:
@@ -576,9 +588,16 @@ class TcpStreamSession(ISession):
             target_peer_id, routed_payload = target
             ctx = self._server_peers.get(target_peer_id)
             writer = ctx.get("writer") if isinstance(ctx, dict) else None
-            if writer is None:
-                return 0
             wire = self._LEN.pack(len(routed_payload) + 1) + bytes([self._K_APP]) + routed_payload
+            if writer is None:
+                # Preserve replies emitted while the lower socket is inside
+                # its resume grace window. The bounded list is deliberately
+                # small: normal ChannelMux flow control remains authoritative.
+                pending = ctx.setdefault("pending_wires", []) if isinstance(ctx, dict) else []
+                if sum(len(item) for item in pending) + len(wire) <= self._early_max:
+                    pending.append(wire)
+                    return len(payload)
+                return 0
             try:
                 writer.write(wire)
                 if ctx is not None:
@@ -617,10 +636,54 @@ class TcpStreamSession(ISession):
             return 0
 
     # ---- accept/connect wiring ----
+    async def _read_initial_resume_record(self, reader: asyncio.StreamReader) -> Tuple[str, Optional[bytes]]:
+        """Read the first record without exposing the resume control upward.
+
+        Legacy peers may start with PING or APP. Preserve that first body for
+        their normal receive pump so adding resumable TCP remains compatible.
+        """
+        hdr = await reader.readexactly(self._LEN.size)
+        (n,) = self._LEN.unpack(hdr)
+        if n <= 0:
+            return "", None
+        body = await reader.readexactly(n)
+        if body and body[0] == self._K_RESUME:
+            try:
+                return body[1:].decode("ascii"), None
+            except UnicodeDecodeError:
+                return "", None
+        return "", body
+
+    def _send_resume_record(self, writer: asyncio.StreamWriter) -> None:
+        if not self._tcp_resume_token:
+            return
+        payload = self._tcp_resume_token.encode("ascii")
+        writer.write(self._LEN.pack(len(payload) + 1) + bytes([self._K_RESUME]) + payload)
+
     async def _on_accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         p = writer.get_extra_info("peername")
         sockname = writer.get_extra_info("sockname")
         if not self._peer_tuple:
+            resume_token, initial_body = await self._read_initial_resume_record(reader)
+            suspended = self._server_resume_registry.claim(resume_token) if resume_token else None
+            if suspended is not None:
+                peer_id = int(suspended["peer_id"])
+                suspended["reader"] = reader
+                suspended["writer"] = writer
+                suspended["addr"] = p if isinstance(p, tuple) and len(p) >= 2 else None
+                suspended["rtt"] = StreamRTT(log=self._log.getChild(f"rtt.{peer_id}"))
+                suspended["rtt_rt"] = StreamRTTRuntime(suspended["rtt"])
+                self._enable_os_keepalive(writer)
+                suspended["rtt_rt"].attach(
+                    send_ping_fn=lambda payload, _peer_id=peer_id: self._send_ping_frame_for_peer(_peer_id, payload),
+                    on_state_change=lambda connected, _peer_id=peer_id: self._on_state_change_for_peer(_peer_id, connected),
+                )
+                suspended["rx_task"] = self._loop.create_task(self._rx_pump_for_peer(peer_id, writer, initial_body))  # type: ignore[union-attr]
+                for wire in suspended.pop("pending_wires", []):
+                    writer.write(wire)
+                self._log.info("[TCP-SESSION] (%s) resumed peer_id=%s across TCP reconnect", self._probe_id, peer_id)
+                self._update_server_overlay_connected()
+                return
             peer_id = self._alloc_server_peer_id()
             rtt = StreamRTT(log=self._log.getChild(f"rtt.{peer_id}"))
             rtt_rt = StreamRTTRuntime(rtt)
@@ -637,6 +700,8 @@ class TcpStreamSession(ISession):
                 "rx_crc32": 0,
                 "tx_crc32": 0,
                 "rx_task": None,
+                "resume_token": resume_token,
+                "pending_wires": [],
             }
             self._server_peers[peer_id] = ctx
             self._log.info(f"[TCP-SESSION] ({self._probe_id}) accept: peer_id={peer_id} local={sockname} peer={p}")
@@ -652,7 +717,7 @@ class TcpStreamSession(ISession):
                 send_ping_fn=lambda payload, _peer_id=peer_id: self._send_ping_frame_for_peer(_peer_id, payload),
                 on_state_change=lambda connected, _peer_id=peer_id: self._on_state_change_for_peer(_peer_id, connected),
             )
-            ctx["rx_task"] = self._loop.create_task(self._rx_pump_for_peer(peer_id))  # type: ignore[union-attr]
+            ctx["rx_task"] = self._loop.create_task(self._rx_pump_for_peer(peer_id, writer, initial_body))  # type: ignore[union-attr]
             self._update_server_overlay_connected()
             return
 
@@ -672,6 +737,7 @@ class TcpStreamSession(ISession):
         except Exception: pass
 
         self._enable_os_keepalive(writer)
+        self._send_resume_record(writer)
         self._reset_counters()
         self._ensure_bp_task()
 
@@ -784,6 +850,7 @@ class TcpStreamSession(ISession):
             self._peer_host, self._peer_port = host, int(port)
 
             self._enable_os_keepalive(writer)
+            self._send_resume_record(writer)
             self._reset_counters()
             self._ensure_bp_task()
 
@@ -1142,7 +1209,7 @@ class TcpStreamSession(ISession):
 
             self._log.debug(f"[TCP/RX] ({self._probe_id}) pump stop")
 
-    async def _rx_pump_for_peer(self, peer_id: int) -> None:
+    async def _rx_pump_for_peer(self, peer_id: int, expected_writer: asyncio.StreamWriter, initial_body: Optional[bytes] = None) -> None:
         ctx = self._server_peers.get(peer_id)
         if not ctx:
             return
@@ -1151,16 +1218,22 @@ class TcpStreamSession(ISession):
         rtt = ctx.get("rtt")
         self._log.debug(f"[TCP/RX] ({self._probe_id}) server pump start peer_id={peer_id}")
         try:
+            pending_body = initial_body
             while True:
-                hdr = await reader.readexactly(self._LEN.size)
-                if not hdr:
-                    break
-                self._bump_rx_for_ctx(ctx, hdr)
-                (n,) = self._LEN.unpack(hdr)
-                if n <= 0:
-                    continue
-                body = await reader.readexactly(n)
-                self._bump_rx_for_ctx(ctx, body)
+                if pending_body is not None:
+                    body = pending_body
+                    pending_body = None
+                    n = len(body)
+                else:
+                    hdr = await reader.readexactly(self._LEN.size)
+                    if not hdr:
+                        break
+                    self._bump_rx_for_ctx(ctx, hdr)
+                    (n,) = self._LEN.unpack(hdr)
+                    if n <= 0:
+                        continue
+                    body = await reader.readexactly(n)
+                    self._bump_rx_for_ctx(ctx, body)
                 kind = body[0]
                 payload = body[1:]
 
@@ -1204,7 +1277,7 @@ class TcpStreamSession(ISession):
                     if callable(aw): await aw()
             except Exception:
                 pass
-            await self._close_server_peer(peer_id)
+            await self._close_server_peer(peer_id, expected_writer=expected_writer)
             self._log.debug(f"[TCP/RX] ({self._probe_id}) server pump stop peer_id={peer_id}")
 
     # ---- overlay state (RTT-driven) ----
@@ -1252,10 +1325,26 @@ class TcpStreamSession(ISession):
             self._server_connected_evt.clear()
         self._set_overlay_connected(connected)
 
-    async def _close_server_peer(self, peer_id: int) -> None:
+    async def _close_server_peer(self, peer_id: int, *, expected_writer: Optional[asyncio.StreamWriter] = None, immediate: bool = False) -> None:
         ctx = self._server_peers.pop(peer_id, None)
         if not ctx:
             return
+        if expected_writer is not None and ctx.get("writer") is not expected_writer:
+            self._server_peers[peer_id] = ctx
+            return
+        resume_token = str(ctx.get("resume_token", "") or "")
+        if not immediate and resume_token and self._tcp_reconnect_grace_s > 0:
+            ctx["writer"] = None
+            ctx["reader"] = None
+            self._server_peers[peer_id] = ctx
+            self._server_resume_registry.suspend(
+                resume_token,
+                ctx,
+                grace_seconds=self._tcp_reconnect_grace_s,
+                on_expire=lambda _ctx: self._close_server_peer(peer_id, immediate=True),
+            )
+            return
+        self._server_resume_registry.discard(resume_token, ctx)
         self._server_unregister_peer_channels(peer_id)
         rtt_rt = ctx.get("rtt_rt")
         if rtt_rt is not None:

@@ -177,7 +177,6 @@ jobs:
         with:
           path: build/linux/.swift-build
           key: linux-swiftpm-release-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftpm-cache-key.outputs.value }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
-          fail-on-cache-miss: true
 
       - name: Set up Python
         uses: actions/setup-python@v6

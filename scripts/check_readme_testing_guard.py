@@ -12,6 +12,17 @@ REQUIREMENTS_PATH = "docs/REQUIREMENTS.md"
 ARCHITECTURE_PATH = "docs/ARCHITECTURE.md"
 REQ_TRACEABILITY_PATH = ".github/requirements_traceability.yaml"
 ARCH_TRACEABILITY_PATH = ".github/architecture_traceability.yaml"
+PRODUCT_TARGETS_HEADING = "The project currently targets seven platform families:"
+PRODUCT_TARGETS_END = "## Reader guide"
+EXPECTED_PRODUCT_TARGETS = (
+    "- **Linux Python CLI/runtime**: A Linux command-line app for securely connecting services and networks through ObstacleBridge, designed for servers and automated tasks.",
+    "- **Linux native CLI**: A ready-to-run Linux command-line app for securely connecting services and networks through ObstacleBridge, with a local dashboard for setup and status.",
+    "- **Windows Python CLI/runtime**: A Windows command-line app for securely connecting services and networks through ObstacleBridge, designed for servers and automated tasks.",
+    "- **macOS Python CLI/runtime**: A macOS command-line app for securely connecting services and networks through ObstacleBridge, designed for servers and automated tasks.",
+    "- **macOS native app**: A native macOS app for securely connecting services and networks through ObstacleBridge, with a simple local interface for setup and status.",
+    "- **iOS Swift app/extension**: A native iPhone and iPad app for securely connecting services and networks through ObstacleBridge.",
+    "- **Synology DSM Python package/runtime**: A packaged app for Synology NAS devices that securely connects services and networks through ObstacleBridge.",
+)
 
 
 def _git_changed_files(*diff_args: str) -> list[str]:
@@ -27,6 +38,22 @@ def _git_changed_files(*diff_args: str) -> list[str]:
 
 def _normalize(files: list[str]) -> list[str]:
     return sorted(set(f.replace("\\", "/") for f in files))
+
+
+def validate_product_target_overview(readme: str) -> list[str]:
+    """Keep the product list a deliberately nontechnical, one-sentence overview."""
+    try:
+        section = readme.split(PRODUCT_TARGETS_HEADING, 1)[1].split(PRODUCT_TARGETS_END, 1)[0]
+    except IndexError:
+        return ["README.md must contain the product-target overview between its expected headings."]
+
+    actual = tuple(line for line in section.splitlines() if line)
+    if actual != EXPECTED_PRODUCT_TARGETS:
+        return [
+            "The README product-target overview must contain only the approved "
+            "one-sentence, nontechnical descriptions; put implementation details elsewhere."
+        ]
+    return []
 
 
 def main() -> int:
@@ -47,6 +74,13 @@ def main() -> int:
         help="Check staged changes in the index.",
     )
     args = parser.parse_args()
+
+    overview_errors = validate_product_target_overview(
+        (ROOT / README_MAIN_PATH).read_text(encoding="utf-8")
+    )
+    if overview_errors:
+        sys.stderr.write("\n".join(overview_errors) + "\n")
+        return 1
 
     try:
         if args.staged:

@@ -9,7 +9,60 @@ import socket
 import struct
 import sys
 import time
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+
+
+class StreamResumeRegistry:
+    """Own suspended logical stream peers during a bounded lower-link outage.
+
+    WebSocket, TCP, and future resumable stream transports use different wire
+    handshakes, but all need identical token ownership and expiry semantics.
+    The registry deliberately knows nothing about sockets or authentication:
+    callers supply the opaque peer context and retire it on expiry.
+    """
+
+    def __init__(self) -> None:
+        self._entries: Dict[str, tuple[Any, asyncio.Task]] = {}
+
+    def claim(self, token: str) -> Optional[Any]:
+        entry = self._entries.pop(str(token or ""), None)
+        if entry is None:
+            return None
+        context, expiry = entry
+        expiry.cancel()
+        return context
+
+    def discard(self, token: str, context: Optional[Any] = None) -> None:
+        entry = self._entries.get(str(token or ""))
+        if entry is None or (context is not None and entry[0] is not context):
+            return
+        self._entries.pop(str(token or ""), None)[1].cancel()
+
+    def suspend(
+        self,
+        token: str,
+        context: Any,
+        *,
+        grace_seconds: float,
+        on_expire: Callable[[Any], Awaitable[None]],
+    ) -> bool:
+        token = str(token or "")
+        if not token or grace_seconds <= 0:
+            return False
+        self.discard(token)
+
+        async def expire() -> None:
+            try:
+                await asyncio.sleep(grace_seconds)
+                entry = self._entries.get(token)
+                if entry is not None and entry[0] is context:
+                    self._entries.pop(token, None)
+                    await on_expire(context)
+            except asyncio.CancelledError:
+                return
+
+        self._entries[token] = (context, asyncio.create_task(expire()))
+        return True
 
 
 class EgressThroughputTracker:

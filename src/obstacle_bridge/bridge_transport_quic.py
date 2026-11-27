@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import importlib.util
 import logging
+import os
 import socket
 import ssl
 import struct
@@ -15,6 +17,7 @@ from .bridge_transport_common import (
     EgressThroughputTracker,
     StreamRTT,
     StreamRTTRuntime,
+    StreamResumeRegistry,
     _resolve_cli_peer_candidates,
     _resolve_cli_peer,
     _strip_brackets,
@@ -76,6 +79,7 @@ class QuicSession(ISession):
     _K_APP  = 0x00
     _K_PING = 0x01
     _K_PONG = 0x02
+    _K_RESUME = 0x03
 
     @staticmethod
     def register_cli(p: argparse.ArgumentParser) -> None:
@@ -115,6 +119,9 @@ class QuicSession(ISession):
         if not _has('--quic-max-size'):
             p.add_argument('--quic-max-size', type=int, default=65535,
                            help='Maximum app message size accepted/sent (default 65535).')
+        if not _has('--quic-reconnect-grace'):
+            p.add_argument('--quic-reconnect-grace', type=float, default=3.0,
+                           help='Seconds a QUIC listener retains a logical peer for a resumable reconnect (default 3).')
 
     @staticmethod
     def from_args(args: argparse.Namespace) -> "QuicSession":
@@ -181,6 +188,7 @@ class QuicSession(ISession):
         self._run_flag: bool = False
         self._server_connected_evt = asyncio.Event()
         self._server_peers: Dict[int, dict] = {}
+        self._server_resume_registry = StreamResumeRegistry()
         self._server_proto_to_peer_id: Dict[int, int] = {}
         self._server_next_peer_id: int = 1
         self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
@@ -219,6 +227,8 @@ class QuicSession(ISession):
         self._probe_id = f"{id(self)&0xFFFF:04x}"
         self._app_payload_passthrough: bool = False
         self._egress_tracker = EgressThroughputTracker()
+        self._quic_reconnect_grace_s = max(0.0, float(getattr(args, "quic_reconnect_grace", 3.0) or 0.0))
+        self._quic_resume_token = os.urandom(16).hex() if self._peer_tuple else ""
 
         # TLS/ALPN
         self._alpn = getattr(args, "quic_alpn", "hq-29") or "hq-29"
@@ -284,7 +294,7 @@ class QuicSession(ISession):
 
         if not self._peer_tuple:
             for peer_id in list(self._server_peers.keys()):
-                await self._close_server_peer(peer_id)
+                await self._close_server_peer(peer_id, immediate=True)
         else:
             # close connection (client role)
             try:
@@ -584,6 +594,8 @@ class QuicSession(ISession):
                 if not ctx:
                     return 0
                 wire = self._LEN.pack(len(payload) + 1) + bytes([self._K_APP]) + payload
+                if ctx.get("proto") is None:
+                    return self._buffer_server_resume_wire(ctx, wire, len(payload))
                 if not self._send_wire_ctx(ctx, wire):
                     return 0
                 self._egress_tracker.record(len(payload))
@@ -597,6 +609,8 @@ class QuicSession(ISession):
             if not ctx:
                 return 0
             wire = self._LEN.pack(len(routed_payload) + 1) + bytes([self._K_APP]) + routed_payload
+            if ctx.get("proto") is None:
+                return self._buffer_server_resume_wire(ctx, wire, len(payload))
             if not self._send_wire_ctx(ctx, wire):
                 return 0
             self._egress_tracker.record(len(routed_payload))
@@ -622,6 +636,13 @@ class QuicSession(ISession):
         except Exception as e:
             self._log.info(f"[QUIC/TX] ({self._probe_id}) write error: {e!r}")
             return 0
+
+    def _buffer_server_resume_wire(self, ctx: dict, wire: bytes, payload_len: int) -> int:
+        pending = ctx.setdefault("pending_wires", [])
+        if sum(len(item) for item in pending) + len(wire) > self._early_max:
+            return 0
+        pending.append(wire)
+        return payload_len
 
     # ---- server/client wiring ----
     async def _start_server(self) -> None:
@@ -731,17 +752,26 @@ class QuicSession(ISession):
 
     def request_reconnect(self) -> bool:
         if not self._peer_tuple or not self._run_flag:
+            self._log.warning(
+                "[QUIC-SESSION] (%s) reconnect rejected peer_configured=%s running=%s",
+                self._probe_id, bool(self._peer_tuple), self._run_flag,
+            )
             return False
-        proto = self._proto
-        self._proto = None
-        self._quic = None
-        self._stream_id = None
-        if proto is not None:
-            with contextlib.suppress(Exception):
-                proto.close()
-        self._set_overlay_connected(False)
-        self._start_reconnect_loop()
-        return True
+        self._log.info("[QUIC-SESSION] (%s) reconnect requested", self._probe_id)
+        try:
+            proto = self._proto
+            self._proto = None
+            self._quic = None
+            self._stream_id = None
+            if proto is not None:
+                with contextlib.suppress(Exception):
+                    proto.close()
+            self._set_overlay_connected(False)
+            self._start_reconnect_loop()
+            return True
+        except Exception as exc:
+            self._log.exception("[QUIC-SESSION] (%s) reconnect request failed: %r", self._probe_id, exc)
+            return False
 
     def request_connection_rotation(self, reason: str = "") -> ConnectionRotationResult:
         if not self._peer_tuple or not self._run_flag:
@@ -861,6 +891,8 @@ class QuicSession(ISession):
                 "connected": True,
                 "peer_host": None,
                 "peer_port": None,
+                "resume_token": "",
+                "pending_wires": [],
             }
             self._server_peers[peer_id] = ctx
             self._server_proto_to_peer_id[id(proto)] = peer_id
@@ -925,6 +957,7 @@ class QuicSession(ISession):
                 self._log.debug(f"[QUIC/STREAM] ({self._probe_id}) client picked stream_id={self._stream_id}")
             except Exception as e:
                 self._log.debug(f"[QUIC/STREAM] ({self._probe_id}) get_next_available_stream_id() failed: {e!r}")
+            self._send_resume_record()
 
         # Attach RTT sender now that we can (it will only send if stream_id exists)
         self._rtt_rt.attach(self._send_ping_frame, on_state_change=self._on_rtt_state_change)
@@ -943,6 +976,12 @@ class QuicSession(ISession):
             return
 
     # ---- QUIC event demux ----
+    def _send_resume_record(self) -> None:
+        if not self._quic_resume_token or self._stream_id is None:
+            return
+        payload = self._quic_resume_token.encode("ascii")
+        self._send_wire(self._LEN.pack(len(payload) + 1) + bytes([self._K_RESUME]) + payload)
+
     def _on_quic_event(self, proto: Any, event) -> None:
         """
         Handle QUIC events. On first StreamDataReceived, adopt that stream id if we
@@ -984,7 +1023,7 @@ class QuicSession(ISession):
             if isinstance(event, self._quic_event_terminated):
                 self._log.info(f"[QUIC/RX] ({self._probe_id}) peer_id={peer_id} connection terminated: {event.error_code} {event.reason_phrase!r}")
                 if self._loop is not None:
-                    self._loop.create_task(self._close_server_peer(peer_id))
+                    self._loop.create_task(self._close_server_peer(peer_id, expected_proto=proto))
                 return
             return
 
@@ -1060,6 +1099,17 @@ class QuicSession(ISession):
             kind = body[0]
             payload = body[1:]
 
+            if kind == self._K_RESUME and peer_id is not None and ctx is not None:
+                try:
+                    resume_token = payload.decode("ascii")
+                except UnicodeDecodeError:
+                    resume_token = ""
+                resumed = self._resume_server_peer(peer_id, ctx, resume_token)
+                if resumed is not None:
+                    peer_id, ctx = resumed
+                    rx_buf = ctx.setdefault("rx_buf", bytearray())
+                continue
+
             if kind == self._K_APP:
                 if self._on_app_from_peer_bytes:
                     try: self._on_app_from_peer_bytes(len(payload))
@@ -1113,6 +1163,41 @@ class QuicSession(ISession):
                 self._log.debug(f"[QUIC/RX] ({self._probe_id}) unknown KIND=0x{kind:02x} n={n}")
 
     # ---- sending helpers ----
+    def _resume_server_peer(self, temporary_peer_id: int, temporary_ctx: dict, resume_token: str) -> Optional[Tuple[int, dict]]:
+        """Bind this QUIC connection to a suspended logical peer, if any."""
+        suspended = self._server_resume_registry.claim(resume_token) if resume_token else None
+        # QUIC can complete the replacement TLS handshake before its prior
+        # connection's termination event is delivered. Accept that overlap as
+        # the same logical peer when its stable resume token already belongs
+        # to an active context; the late old-connection close is fenced below
+        # by ``expected_proto``.
+        if suspended is None and resume_token:
+            for candidate in self._server_peers.values():
+                if candidate is not temporary_ctx and candidate.get("resume_token") == resume_token:
+                    suspended = candidate
+                    break
+        if suspended is None:
+            temporary_ctx["resume_token"] = resume_token
+            return None
+        peer_id = int(suspended["peer_id"])
+        proto = temporary_ctx.get("proto")
+        self._server_peers.pop(temporary_peer_id, None)
+        self._server_proto_to_peer_id.pop(id(proto), None)
+        suspended.update({
+            "proto": proto,
+            "quic": temporary_ctx.get("quic"),
+            "stream_id": temporary_ctx.get("stream_id"),
+            "rx_buf": bytearray(),
+            "rtt": StreamRTT(log=self._log.getChild(f"rtt.{peer_id}")),
+            "connected": True,
+        })
+        self._server_peers[peer_id] = suspended
+        self._server_proto_to_peer_id[id(proto)] = peer_id
+        for wire in suspended.pop("pending_wires", []):
+            self._send_wire_ctx(suspended, wire)
+        self._log.info("[QUIC-SESSION] (%s) resumed peer_id=%s across QUIC reconnect", self._probe_id, peer_id)
+        return peer_id, suspended
+
     def _send_wire_ctx(self, ctx: dict, wire: bytes) -> bool:
         quic = ctx.get("quic")
         stream_id = ctx.get("stream_id")
@@ -1275,11 +1360,30 @@ class QuicSession(ISession):
     def reset_connection_rotation_cycles(self) -> None:
         self._peer_candidate_cycle = 0
 
-    async def _close_server_peer(self, peer_id: int) -> None:
+    async def _close_server_peer(self, peer_id: int, *, expected_proto: Any = None, immediate: bool = False) -> None:
         ctx = self._server_peers.pop(peer_id, None)
         if not ctx:
             return
+        if expected_proto is not None and ctx.get("proto") is not expected_proto:
+            self._server_peers[peer_id] = ctx
+            return
         proto = ctx.get("proto")
+        resume_token = str(ctx.get("resume_token", "") or "")
+        if not immediate and resume_token and self._quic_reconnect_grace_s > 0:
+            if proto is not None:
+                self._server_proto_to_peer_id.pop(id(proto), None)
+            ctx["proto"] = None
+            ctx["quic"] = None
+            ctx["stream_id"] = None
+            self._server_peers[peer_id] = ctx
+            self._server_resume_registry.suspend(
+                resume_token,
+                ctx,
+                grace_seconds=self._quic_reconnect_grace_s,
+                on_expire=lambda _ctx: self._close_server_peer(peer_id, immediate=True),
+            )
+            return
+        self._server_resume_registry.discard(resume_token, ctx)
         if proto is not None:
             self._server_proto_to_peer_id.pop(id(proto), None)
         self._server_unregister_peer_channels(peer_id)

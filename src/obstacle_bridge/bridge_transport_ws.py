@@ -39,6 +39,7 @@ from .bridge_proxy_common import (
 )
 from .bridge_transport_common import (
     EgressThroughputTracker,
+    StreamResumeRegistry,
     StreamRTT,
     StreamRTTRuntime,
     _listener_family_for_host,
@@ -218,6 +219,7 @@ class WebSocketSession(ISession):
         WebSocketJsonBase64PayloadCodec.mode: WebSocketJsonBase64PayloadCodec,
     }
     _WS_PAYLOAD_MODE_HEADER = "X-ObstacleBridge-WS-Payload-Mode"
+    _WS_RESUME_TOKEN_HEADER = "X-ObstacleBridge-WS-Resume-Token"
 
     @staticmethod
     def _default_ws_proxy_mode() -> str:
@@ -400,6 +402,10 @@ class WebSocketSession(ISession):
         self._ws_send_timeout_s: float = max(0.0, float(getattr(self._args, "ws_send_timeout", 3.0) or 0.0))
         self._ws_tcp_user_timeout_ms: int = max(0, int(getattr(self._args, "ws_tcp_user_timeout_ms", 10000) or 0))
         self._ws_reconnect_grace_s: float = max(0.0, float(getattr(self._args, "ws_reconnect_grace", 3.0) or 0.0))
+        # A process-local opaque token lets a listener reattach a replacement
+        # WebSocket to the same logical ChannelMux peer during this grace
+        # interval. It is not authentication material.
+        self._ws_resume_token = os.urandom(16).hex() if self._peer_tuple else ""
         self._ws_proxy_mode: str = str(
             getattr(self._args, "ws_proxy_mode", self._default_ws_proxy_mode()) or self._default_ws_proxy_mode()
         ).lower()
@@ -433,6 +439,7 @@ class WebSocketSession(ISession):
         self._last_rx_ns: int = 0
         self._server_connected_evt = asyncio.Event()
         self._server_peers: Dict[int, dict] = {}
+        self._server_resume_registry = StreamResumeRegistry()
         self._server_peer_by_ws_id: Dict[int, int] = {}
         self._server_next_peer_id: int = 1
         self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
@@ -527,16 +534,21 @@ class WebSocketSession(ISession):
                 return "extra_headers"
         return None
 
-    def _build_ws_upgrade_headers(self, connect_callable: Any) -> dict:
+    def _build_ws_upgrade_headers(self, connect_callable: Any, *, include_resume_token: bool = False) -> dict:
         header_key = self._websockets_header_kwarg(connect_callable)
         if not header_key:
             return {}
-        return {
-            header_key: {
-                self._WS_PAYLOAD_MODE_HEADER: self._ws_payload_mode,
-                self._WS_MAX_SIZE_HEADER: str(self._ws_max_size),
-            }
+        headers = {
+            self._WS_PAYLOAD_MODE_HEADER: self._ws_payload_mode,
+            self._WS_MAX_SIZE_HEADER: str(self._ws_max_size),
         }
+        # The token identifies this concrete lower transport to the listener;
+        # it is intentionally absent from the portable connect-plan surface.
+        # Swift owners inject the same transport-local value at their upgrade
+        # boundary, so plan parity remains deterministic across products.
+        if include_resume_token and self._ws_resume_token:
+            headers[self._WS_RESUME_TOKEN_HEADER] = self._ws_resume_token
+        return {header_key: headers}
 
     def _resolve_inbound_ws_max_size(self, requested_size: Optional[str], payload_mode: str) -> int:
         """Return the encoded frame limit negotiated for one server peer.
@@ -659,7 +671,7 @@ class WebSocketSession(ISession):
         self._ws = None
 
         for peer_id in list(self._server_peers.keys()):
-            await self._close_server_peer(peer_id)
+            await self._close_server_peer(peer_id, immediate=True)
         self._server_connected_evt.clear()
 
         try:
@@ -1571,7 +1583,9 @@ class WebSocketSession(ISession):
                 _headers_get(headers, self_ref._WS_MAX_SIZE_HEADER.lower()), payload_mode,
             )
             await _send_http_response(writer, status=101, headers=response_headers, body=b"")
-            return _ServerSideWsConnection(reader, writer, req_path, chosen_subprotocol, payload_mode, frame_max_size)
+            connection = _ServerSideWsConnection(reader, writer, req_path, chosen_subprotocol, payload_mode, frame_max_size)
+            connection.resume_token = _headers_get(headers, self_ref._WS_RESUME_TOKEN_HEADER.lower())
+            return connection
 
         async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             upgraded = False
@@ -1853,6 +1867,31 @@ class WebSocketSession(ISession):
 
     async def _on_accept(self, ws) -> None:
         if not self._peer_tuple:
+            resume_token = str(getattr(ws, "resume_token", "") or "")
+            suspended = self._server_resume_registry.claim(resume_token) if resume_token else None
+            if suspended is not None:
+                peer_id = int(suspended["peer_id"])
+                suspended["ws"] = ws
+                suspended["payload_mode"] = self._resolve_inbound_ws_payload_mode(getattr(ws, "payload_mode", None))
+                suspended["payload_codec"] = self._build_ws_payload_codec(suspended["payload_mode"])
+                suspended["ws_frame_max_size"] = int(getattr(ws, "frame_max_size", self._ws_frame_max_size))
+                suspended["rtt"] = StreamRTT(log=self._log)
+                suspended["rtt_rt"] = StreamRTTRuntime(suspended["rtt"])
+                suspended["rtt_seen_connected"] = False
+                self._server_peers[peer_id] = suspended
+                self._server_peer_by_ws_id[id(ws)] = peer_id
+                self._configure_ws_socket(ws)
+                suspended["rtt_rt"].attach(
+                    send_ping_fn=lambda payload, _peer_id=peer_id: self._send_ping_frame_for_peer(_peer_id, payload),
+                    on_state_change=lambda connected, _peer_id=peer_id: self._on_server_peer_rtt_state(_peer_id, connected),
+                )
+                suspended["rx_task"] = self._loop.create_task(self._rx_pump(ws=ws, peer_id=peer_id))  # type: ignore
+                self._ws = ws
+                self._rx_task = suspended["rx_task"]
+                self._tx_task = suspended.get("tx_task")
+                self._log.info("[WS-SESSION] (%s) resumed peer_id=%s across websocket reconnect", self._probe_id, peer_id)
+                self._update_server_overlay_connected()
+                return
             payload_mode = self._resolve_inbound_ws_payload_mode(getattr(ws, "payload_mode", None))
             rtt = StreamRTT(log=self._log)
             rtt_rt = StreamRTTRuntime(rtt)
@@ -1872,6 +1911,7 @@ class WebSocketSession(ISession):
                 "rtt_rt": rtt_rt,
                 "rtt_seen_connected": False,
                 "liveness_task": None,
+                "resume_token": resume_token,
             }
             self._server_peers[peer_id] = ctx
             self._server_peer_by_ws_id[id(ws)] = peer_id
@@ -1960,10 +2000,28 @@ class WebSocketSession(ISession):
             try: self._on_peer_set_cb(self._peer_host, self._peer_port)
             except Exception: pass
 
-    async def _close_server_peer(self, peer_id: int) -> None:
-        ctx = self._server_peers.pop(peer_id, None)
+    async def _close_server_peer(self, peer_id: int, *, expected_ws=None, immediate: bool = False) -> None:
+        ctx = self._server_peers.get(peer_id)
         if not ctx:
             return
+        if expected_ws is not None and ctx.get("ws") is not expected_ws:
+            return
+        resume_token = str(ctx.get("resume_token", "") or "")
+        if not immediate and resume_token and self._ws_reconnect_grace_s > 0:
+            self._server_peer_by_ws_id.pop(id(ctx.get("ws")), None)
+            ctx["ws"] = None
+            self._server_resume_registry.suspend(
+                resume_token,
+                ctx,
+                grace_seconds=self._ws_reconnect_grace_s,
+                on_expire=lambda _ctx: self._close_server_peer(peer_id, immediate=True),
+            )
+            if self._ws is expected_ws or self._ws is None:
+                self._ws = None
+            self._update_server_overlay_connected()
+            return
+        self._server_peers.pop(peer_id, None)
+        self._server_resume_registry.discard(resume_token, ctx)
         self._server_peer_by_ws_id.pop(id(ctx.get("ws")), None)
         self._server_unregister_peer_channels(peer_id)
         rtt_rt = ctx.get("rtt_rt")
@@ -2167,7 +2225,7 @@ class WebSocketSession(ISession):
                     self._log.debug(f"[WS-SESSION] ({self._probe_id}) skipping HTTP preflight because proxy tunneling is active")
                 t0 = time.perf_counter()
                 with self._suspend_library_proxy_env():
-                    connect_kwargs.update(self._build_ws_upgrade_headers(websockets.connect))
+                    connect_kwargs.update(self._build_ws_upgrade_headers(websockets.connect, include_resume_token=True))
                     ws = await websockets.connect(
                         uri,
                         ssl=ssl_ctx,
@@ -2220,7 +2278,11 @@ class WebSocketSession(ISession):
                 if self._ws is ws:
                     self.connection_epoch += 1
                     self._log.debug("[WS-SESSION] (%s) transport epoch=%d", self._probe_id, self.connection_epoch)
-                    if had_previous_connection and callable(self._on_transport_epoch_change):
+                    # A grace-window replacement retains the same logical WS
+                    # peer (identified by the upgrade resume token), so the
+                    # mux must retain its live TCP channels. Longer/disabled
+                    # grace keeps the established hard-resync behavior.
+                    if had_previous_connection and self._ws_reconnect_grace_s <= 0 and callable(self._on_transport_epoch_change):
                         try:
                             self._on_transport_epoch_change(self.connection_epoch)
                         except Exception:
@@ -2782,7 +2844,7 @@ class WebSocketSession(ISession):
                         f"[WS/RX] ({self._probe_id}) stale client pump ignored during newer transport handover"
                     )
             elif peer_id is not None:
-                await self._close_server_peer(peer_id)
+                await self._close_server_peer(peer_id, expected_ws=active_ws)
             self._log.debug(f"[WS/RX] ({self._probe_id}) pump stop{suffix}")
 
     # --- overlay state (RTT-driven) -------------------------------------------

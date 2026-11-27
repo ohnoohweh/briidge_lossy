@@ -608,14 +608,18 @@ def test_swift_tun_reconnect_open_replay_is_owned_by_udp_and_linux_runtime() -> 
     assert "reannounceStalledTunOpen()" in linux_runtime
 
 
-def test_swift_websocket_reconnect_starts_a_fresh_tun_epoch_before_new_task() -> None:
+def test_swift_websocket_reconnect_retains_logical_epoch_before_new_task() -> None:
     owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
     connect_overlay = owner[owner.index("    private func connectOverlay(") : owner.index("    private func connectNetworkWebSocket(")]
 
-    assert "resetOverlayTransportEpoch(notifyCore: false)" in connect_overlay
-    assert connect_overlay.index("resetOverlayTransportEpoch(notifyCore: false)") < connect_overlay.index(
+    assert "logicalEpochRetainedForResume" in connect_overlay
+    assert "if !logicalEpochRetainedForResume { resetOverlayTransportEpoch(notifyCore: false) }" in connect_overlay
+    assert connect_overlay.index("if !logicalEpochRetainedForResume") < connect_overlay.index(
         "websocketTransportGeneration += 1"
     )
+    assert "private func detachLowerTransportForResume()" in owner
+    assert "logicalEpochRetainedForResume = true" in owner
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_swift_websocket_reconnect_retains_logical_epoch_before_transport_generation" in owner
 
 
 def test_swift_websocket_synchronous_open_failure_advances_core_candidate() -> None:
@@ -1508,6 +1512,21 @@ def test_tcp_overlay_transport_owner_source_exists() -> None:
     assert "ObstacleBridgeOverlayLayerTransportAdapter" in runtime
     assert "handleInboundBytes(" in runtime
     assert "sendMuxFrames(" in runtime
+    assert "private let tcpResumeToken = UUID().uuidString.lowercased()" in runtime
+    assert "private func detachLowerTransportForResume()" in runtime
+    assert "sendRawOverlayWire(tcpResumeWire())" in runtime
+    assert "RTT PONG on the new" in runtime
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_tcp_overlay_owner_serializes_public_and_network_callbacks" in runtime
+
+
+def test_quic_overlay_transport_owner_retains_logical_epoch_for_resume() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "private let quicResumeToken = UUID().uuidString.lowercased()" in runtime
+    assert "enqueueOutboundWire(quicResumeWire())" in runtime
+    assert "private func detachLowerTransportForResume()" in runtime
+    assert "logicalEpochRetainedForResume = true" in runtime
+    assert "OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_quic_overlay_owner_keeps_callbacks_on_owner_queue" in runtime
 
 
 def test_channel_mux_tcp_transport_owner_source_exists() -> None:

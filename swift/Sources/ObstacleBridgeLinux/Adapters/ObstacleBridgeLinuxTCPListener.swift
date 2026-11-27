@@ -129,6 +129,11 @@ public final class ObstacleBridgeLinuxTCPPSKListener {
                 guard payload.count >= 8 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
                 try writeWire(kind: 2, payload: Data(payload.prefix(8)), fd: fd)
             case 2: continue
+            // A reconnecting Python peer announces its stable logical
+            // transport identity before SecureLink's first handshake record.
+            // Listener ownership is retained by the live runtime, so this
+            // framing metadata must not be offered to SecureLink as a hello.
+            case 3: continue
             default: throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
             }
         }

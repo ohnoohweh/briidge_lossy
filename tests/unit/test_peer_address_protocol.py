@@ -94,3 +94,12 @@ class PeerAddressProtocolSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(wrapper.is_connected())
         self.assertIs(wrapper.get_metrics(), metrics)
         self.assertEqual(wrapper.get_max_app_payload_size(), 1234)
+
+    def test_transparent_wrapper_forwards_admin_reconnect(self) -> None:
+        inner = _FakeInnerSession(peer_id=0, observed_host="198.51.100.44")
+        calls: list[bool] = []
+        inner.request_reconnect = lambda: calls.append(True) or True
+        wrapper = PeerAddressProtocolSession(inner, transport_name="quic", client_mode=True)
+
+        self.assertTrue(wrapper.request_reconnect())
+        self.assertEqual(calls, [True])
