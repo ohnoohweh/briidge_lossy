@@ -344,7 +344,26 @@ class DeliveryFenceSession:
                 self._send_inner(frame, key or None)
 
     def _send_ping_all(self) -> None:
-        keys = set(self._pending) | set(self._delivered_sequence) | {0}
+        keys = set(self._pending) | set(self._delivered_sequence)
+        # A listener has no fence state for a just-admitted peer yet.  Send
+        # its first probe to that concrete peer rather than peer_id=None:
+        # lower stream listeners reserve the unscoped route for ChannelMux
+        # rewriting, which would otherwise interpret OBRT bytes as a mux
+        # header and truncate the probe.
+        if not keys:
+            getter = getattr(self._inner, "get_overlay_peers_snapshot", None)
+            if callable(getter):
+                try:
+                    for row in list(getter() or []):
+                        if not isinstance(row, dict) or bool(row.get("listening")):
+                            continue
+                        peer_id = row.get("peer_id")
+                        if peer_id is not None:
+                            keys.add(int(peer_id))
+                except Exception:
+                    pass
+        if not keys:
+            keys.add(0)
         now_ns = time.monotonic_ns()
         for key in keys:
             self._log.debug("[DELIVERY-FENCE] ping send peer_id=%r delivered=%d", key or None, self._delivered_sequence.get(key, 0))

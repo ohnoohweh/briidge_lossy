@@ -508,6 +508,23 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
             } else {
                 decompressed = delivered
             }
+            // Python's listener stack can surface peer-address control after
+            // its stream wrapper has admitted an APP record.  Accept the
+            // control at either side of the transform boundary: it is never
+            // ChannelMux data and must not be mistaken for a delivery-fence
+            // payload just because the peer started discovery concurrently
+            // with the first fence probe.
+            if let peerAddressRuntime {
+                let peerAddressSnapshot = peerAddressRuntime.handleInboundFrame(
+                    decompressed,
+                    observedPeerHost: observedPeerHost,
+                    observedPeerPort: observedPeerPort
+                )
+                if peerAddressSnapshot.consumed {
+                    emittedFrames.append(contentsOf: peerAddressSnapshot.emittedFrames)
+                    continue
+                }
+            }
             if deliveryFenceEnabled, let fence = deliveryFenceRuntime.handleInbound(decompressed) {
                 emittedFrames.append(contentsOf: protectFenceRecords(fence.emittedRecords))
                 deliveredPayloads.append(contentsOf: fence.deliveredPayloads)

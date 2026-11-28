@@ -47,7 +47,16 @@ public final class ObstacleBridgePeerAddressProtocolRuntime {
         let frameType = payload[5]
         let family = payload[6]
         let body = Data(payload.dropFirst(Self.headerSize))
-        if frameType == Self.typeRequest, family == 0, body.isEmpty, !clientMode {
+        if frameType == Self.typeRequest, family == 0, body.isEmpty {
+            // Peer-address discovery is a lower-layer control exchange.  A
+            // connected Python WebSocket peer can legitimately issue this
+            // request in either role while it establishes its own endpoint
+            // snapshot.  Never let that record fall through into the outer
+            // delivery fence (and then ChannelMux) merely because this local
+            // endpoint is also configured as a client.  When this adapter
+            // has an observed remote endpoint, answer it; otherwise consume
+            // the request as a best-effort query rather than misclassifying
+            // it as protected application traffic.
             guard let host = observedPeerHost,
                   let port = observedPeerPort,
                   (1...65535).contains(port),

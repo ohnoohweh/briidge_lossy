@@ -79,6 +79,19 @@ def test_delivery_fence_acks_data_and_suppresses_its_replay_after_peer_confirmat
     assert DeliveryFenceCodec.decode_pong(body)[1] == 1
 
 
+def test_delivery_fence_addresses_initial_listener_probe_to_the_admitted_peer():
+    inner = _Inner()
+    inner.get_overlay_peers_snapshot = lambda: [{"peer_id": 7, "listening": False}]
+    fence = DeliveryFenceSession(inner)
+
+    fence._send_ping_all()
+
+    wire, peer_id = inner.sent[-1]
+    kind, _sequence, _body = DeliveryFenceCodec.decode(wire) or (-1, -1, b"")
+    assert kind == DeliveryFenceCodec.KIND_PING
+    assert peer_id == 7
+
+
 def test_delivery_fence_routes_colliding_listener_mux_channels_without_exposing_its_envelope():
     inner = _Inner()
     fence = DeliveryFenceSession(inner)

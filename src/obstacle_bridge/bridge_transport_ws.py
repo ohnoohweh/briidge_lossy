@@ -837,6 +837,15 @@ class WebSocketSession(ISession):
                 self._schedule_server_send(ctx, wire, on_sent=lambda: self._notify_peer_tx(len(wire)))
                 self._egress_tracker.record(len(payload))
                 return len(payload)
+            if self._app_payload_passthrough and peer_id is None and len(self._server_peers) == 1:
+                # Outer delivery-fence control can be emitted during the
+                # listener's connected callback before it has associated a
+                # sequence with this peer.  With one peer, raw routing is
+                # unambiguous; never feed OBRT bytes into mux rewriting.
+                ctx = next(iter(self._server_peers.values()))
+                self._schedule_server_send(ctx, wire, on_sent=lambda: self._notify_peer_tx(len(wire)))
+                self._egress_tracker.record(len(payload))
+                return len(payload)
             if not self._server_peers and self._ws is not None:
                 self._schedule_send(wire, on_sent=lambda: self._notify_peer_tx(len(wire)))
                 self._egress_tracker.record(len(payload))
