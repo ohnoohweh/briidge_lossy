@@ -426,6 +426,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
 
     func completeClientHandshake(sessionID: UInt64, clientNonce: Data) throws {
         guard let overlayAdapter else { return }
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxRuntimeConfigurationTests
         let delivered = try exchangeAdapterFrames(try overlayAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce).emittedFrames)
         if !delivered.isEmpty {
             requestLock.lock()
