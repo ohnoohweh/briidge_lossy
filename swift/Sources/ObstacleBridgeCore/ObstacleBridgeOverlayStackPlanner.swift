@@ -99,6 +99,13 @@ public final class ObstacleBridgeOverlayStackPlanner {
             layersBottomUp.append("compress_layer")
         }
 
+        // Stream transports share the delivery acknowledgement/replay fence
+        // above every optional transform.  myUDP keeps its native datagram
+        // acknowledgement path, so it is deliberately not wrapped here.
+        if ["tcp", "ws", "quic"].contains(normalizedTransport) {
+            layersBottomUp.append("delivery_fence")
+        }
+
         return TransportPlan(
             transport: normalizedTransport,
             peerHost: normalizedPeerHost,

@@ -12,6 +12,65 @@ import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 
+class DeliveryFenceCodec:
+    """Authenticated outer delivery records shared by resumable streams.
+
+    The record is deliberately above compression and SecureLink.  Its sequence
+    identifies plaintext application data, so a reconnect can encrypt a
+    retained record with the new SecureLink session instead of replaying stale
+    ciphertext.  PING and PONG carry the highest contiguous received sequence
+    as the delivery fence.
+    """
+
+    MAGIC = b"OBRT"
+    VERSION = 1
+    KIND_DATA = 0
+    KIND_PING = 1
+    KIND_PONG = 2
+    _HEADER = struct.Struct(">4sBBQ")
+    _PING = struct.Struct(">QQQ")
+    _PONG = struct.Struct(">QQ")
+
+    @classmethod
+    def encode_data(cls, sequence: int, payload: bytes) -> bytes:
+        return cls._HEADER.pack(cls.MAGIC, cls.VERSION, cls.KIND_DATA, int(sequence)) + bytes(payload)
+
+    @classmethod
+    def encode_ping(cls, tx_ns: int, echo_ns: int, delivered_sequence: int) -> bytes:
+        return cls._HEADER.pack(cls.MAGIC, cls.VERSION, cls.KIND_PING, 0) + cls._PING.pack(
+            int(tx_ns), int(echo_ns), int(delivered_sequence),
+        )
+
+    @classmethod
+    def encode_pong(cls, echo_tx_ns: int, delivered_sequence: int) -> bytes:
+        return cls._HEADER.pack(cls.MAGIC, cls.VERSION, cls.KIND_PONG, 0) + cls._PONG.pack(
+            int(echo_tx_ns), int(delivered_sequence),
+        )
+
+    @classmethod
+    def decode(cls, wire: bytes) -> Optional[tuple[int, int, bytes]]:
+        """Return ``(kind, sequence, body)`` or ``None`` for an invalid record."""
+        if len(wire) < cls._HEADER.size:
+            return None
+        magic, version, kind, sequence = cls._HEADER.unpack_from(wire)
+        if magic != cls.MAGIC or version != cls.VERSION or kind not in {cls.KIND_DATA, cls.KIND_PING, cls.KIND_PONG}:
+            return None
+        body = bytes(wire[cls._HEADER.size:])
+        if kind == cls.KIND_PING and len(body) != cls._PING.size:
+            return None
+        if kind == cls.KIND_PONG and len(body) != cls._PONG.size:
+            return None
+        return int(kind), int(sequence), body
+
+    @classmethod
+    def decode_ping(cls, body: bytes) -> tuple[int, int, int]:
+        return cls._PING.unpack(bytes(body))
+
+    @classmethod
+    def decode_pong(cls, body: bytes) -> tuple[int, int]:
+        return cls._PONG.unpack(bytes(body))
+
+
 class StreamResumeRegistry:
     """Own suspended logical stream peers during a bounded lower-link outage.
 

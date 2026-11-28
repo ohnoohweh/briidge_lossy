@@ -31,6 +31,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPSKTranscript.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkFrameCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayFrameCodec.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeDeliveryFenceRuntime.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayCoordinator.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeBoundedDataFIFO.swift",

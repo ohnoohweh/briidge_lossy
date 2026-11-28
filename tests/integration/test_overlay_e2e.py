@@ -85,6 +85,7 @@ from obstacle_bridge.bridge import (
     SecureLinkPskSession,
 )
 from obstacle_bridge.core import ObstacleBridgeClient
+from obstacle_bridge.bridge_transport_common import DeliveryFenceCodec
 from obstacle_bridge.bridge_tun_helper_client import TunHelperClient
 
 log = logging.getLogger()
@@ -514,58 +515,109 @@ class LinuxSwiftSecureLinkPeer:
         if address_request != b'OBPA\x02\x01\x00':
             raise RuntimeError('Linux Swift peer-address request mismatch')
         send(b'OBPA\x02\x02\x04\x7f\x00\x00\x01' + (443).to_bytes(2, 'big'))
-        if self.keep_open and not self.mux_echo:
-            while not self._closing.is_set():
-                try:
-                    receive()
-                except TimeoutError:
-                    continue
-                except ConnectionResetError:
-                    return
-                except OSError:
-                    if self._closing.is_set():
-                        return
-                    raise
-                except RuntimeError as exc:
-                    if str(exc) == 'unexpected EOF from Linux Swift client':
-                        return
-                    raise
-                raise RuntimeError('unexpected application payload from idle Linux Swift runtime')
-            return
-        if self.mux_echo:
+        if self.transport == 'myudp':
+            # myUDP retains its own datagram acknowledgement path.  The outer
+            # fence is reserved for resumable stream transports.
             counter = 2
             while not self._closing.is_set():
                 try:
                     application = receive()
                 except TimeoutError:
                     continue
-                except ConnectionResetError:
+                except (ConnectionResetError, OSError):
                     return
-                except OSError:
-                    if self._closing.is_set():
-                        return
-                    raise
-                except RuntimeError as exc:
-                    if str(exc) == 'unexpected EOF from Linux Swift client':
-                        return
-                    raise
                 plaintext = ChaCha20Poly1305(client_to_server).decrypt(
                     b'\0' * 4 + counter.to_bytes(8, 'big'), application[20:], application[:20],
                 )
-                if len(plaintext) >= 8 and plaintext[:2] == b'O5' and plaintext[5] == 1:
-                    reply_plaintext = plaintext[:5] + b'\0\0\0'
-                else:
-                    reply_plaintext = plaintext
+                if self.keep_open and not self.mux_echo:
+                    raise RuntimeError('unexpected application payload from idle Linux Swift runtime')
+                reply = (
+                    plaintext[:5] + b'\0\0\0'
+                    if self.mux_echo and len(plaintext) >= 8 and plaintext[:2] == b'O5' and plaintext[5] == 1
+                    else plaintext if self.mux_echo else b'python-e2e:' + plaintext
+                )
                 response = self._header(4, session_id, counter)
                 send(response + ChaCha20Poly1305(server_to_client).encrypt(
-                    b'\0' * 4 + counter.to_bytes(8, 'big'), reply_plaintext, response,
+                    b'\0' * 4 + counter.to_bytes(8, 'big'), reply, response,
                 ))
                 counter += 1
+                if not self.mux_echo:
+                    return
             return
-        application = receive()
-        plaintext = ChaCha20Poly1305(client_to_server).decrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), application[20:], application[:20])
-        response = self._header(4, session_id, 2)
-        send(response + ChaCha20Poly1305(server_to_client).encrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), b'python-e2e:' + plaintext, response))
+        # Stream products use the common delivery fence above SecureLink.
+        # This reference peer therefore acknowledges fence probes and returns
+        # fence DATA, rather than treating its envelope as legacy application
+        # traffic. myUDP retains its own lower-layer reliability separately.
+        client_counter = 2
+        server_counter = 2
+        delivered_client_sequence = 0
+        server_sequence = 0
+
+        def decrypt_application(application: bytes) -> bytes:
+            nonlocal client_counter
+            plaintext = ChaCha20Poly1305(client_to_server).decrypt(
+                b'\0' * 4 + client_counter.to_bytes(8, 'big'), application[20:], application[:20],
+            )
+            client_counter += 1
+            return plaintext
+
+        def send_plaintext(plaintext: bytes) -> None:
+            nonlocal server_counter
+            response = self._header(4, session_id, server_counter)
+            send(response + ChaCha20Poly1305(server_to_client).encrypt(
+                b'\0' * 4 + server_counter.to_bytes(8, 'big'), plaintext, response,
+            ))
+            server_counter += 1
+
+        while not self._closing.is_set():
+            try:
+                plaintext = decrypt_application(receive())
+            except TimeoutError:
+                continue
+            except ConnectionResetError:
+                return
+            except OSError:
+                if self._closing.is_set():
+                    return
+                raise
+            except RuntimeError as exc:
+                if str(exc) == 'unexpected EOF from Linux Swift client':
+                    return
+                raise
+            decoded = DeliveryFenceCodec.decode(plaintext)
+            if decoded is None:
+                raise RuntimeError('Linux Swift application did not use delivery fence')
+            kind, sequence, body = decoded
+            if kind == DeliveryFenceCodec.KIND_PING:
+                send_plaintext(DeliveryFenceCodec.encode_pong(
+                    DeliveryFenceCodec.decode_ping(body)[0], delivered_client_sequence,
+                ))
+                continue
+            if kind == DeliveryFenceCodec.KIND_PONG:
+                # DATA delivery is acknowledged independently of application
+                # traffic. The Swift client sends this after each peer DATA
+                # record; it is not a request for a response.
+                DeliveryFenceCodec.decode_pong(body)
+                continue
+            if kind != DeliveryFenceCodec.KIND_DATA:
+                raise RuntimeError('Linux Swift delivery fence record kind mismatch')
+            if sequence > delivered_client_sequence:
+                delivered_client_sequence = sequence
+            if self.keep_open and not self.mux_echo:
+                raise RuntimeError('unexpected application payload from idle Linux Swift runtime')
+            if self.mux_echo:
+                reply_body = body[:5] + b'\0\0\0' if len(body) >= 8 and body[:2] == b'O5' and body[5] == 1 else body
+            else:
+                reply_body = b'python-e2e:' + body
+            server_sequence += 1
+            # Acknowledge the client DATA before publishing our reply. This
+            # matches DeliveryFenceSession: confirmation is control-plane
+            # progress and must be visible to a synchronous bootstrap exchange
+            # before its first peer application record.
+            send_plaintext(DeliveryFenceCodec.encode_pong(0, delivered_client_sequence))
+            send_plaintext(DeliveryFenceCodec.encode_data(server_sequence, reply_body))
+            if not self.mux_echo:
+                return
 
 
 def test_linux_swift_keep_open_peer_accept_poll_exits_cleanly() -> None:
@@ -1642,7 +1694,8 @@ def response_payload(data: bytes) -> bytes:
 
 
 class BounceBackServer:
-    def __init__(self, name: str, proto: str, bind_host: str, port: int, log_path: Path):
+    def __init__(self, name: str, proto: str, bind_host: str, port: int, log_path: Path,
+                 response_transform: Callable[[bytes], bytes] = response_payload):
         self.name = name
         self.proto = proto
         self.bind_host = bind_host
@@ -1656,6 +1709,7 @@ class BounceBackServer:
         self._received_payloads: list[bytes] = []
         self._received_lock = threading.Lock()
         self.tcp_expected_request_bytes = 0
+        self.response_transform = response_transform
 
     def _log(self, msg: str) -> None:
         with self.log_path.open('a', encoding='utf-8', errors='replace') as fp:
@@ -1705,7 +1759,7 @@ class BounceBackServer:
                 break
             with self._received_lock:
                 self._received_payloads.append(bytes(data))
-            reply = response_payload(data)
+            reply = self.response_transform(data)
             self._log(f'RX {data.hex(" ")} from {addr!r} -> TX {reply.hex(" ")}')
             try:
                 self.sock.sendto(reply, addr)
@@ -1755,7 +1809,7 @@ class BounceBackServer:
                     data = bytes(accumulated)
                 with self._received_lock:
                     self._received_payloads.append(bytes(data))
-                reply = response_payload(data)
+                reply = self.response_transform(data)
                 self._log(f'RX {data.hex(" ")} from {addr!r} -> TX {reply.hex(" ")}')
                 try:
                     conn.sendall(reply)
@@ -2525,6 +2579,7 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeSecureLinkPskTransportAdapter.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgePeerAddressProtocolRuntime.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeOverlayLayerTransportAdapter.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeDeliveryFenceRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeMacOSTunHelperService.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeTunHelperContract.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunHelperXPCTransport.swift'),
@@ -5607,8 +5662,9 @@ def run_case_ws_tcp_stream_survives_reconnect(
     log_dir: Path,
     *,
     runtime_mode: str = 'python-python',
+    secure_link: bool = False,
 ) -> None:
-    """Keep one TCP service stream alive while the client replaces its WS.
+    """Keep one TCP service stream alive while the client replaces WS.
 
     The request is deliberately made through the supported Admin reconnect
     endpoint, rather than by restarting either bridge process: restarting a
@@ -5622,16 +5678,26 @@ def run_case_ws_tcp_stream_survives_reconnect(
     case = materialize_case_ports(
         replace(
             base_case,
-            name='overlay_ws_tcp_stream_survives_reconnect',
+            name=(
+                'overlay_ws_tcp_stream_survives_reconnect_with_secure_link'
+                if secure_link else 'overlay_ws_tcp_stream_survives_reconnect_without_secure_link'
+            ),
             bridge_server_args=_append_args(
                 base_case.bridge_server_args,
-                # The listener must retain the accepted logical peer while
-                # its lower WebSocket is replaced.
-                ['--ws-reconnect-grace', '5'],
+                ['--ws-reconnect-grace', '5'] + (
+                    ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'stream-resume-e2e-psk']
+                    if secure_link else ['--secure-link-mode', 'off']
+                ),
             ),
             bridge_client_args=_append_args(
                 base_case.bridge_client_args,
-                ['--overlay-reconnect-retry-delay-ms', '50', '--ws-reconnect-grace', '5'],
+                [
+                    '--overlay-reconnect-retry-delay-ms', '50',
+                    '--ws-reconnect-grace', '5',
+                ] + (
+                    ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'stream-resume-e2e-psk']
+                    if secure_link else ['--secure-link-mode', 'off']
+                ),
             ),
         ),
         case_index,
@@ -5639,12 +5705,13 @@ def run_case_ws_tcp_stream_survives_reconnect(
     bounce = BounceBackServer(
         name=f'{case.name}_bounce', proto='tcp', bind_host=case.bounce_bind,
         port=case.bounce_port, log_path=log_dir / f'{case.name}_bounce.log',
+        response_transform=(lambda payload: payload) if secure_link else response_payload,
     )
     server_proc: Optional[Proc] = None
     client_proc: Optional[Proc] = None
 
     def exchange(stream: socket.socket, payload: bytes) -> None:
-        expected = response_payload(payload)
+        expected = payload if secure_link else response_payload(payload)
         stream.sendall(payload)
         received = bytearray()
         while len(received) < len(expected):
@@ -5681,6 +5748,12 @@ def run_case_ws_tcp_stream_survives_reconnect(
             # server-origin socket; each echoed response asserts reverse as
             # well as forward delivery.
             exchange(stream, b'\x01before-ws-reconnect')
+            if secure_link:
+                # A deterministic pseudo-random sequence makes every byte
+                # position observable. Start it immediately before lower
+                # transport rotation, while records remain in flight.
+                in_transit = hashlib.shake_256(b'secure-ws-resume-byte-proof-v1').digest(4 * 1024)
+                stream.sendall(in_transit)
             code, result = post_json(
                 f'http://127.0.0.1:{client_proc.admin_port}/api/reconnect', timeout=5.0,
             )
@@ -5699,14 +5772,31 @@ def run_case_ws_tcp_stream_survives_reconnect(
             )
             assert_running(server_proc)
             assert_running(client_proc)
+            if secure_link:
+                received = bytearray()
+                while len(received) < len(in_transit):
+                    chunk = stream.recv(len(in_transit) - len(received))
+                    if not chunk:
+                        raise RuntimeError(
+                            'persistent TCP service stream closed while secure WebSocket '
+                            f'recovery still owed {len(in_transit) - len(received)} byte(s)'
+                        )
+                    received.extend(chunk)
+                if bytes(received) != in_transit:
+                    raise RuntimeError('secure WebSocket recovery lost or altered in-transit bytes')
             exchange(stream, b'\x01after-ws-reconnect')
 
             received = bounce.received_payloads()
-            expected_requests = [b'\x01before-ws-reconnect', b'\x01after-ws-reconnect']
-            if received != expected_requests:
+            expected_requests = [b'\x01before-ws-reconnect']
+            if secure_link:
+                expected_requests.append(in_transit)
+            expected_requests.append(b'\x01after-ws-reconnect')
+            received_for_comparison = b''.join(received) if secure_link else received
+            expected_for_comparison = b''.join(expected_requests) if secure_link else expected_requests
+            if received_for_comparison != expected_for_comparison:
                 raise RuntimeError(
                     f'TCP server did not receive persistent-stream records exactly once: '
-                    f'got={received!r} expected={expected_requests!r}'
+                    f'got={received_for_comparison!r} expected={expected_for_comparison!r}'
                 )
     finally:
         if client_proc is not None:
@@ -9507,8 +9597,8 @@ def test_overlay_e2e_reconnect(case_name: str, tmp_path: Path) -> None:
         pytest.param('python-server-linux-native-client', id='linux-swift-client'),
     ],
 )
-def test_overlay_e2e_ws_tcp_stream_survives_reconnect(runtime_mode: str, tmp_path: Path) -> None:
-    """A restored WebSocket must not interrupt an established TCP service stream."""
+def test_overlay_e2e_ws_tcp_stream_survives_reconnect_without_secure_link(runtime_mode: str, tmp_path: Path) -> None:
+    """A cleartext restored WebSocket must retain an established TCP service stream."""
     if runtime_mode in {'swift-server-python-client', 'python-server-swift-client'}:
         _require_macos_swift_host_runner()
     if runtime_mode == 'python-server-linux-native-client':
@@ -9517,6 +9607,13 @@ def test_overlay_e2e_ws_tcp_stream_survives_reconnect(runtime_mode: str, tmp_pat
         if not shutil.which('swift'):
             pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
     run_case_ws_tcp_stream_survives_reconnect(tmp_path, runtime_mode=runtime_mode)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_secure_tcp_stream_resumes_unconfirmed_random_bytes(tmp_path: Path) -> None:
+    """A new SecureLink epoch replays only byte-exact unconfirmed records."""
+    run_case_ws_tcp_stream_survives_reconnect(tmp_path, secure_link=True)
 
 
 @pytest.mark.integration

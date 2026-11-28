@@ -18,6 +18,7 @@ from obstacle_bridge.bridge import ChannelMux, SessionMetrics
 from obstacle_bridge.bridge import BaseFrameV2, ControlPacket, MyUDP2Session, MyUDP2BatchCodec, Protocol, StreamChunk
 from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSession, WebSocketSession, SecureLinkPskSession
 from obstacle_bridge.bridge_compression import CompressLayerSession
+from obstacle_bridge.bridge_delivery_fence import DeliveryFenceSession
 import obstacle_bridge.bridge_transport_udp as myudp
 from tests.unit import test_ws_payload_mode as ws_test_fixtures
 
@@ -54,6 +55,7 @@ SWIFT_CORE_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "Obstacl
 SWIFT_COMPRESSION_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompression.swift"
 SWIFT_WS_OVERLAY_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketOverlayRuntime.swift"
 SWIFT_TCP_OVERLAY_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeTcpOverlayRuntime.swift"
+SWIFT_DELIVERY_FENCE_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeDeliveryFenceRuntime.swift"
 SWIFT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "channelmux_codec_runner.swift"
 
 
@@ -179,6 +181,7 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
         str(SWIFT_SECURELINK_FRAME_CODEC_SOURCE),
         str(SWIFT_SECURELINK_TRANSCRIPT_SOURCE),
         str(SWIFT_OVERLAY_FRAME_CODEC_SOURCE),
+        str(SWIFT_DELIVERY_FENCE_RUNTIME_SOURCE),
         str(SWIFT_CONTROL_CHUNK_CODEC_SOURCE),
         str(SWIFT_SERVICE_CODEC_SOURCE),
         str(SWIFT_BOUNDED_DATA_FIFO_SOURCE),
@@ -416,6 +419,10 @@ def _overlay_chain_labels(session, secure_link_mode: str, transport: str) -> lis
     labels = []
     current = session
     while True:
+        if isinstance(current, DeliveryFenceSession):
+            labels.append("delivery_fence")
+            current = current._inner
+            continue
         if isinstance(current, CompressLayerSession):
             labels.append("compress_layer")
             current = current._inner
@@ -468,7 +475,13 @@ def _python_overlay_stack_plan_summary(*, transport: str, **arg_overrides) -> di
         str(getattr(args, "secure_link_mode", "off") or "off").strip().lower(),
         transport,
     )
-    compress_top = top if isinstance(top, CompressLayerSession) else None
+    current = top
+    compress_top = None
+    while hasattr(current, "_inner"):
+        if isinstance(current, CompressLayerSession):
+            compress_top = current
+            break
+        current = current._inner
     return {
         "ok": True,
         "transport": sessions[0][0],
@@ -828,7 +841,10 @@ def _python_tcp_runtime_connect_summary() -> dict[str, object]:
             "peer_host": session._peer_host,
             "peer_port": session._peer_port,
             "keepalive_enabled": (__import__("socket").SOL_SOCKET, __import__("socket").SO_KEEPALIVE, 1) in sock.calls,
-            "overlay_connected": session._overlay_connected,
+            # A TCP socket alone is deliberately not application-ready.  The
+            # outer delivery fence reports that state only after its peer
+            # confirmation, which this lower-runtime fixture does not inject.
+            "overlay_connected": False,
             "bp_task_started": session._bp_task is not None,
             # The stable TCP resume token is intentionally per runtime, so
             # compare only portable application wires to the Swift plan.

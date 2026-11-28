@@ -118,3 +118,67 @@ public enum ObstacleBridgeOverlayFrameCodec {
         catch { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
     }
 }
+
+/// Authenticated outer delivery records for resumable stream overlays.  These
+/// records sit above compression and SecureLink so retained plaintext can be
+/// encrypted under a replacement SecureLink session after reconnect.
+public enum ObstacleBridgeDeliveryFenceCodec {
+    public enum Kind: UInt8, Sendable { case data = 0, ping = 1, pong = 2 }
+    public static let magic = Data([0x4f, 0x42, 0x52, 0x54]) // "OBRT"
+    public static let version: UInt8 = 1
+
+    public static func encodeData(sequence: UInt64, payload: Data) -> Data {
+        header(kind: .data, sequence: sequence) + payload
+    }
+
+    public static func encodePing(txNS: UInt64, echoNS: UInt64, deliveredSequence: UInt64) -> Data {
+        var writer = ObstacleBridgeBinaryWriter(capacity: 30)
+        writer.append(header(kind: .ping, sequence: 0))
+        writer.append(txNS); writer.append(echoNS); writer.append(deliveredSequence)
+        return writer.encoded
+    }
+
+    public static func encodePong(echoTxNS: UInt64, deliveredSequence: UInt64) -> Data {
+        var writer = ObstacleBridgeBinaryWriter(capacity: 22)
+        writer.append(header(kind: .pong, sequence: 0))
+        writer.append(echoTxNS); writer.append(deliveredSequence)
+        return writer.encoded
+    }
+
+    public static func decode(_ wire: Data) throws -> (kind: Kind, sequence: UInt64, body: Data) {
+        do {
+            var reader = ObstacleBridgeBinaryReader(wire)
+            guard try reader.readData(count: 4) == magic, try reader.readUInt8() == version,
+                  let kind = Kind(rawValue: try reader.readUInt8()) else {
+                throw ObstacleBridgeOverlayFrameCodecError.invalidFrame
+            }
+            let sequence = try reader.readUInt64()
+            let body = try reader.readData(count: wire.count - 14)
+            switch kind {
+            case .data: break
+            case .ping: guard body.count == 24 else { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
+            case .pong: guard body.count == 16 else { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
+            }
+            return (kind, sequence, body)
+        } catch let error as ObstacleBridgeOverlayFrameCodecError { throw error }
+        catch { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
+    }
+
+    public static func pingFields(_ body: Data) throws -> (txNS: UInt64, echoNS: UInt64, deliveredSequence: UInt64) {
+        guard body.count == 24 else { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
+        var reader = ObstacleBridgeBinaryReader(body)
+        return (try reader.readUInt64(), try reader.readUInt64(), try reader.readUInt64())
+    }
+
+    public static func pongFields(_ body: Data) throws -> (echoTxNS: UInt64, deliveredSequence: UInt64) {
+        guard body.count == 16 else { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
+        var reader = ObstacleBridgeBinaryReader(body)
+        return (try reader.readUInt64(), try reader.readUInt64())
+    }
+
+    private static func header(kind: Kind, sequence: UInt64) -> Data {
+        var writer = ObstacleBridgeBinaryWriter(capacity: 14)
+        writer.append(magic); writer.append(version); writer.append(kind.rawValue); writer.append(sequence)
+        return writer.encoded
+    }
+}

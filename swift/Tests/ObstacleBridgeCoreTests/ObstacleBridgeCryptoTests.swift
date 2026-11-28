@@ -23,6 +23,27 @@ private actor SecureLinkServerOwner {
 }
 
 struct ObstacleBridgeCryptoTests {
+    @Test func cleartextAdapterUsesDeliveryFenceRatherThanLowerTransportRTT() throws {
+        let adapter = ObstacleBridgeOverlayLayerTransportAdapter(cleartext: true)
+        let connected = try adapter.handleTransportConnected()
+        let ping = try #require(connected.emittedFrames.first(where: {
+            guard let decoded = try? ObstacleBridgeDeliveryFenceCodec.decode($0) else { return false }
+            return decoded.kind == .ping
+        }))
+        let decodedPing = try ObstacleBridgeDeliveryFenceCodec.decode(ping)
+        let pong = ObstacleBridgeDeliveryFenceCodec.encodePong(
+            echoTxNS: try ObstacleBridgeDeliveryFenceCodec.pingFields(decodedPing.body).txNS,
+            deliveredSequence: 0
+        )
+        #expect(adapter.handleInboundFrame(pong).deliveredPayloads.isEmpty)
+
+        let sent = try adapter.handleOutboundPayload(Data("cleartext".utf8))
+        let data = try #require(sent.emittedFrames.first)
+        let decodedData = try ObstacleBridgeDeliveryFenceCodec.decode(data)
+        #expect(decodedData.kind == .data)
+        #expect(decodedData.body == Data("cleartext".utf8))
+    }
+
     @Test func muxCompressionRoundTripsAndPreservesNoGainFrames() throws {
         let wire = try ObstacleBridgeChannelMuxFrameCodec.encode(channelID: 7, protocolType: 1, counter: 2, messageType: 0, body: Data(repeating: 65, count: 256))
         let protected = try ObstacleBridgeMuxCompression.protect(wire)
@@ -980,6 +1001,50 @@ struct ObstacleBridgeCoreCodecTests {
         #expect(throws: ObstacleBridgeOverlayFrameCodecError.invalidFrame) {
             try ObstacleBridgeOverlayFrameCodec.decodeTCP(wire + Data([0]))
         }
+    }
+
+    @Test func deliveryFenceFramesMatchPythonLayout() throws {
+        let data = ObstacleBridgeDeliveryFenceCodec.encodeData(
+            sequence: 0x0102030405060708, payload: Data("hello".utf8)
+        )
+        #expect(data.hex == "4f4252540100010203040506070868656c6c6f")
+        let decodedData = try ObstacleBridgeDeliveryFenceCodec.decode(data)
+        #expect(decodedData.kind == .data)
+        #expect(decodedData.sequence == 0x0102030405060708)
+        #expect(decodedData.body == Data("hello".utf8))
+
+        let ping = try ObstacleBridgeDeliveryFenceCodec.decode(
+            ObstacleBridgeDeliveryFenceCodec.encodePing(txNS: 1, echoNS: 2, deliveredSequence: 9)
+        )
+        #expect(try ObstacleBridgeDeliveryFenceCodec.pingFields(ping.body).deliveredSequence == 9)
+        let pong = try ObstacleBridgeDeliveryFenceCodec.decode(
+            ObstacleBridgeDeliveryFenceCodec.encodePong(echoTxNS: 1, deliveredSequence: 9)
+        )
+        #expect(try ObstacleBridgeDeliveryFenceCodec.pongFields(pong.body).deliveredSequence == 9)
+    }
+
+    @Test func deliveryFenceRetainsOnlyUnconfirmedPlaintextAcrossLowerEpoch() throws {
+        let sender = ObstacleBridgeDeliveryFenceRuntime()
+        let receiver = ObstacleBridgeDeliveryFenceRuntime()
+        let firstPayload = Data([0x01, 0x6a, 0xfe, 0x43])
+        let secondPayload = Data([0x99, 0x00, 0x71])
+
+        let first = try #require(sender.enqueue(firstPayload))
+        let firstInbound = try #require(receiver.handleInbound(first))
+        #expect(firstInbound.deliveredPayloads == [firstPayload])
+        let firstPong = try #require(firstInbound.emittedRecords.first)
+        _ = sender.handleInbound(firstPong)
+        #expect(sender.pendingByteCount == 0)
+
+        let second = try #require(sender.enqueue(secondPayload))
+        sender.lowerDisconnected()
+        let replay = sender.lowerReady(nowNanoseconds: 17)
+        #expect(replay.first == second)
+        #expect(replay.count == 2) // retained DATA followed by the delivery probe
+        let secondInbound = try #require(receiver.handleInbound(second))
+        #expect(secondInbound.deliveredPayloads == [secondPayload])
+        _ = sender.handleInbound(try #require(secondInbound.emittedRecords.first))
+        #expect(sender.pendingByteCount == 0)
     }
 
     @Test func webSocketTextPayloadModesRoundTripInCore() throws {

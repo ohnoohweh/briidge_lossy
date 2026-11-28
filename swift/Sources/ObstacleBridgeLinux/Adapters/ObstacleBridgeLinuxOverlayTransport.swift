@@ -680,6 +680,11 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             case 0x1: guard let text = String(data: payload, encoding: .utf8) else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketProtocolError }; return .text(text)
             case 0x9:
                 try connection.write(webSocketClientFrame(opcode: 0xA, payload: payload))
+            case 0xA:
+                // A server may acknowledge a WebSocket-level keepalive while
+                // the overlay bootstrap is waiting for its first application
+                // record.  It has no overlay payload to deliver.
+                continue
             case 0x8: throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF
             default: throw ObstacleBridgeLinuxOverlayTransportError.webSocketProtocolError
             }
@@ -957,7 +962,7 @@ private final class POSIXTCPFrameDecoder {
 private final class POSIXWebSocketFrameDecoder {
     private var buffered = Data()
 
-    enum Frame { case payload(ObstacleBridgeWebSocketPayload), ping(Data) }
+    enum Frame { case payload(ObstacleBridgeWebSocketPayload), ping(Data), pong }
 
     func append(_ bytes: Data) throws -> [Frame] {
         guard buffered.count + bytes.count <= 1_048_576 + 10 else {
@@ -995,6 +1000,7 @@ private final class POSIXWebSocketFrameDecoder {
                 guard let text = String(data: payload, encoding: .utf8) else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketProtocolError }
                 frames.append(.payload(.text(text)))
             case 0x9: frames.append(.ping(payload))
+            case 0xA: frames.append(.pong)
             case 0x8: throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF
             default: throw ObstacleBridgeLinuxOverlayTransportError.webSocketProtocolError
             }

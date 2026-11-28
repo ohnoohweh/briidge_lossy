@@ -170,7 +170,10 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
             if ownerActive { return try sendThroughReceiveOwner(payload) }
             let startedAt = ProcessInfo.processInfo.systemUptime
             if let overlayAdapter {
-                let delivered = try exchangeAdapterFrames(try overlayAdapter.handleOutboundPayload(payload).emittedFrames)
+                let delivered = try exchangeAdapterFrames(
+                    try overlayAdapter.handleOutboundPayload(payload).emittedFrames,
+                    requireDeliveredPayload: true
+                )
                 guard let reply = delivered.first else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
                 recordTransportLiveness(since: startedAt)
                 return reply
@@ -326,7 +329,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     public func receiveForOwner() throws -> Data? {
         do {
             while true {
-                if let payload = takeHandshakeDeliveredPayload() { return payload }
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxRuntimeConfigurationTests
+                if overlayAdapter?.deliveryFenceReadyForBootstrap ?? true,
+                   let payload = takeHandshakeDeliveredPayload() { return payload }
                 let payload = try handleReceivedWire(lowerSession.receive())
                 // SecureLink rekey controls have no application payload. They
                 // are fully handled by Core above and must not retire a live
@@ -426,13 +431,16 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
 
     func completeClientHandshake(sessionID: UInt64, clientNonce: Data) throws {
         guard let overlayAdapter else { return }
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxRuntimeConfigurationTests
         let delivered = try exchangeAdapterFrames(try overlayAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce).emittedFrames)
         if !delivered.isEmpty {
             requestLock.lock()
             for payload in delivered { _ = handshakeDeliveredPayloads.append(payload) }
             requestLock.unlock()
         }
-        guard overlayAdapter.secureLinkProtocolState()?.authenticated == true else {
+        guard overlayAdapter.secureLinkProtocolState() == nil
+                || overlayAdapter.secureLinkProtocolState()?.authenticated == true
+        else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
         }
     }
@@ -443,17 +451,57 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         return handshakeDeliveredPayloads.popFirst()
     }
 
-    private func exchangeAdapterFrames(_ initialFrames: [Data]) throws -> [Data] {
+    private func exchangeAdapterFrames(
+        _ initialFrames: [Data],
+        requireDeliveredPayload: Bool = false
+    ) throws -> [Data] {
         guard let overlayAdapter else { return [] }
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxRuntimeConfigurationTests
+        // A cleartext delivery-fence PONG is an acknowledgement, not a new
+        // request.  Waiting for a reply to it before the receive owner has
+        // started deadlocks peers that correctly send no further bootstrap
+        // record (notably the WebSocket listener).  SecureLink's handshake,
+        // in contrast, has an explicit request/response transcript and keeps
+        // the exchange loop below.
+        guard overlayAdapter.secureLinkProtocolState() != nil else {
+            var delivered: [Data] = []
+            for outbound in initialFrames {
+                lowerSession.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+                let wire = try lowerSession.exchange(outbound)
+                let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
+                delivered.append(contentsOf: inbound.deliveredPayloads)
+                for reply in inbound.emittedFrames { try sendSecureLinkBoundaryFrame(reply) }
+            }
+            return delivered
+        }
         var pending = initialFrames
         var delivered: [Data] = []
-        while !pending.isEmpty {
-            let outbound = pending.removeFirst()
-            lowerSession.recordSecureLinkBoundaryFrame(direction: "from_securelink")
-            let wire = try lowerSession.exchange(outbound)
+        while !pending.isEmpty || (requireDeliveredPayload && delivered.isEmpty) {
+            let wire: Data
+            if let outbound = pending.popFirst() {
+                lowerSession.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+                wire = try lowerSession.exchange(outbound)
+            } else {
+                // Delivery-fence DATA is acknowledged before it is dispatched
+                // to the peer application.  A synchronous caller can
+                // therefore receive the PONG as its exchange reply and the
+                // application response as the next lower record.
+                wire = try lowerSession.receive()
+            }
             let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
-            pending.append(contentsOf: inbound.emittedFrames)
+            let deliveredBefore = delivered.count
             delivered.append(contentsOf: inbound.deliveredPayloads)
+            if delivered.count > deliveredBefore {
+                // The PONG generated for a delivered peer record is an
+                // acknowledgement, not a request/reply turn.  Sending it
+                // one-way prevents a peer that correctly emits no response
+                // from stalling the synchronous compatibility path.
+                for reply in inbound.emittedFrames {
+                    try sendSecureLinkBoundaryFrame(reply)
+                }
+            } else {
+                pending.append(contentsOf: inbound.emittedFrames)
+            }
         }
         return delivered
     }
@@ -644,28 +692,37 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             do {
                 let (lower, lowerSession) = try openLowerSession(host)
                 let session: ObstacleBridgeLinuxConfiguredSession
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeCryptoTests (the configured session owns adapter protocol mutation under protocolLock)
+                let adapter: ObstacleBridgeOverlayLayerTransportAdapter
                 if let psk = configuration.secureLinkPSK {
                     debug("secure_link.handshake.started", ["transport": configuration.transport.rawValue])
-                    let adapter = ObstacleBridgeOverlayLayerTransportAdapter(
+                    adapter = ObstacleBridgeOverlayLayerTransportAdapter(
                         clientPSK: String(decoding: psk, as: UTF8.self),
                         rekeyAfterFrames: configuration.secureLinkRekeyAfterFrames,
                         rekeyAfterSeconds: configuration.secureLinkRekeyAfterSeconds,
+                        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeCryptoTests
+                        deliveryFenceEnabled: configuration.transport != .myudp,
                         diagnosticSink: { [weak self] level, event, fields in
                             self?.recordCoreDiagnostic(level, event: event, fields: fields)
                         }
                     )
-                    session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, overlayAdapter: adapter, transport: configuration.transport)
-                    guard admission.installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
-                    try session.completeClientHandshake(sessionID: sessionID, clientNonce: clientNonce)
+                } else {
+                    adapter = ObstacleBridgeOverlayLayerTransportAdapter(
+                        cleartext: true,
+                        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeCryptoTests
+                        deliveryFenceEnabled: configuration.transport != .myudp
+                    )
+                }
+                session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, overlayAdapter: adapter, transport: configuration.transport)
+                guard admission.installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
+                try session.completeClientHandshake(sessionID: sessionID, clientNonce: clientNonce)
+                if configuration.secureLinkPSK != nil {
                     debug("secure_link.handshake.completed", ["transport": configuration.transport.rawValue])
                     admission.secureLinkState = "authenticated"
-                    admission.clearInFlightConnection(session)
                 } else {
-                    session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, secureLink: nil, transport: configuration.transport)
-                    guard admission.installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
                     admission.secureLinkState = "off"
-                    admission.clearInFlightConnection(session)
                 }
+                admission.clearInFlightConnection(session)
                 admission.snapshot = .init(transport: configuration.transport.rawValue, state: "connected", attempts: index + 1, failureReason: nil)
                 admission.connectionEpoch &+= 1
                 admission.activeHost = host

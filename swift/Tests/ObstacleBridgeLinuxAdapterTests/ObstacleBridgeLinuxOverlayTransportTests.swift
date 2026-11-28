@@ -1200,6 +1200,10 @@ final class PythonOverlayPeer {
             key=[x.split(b':',1)[1].strip() for x in r.split(b'\\r\\n') if x.lower().startswith(b'sec-websocket-key:')][0]
             accept=base64.b64encode(hashlib.sha1(key+b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
             c.sendall(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: '+accept+b'\\r\\n\\r\\n')
+            # A valid WebSocket PONG can arrive before the first overlay
+            # application record; clients must ignore it at both bootstrap
+            # and readiness-driven receive boundaries.
+            c.sendall(bytes([138,0]))
             p=b'\\0python-first'; c.sendall(bytes([130,len(p)])+p); c.close(); s.close()
             """
         }
@@ -1244,6 +1248,47 @@ final class PythonOverlayPeer {
             first=b'python-first'; c.sendall(struct.pack('!I',len(first)+1)+b'\\0'+first)
             n=struct.unpack('!I',nread(4))[0]; body=nread(n); assert body[:1]==b'\\0'
             reply=b'python:'+body[1:]; c.sendall(struct.pack('!I',len(reply)+1)+b'\\0'+reply)
+            c.close(); s.close()
+            """
+        }
+        if mode == "tcp-fence-duplex" {
+            return """
+            import socket, struct
+            s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(1); print(s.getsockname()[1], flush=True)
+            c,_=s.accept()
+            def nread(n):
+                b=b''
+                while len(b)<n:
+                    x=c.recv(n-len(b))
+                    if not x: raise RuntimeError('eof')
+                    b+=x
+                return b
+            def read():
+                while True:
+                    n=struct.unpack('!I',nread(4))[0]; body=nread(n)
+                    if body[:1] == b'\\x03': continue
+                    assert body[:1]==b'\\0'; return body[1:]
+            def write(p): c.sendall(struct.pack('!I',len(p)+1)+b'\\0'+p)
+            first=read()
+            if first == b'OBPA\\x02\\x01\\x00':
+                write(b'OBPA\\x02\\x02\\x04\\x7f\\x00\\x00\\x01'+(443).to_bytes(2,'big'))
+                ping=read()
+            else:
+                ping=first
+            assert ping[:6] == b'OBRT\\x01\\x01'
+            write(b'OBRT\\x01\\x02'+b'\\0'*8+ping[14:22]+b'\\0'*8)
+            # Let the live runtime install its one receive owner after the
+            # bootstrap PONG.  The data record then proves that owner, rather
+            # than the synchronous bootstrap exchange, owns application RX.
+            import time; time.sleep(0.05)
+            write(b'OBRT\\x01\\x00'+(1).to_bytes(8,'big')+b'python-first')
+            while True:
+                request=read()
+                if request[:6] == b'OBRT\\x01\\x02': continue
+                assert request[:6] == b'OBRT\\x01\\x00'
+                write(b'OBRT\\x01\\x02'+b'\\0'*16)
+                write(b'OBRT\\x01\\x00'+(2).to_bytes(8,'big')+b'python:'+request[14:])
+                break
             c.close(); s.close()
             """
         }
@@ -1479,6 +1524,10 @@ final class PythonOverlayPeer {
                 salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
                 client_proof=read(c); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); write(c,ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack))
                 address_request=read(c); assert address_request==b'OBPA\\x02\\x01\\x00'; write(c,b'OBPA\\x02\\x02\\x04\\x7f\\x00\\x00\\x01'+(443).to_bytes(2,'big'))
+                # The outer stream fence establishes authenticated readiness
+                # before this reconnect fixture intentionally becomes silent.
+                probe=read(c); probe_plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),probe[20:],probe[:20]); assert probe_plain[:6]==b'OBRT\\x01\\x01'
+                pong=header(4,sid,2); pong_plain=b'OBRT\\x01\\x02'+b'\\0'*8+probe_plain[14:22]+b'\\0'*8; write(c,pong+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),pong_plain,pong))
                 if epoch == 0:
                     stale_header=header(4,sid,2); stale=stale_header+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'retired',stale_header)
                 if SILENT and epoch == 0:
@@ -1486,7 +1535,7 @@ final class PythonOverlayPeer {
                     time.sleep(0.08); c.close(); continue
                 if STALE and epoch == 1:
                     write(c,stale); c.close(); continue
-                app=read(c); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); write(c,response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'python:'+plain,response)); c.close()
+                app=read(c); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(3).to_bytes(8,'big'),app[20:],app[:20]); assert plain[:6]==b'OBRT\\x01\\x00'; response=header(4,sid,3); response_plain=b'OBRT\\x01\\x00'+(1).to_bytes(8,'big')+b'python:'+plain[14:]; write(c,response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),response_plain,response)); c.close()
                 stale=response
             s.close()
             """
@@ -1589,6 +1638,50 @@ final class PythonOverlayPeer {
             # Peer-address discovery crosses the lower transport after the
             # protected handshake, before the fixture's application controls.
             address_request=read_payload(); assert address_request==b'OBPA\\x02\\x01\\x00'; write_payload(b'OBPA\\x02\\x02\\x04\\x7f\\x00\\x00\\x01'+(443).to_bytes(2,'big'))
+            # Stream products now put the delivery fence above both
+            # compression and SecureLink.  Keep this reference peer at that
+            # same boundary: raw rekey controls remain below the fence, while
+            # application records acknowledge the highest delivered sequence.
+            client_counter=2; server_counter=2; delivered_client=0; next_server_sequence=0
+            def send_protected(plain):
+                global server_counter
+                wire_header=header(4,sid,server_counter)
+                write_payload(wire_header+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+server_counter.to_bytes(8,'big'),plain,wire_header))
+                server_counter+=1
+            def send_fence_pong(echo, delivered):
+                send_protected(b'OBRT'+bytes([1,2])+b'\\0'*8+echo.to_bytes(8,'big')+delivered.to_bytes(8,'big'))
+            def accept_fence_probe():
+                global client_counter
+                app=read_payload()
+                plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+client_counter.to_bytes(8,'big'),app[20:],app[:20]); client_counter+=1
+                assert plain[:6] == b'OBRT\\x01\\x01'
+                send_fence_pong(int.from_bytes(plain[14:22],'big'),delivered_client)
+            def read_application():
+                global client_counter, delivered_client
+                while True:
+                    app=read_payload()
+                    plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+client_counter.to_bytes(8,'big'),app[20:],app[:20]); client_counter+=1
+                    if plain[:5] != b'OBRT\\x01':
+                        return plain
+                    kind=plain[5]
+                    if kind == 1:
+                        send_fence_pong(int.from_bytes(plain[14:22],'big'),delivered_client); continue
+                    if kind == 2:
+                        continue
+                    assert kind == 0 and len(plain) >= 14
+                    sequence=int.from_bytes(plain[6:14],'big')
+                    assert sequence == delivered_client + 1
+                    delivered_client=sequence
+                    send_fence_pong(0,delivered_client)
+                    return plain[14:]
+            def send_application(plain):
+                global next_server_sequence
+                next_server_sequence+=1
+                send_protected(b'OBRT'+bytes([1,0])+next_server_sequence.to_bytes(8,'big')+plain)
+            # A probe is emitted immediately after the protected peer-address
+            # exchange.  It establishes the outer RTT/liveness epoch before
+            # ChannelMux traffic or operator rekey controls are allowed.
+            accept_fence_probe()
             if MODE.endswith('malformed'):
                 write_payload(header(4,sid+1,2)+bytes(16))
             elif MODE.endswith('replay'):
@@ -1609,7 +1702,7 @@ final class PythonOverlayPeer {
                     first_plain=raw[:5]+b'\\x80'+len(compressed).to_bytes(2,'big')+compressed
                 else:
                     first_plain=b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello' if MODE.endswith('mux-duplex') else b'python-first'
-                first=header(4,sid,2); write_payload(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),first_plain,first))
+                send_application(first_plain)
                 if MODE == 'tcp-securelink-catalog-replace-duplex':
                     import sys, time
                     assert sys.stdin.readline().strip() == 'next'
@@ -1618,13 +1711,14 @@ final class PythonOverlayPeer {
                     body=json.dumps(rows,separators=(',',':')).encode()
                     catalog=b'RS3'+(1).to_bytes(8,'big')+(2).to_bytes(4,'big')+len(body).to_bytes(4,'big')+body
                     replacement=b'\\0\\0\\0\\0\\0\\x04'+len(catalog).to_bytes(2,'big')+catalog
-                    second=header(4,sid,3); write_payload(second+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),replacement,second))
+                    send_application(replacement)
                     time.sleep(0.15)
-                    stale=header(4,sid,4); write_payload(stale+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(4).to_bytes(8,'big'),first_plain,stale))
+                    send_application(first_plain)
             elif MODE == 'tcp-securelink-admin-rekey':
                 rekey=read_payload(); assert rekey[:2]==b'\\x01\\x05'; sid=int.from_bytes(rekey[4:12],'big'); cn=rekey[20:52]; sn=bytes(range(31,-1,-1)); proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); write_payload(header(6,sid,0)+sn+b'\\x01'+proof)
                 salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
                 commit=read_payload(); expected=hmac.new(psk,b'obstaclebridge-securelink-client-rekey-commit-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); assert commit[:2]==b'\\x01\\x07' and commit[20:]==expected; write_payload(header(8,sid,0))
+                client_counter=1; server_counter=1; delivered_client=0; next_server_sequence=0; accept_fence_probe()
                 # Keep the lower TCP session open until the test's bounded
                 # Admin status observation can consume REKEY_DONE.  Closing
                 # after one second races under the parallel Swift test runner:
@@ -1632,14 +1726,15 @@ final class PythonOverlayPeer {
                 # before the assertion can sample the completed state.
                 import time; time.sleep(10)
             elif MODE.endswith('rekey'):
-                app=read_payload(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); write_payload(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'python:'+plain,response))
+                plain=read_application(); send_application(b'python:'+plain)
                 rekey=read_payload(); assert rekey[:2]==b'\\x01\\x05'; sid=int.from_bytes(rekey[4:12],'big'); cn=rekey[20:52]; sn=bytes(range(31,-1,-1)); proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); write_payload(header(6,sid,0)+sn+b'\\x01'+proof)
                 salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
                 commit=read_payload(); expected=hmac.new(psk,b'obstaclebridge-securelink-client-rekey-commit-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); assert commit[:2]==b'\\x01\\x07' and commit[20:]==expected; write_payload(header(8,sid,0))
-                app=read_payload(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,1); write_payload(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'python:'+plain,response))
+                client_counter=1; server_counter=1; delivered_client=0; next_server_sequence=0; accept_fence_probe()
+                plain=read_application(); send_application(b'python:'+plain)
             if not (MODE.endswith('close-after-ack') or MODE.endswith('malformed') or MODE.endswith('replay') or MODE.endswith('rekey')):
                 for counter in range(2, 8):
-                    app=read_payload(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+counter.to_bytes(8,'big'),app[20:],app[:20])
+                    plain=read_application()
                     if MODE == 'tcp-securelink-mux-compressed-echo':
                         assert len(plain) >= 8 and plain[5] == 0x80
                         body=zlib.decompress(plain[8:])
@@ -1662,8 +1757,7 @@ final class PythonOverlayPeer {
                         reply_plain = b'python:'+str(counter).encode()+b':'+plain
                     else:
                         reply_plain = b'python:' + plain
-                    response_counter=counter + (1 if MODE.endswith('duplex') else 0)
-                    response=header(4,sid,response_counter); write_payload(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+response_counter.to_bytes(8,'big'),reply_plain,response))
+                    send_application(reply_plain)
         else:
             payload=read_payload(); write_payload(payload)
         c.close(); s.close()

@@ -206,6 +206,7 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "swift_udp" in provider
     assert "packetflow_connector_mode_selected" in provider
     assert "ObstacleBridgeOverlayLayerTransportAdapter" in provider
+    assert 'deliveryFenceEnabled: settings.transport != "myudp"' in provider
     assert "connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]])" in provider
     assert "startTCPServices()" in provider
     assert "localTCPServiceSpecs(providerConfiguration:" in provider

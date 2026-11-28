@@ -3114,6 +3114,8 @@ final class ObstacleBridgeHostRunner: @unchecked Sendable {
                 peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime(
                     clientMode: settings.peerHost != nil
                 ),
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=test_macos_build_enables_complete_strict_concurrency_for_every_swiftc_product
+                deliveryFenceEnabled: settings.transport != "myudp",
                 transportDelayRotationThresholdMS: ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["channelmux_transport_delay_threshold_ms"]) ?? 5000.0,
                 transportDelayRotationGrace: (ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]) ?? 30000.0) / 1000.0,
                 diagnosticSink: { [weak self] level, event, _ in
