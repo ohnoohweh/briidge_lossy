@@ -170,7 +170,10 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
             if ownerActive { return try sendThroughReceiveOwner(payload) }
             let startedAt = ProcessInfo.processInfo.systemUptime
             if let overlayAdapter {
-                let delivered = try exchangeAdapterFrames(try overlayAdapter.handleOutboundPayload(payload).emittedFrames)
+                let delivered = try exchangeAdapterFrames(
+                    try overlayAdapter.handleOutboundPayload(payload).emittedFrames,
+                    requireDeliveredPayload: true
+                )
                 guard let reply = delivered.first else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
                 recordTransportLiveness(since: startedAt)
                 return reply
@@ -448,7 +451,10 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         return handshakeDeliveredPayloads.popFirst()
     }
 
-    private func exchangeAdapterFrames(_ initialFrames: [Data]) throws -> [Data] {
+    private func exchangeAdapterFrames(
+        _ initialFrames: [Data],
+        requireDeliveredPayload: Bool = false
+    ) throws -> [Data] {
         guard let overlayAdapter else { return [] }
         // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxRuntimeConfigurationTests
         // A cleartext delivery-fence PONG is an acknowledgement, not a new
@@ -470,13 +476,32 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         }
         var pending = initialFrames
         var delivered: [Data] = []
-        while !pending.isEmpty {
-            let outbound = pending.removeFirst()
-            lowerSession.recordSecureLinkBoundaryFrame(direction: "from_securelink")
-            let wire = try lowerSession.exchange(outbound)
+        while !pending.isEmpty || (requireDeliveredPayload && delivered.isEmpty) {
+            let wire: Data
+            if let outbound = pending.popFirst() {
+                lowerSession.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+                wire = try lowerSession.exchange(outbound)
+            } else {
+                // Delivery-fence DATA is acknowledged before it is dispatched
+                // to the peer application.  A synchronous caller can
+                // therefore receive the PONG as its exchange reply and the
+                // application response as the next lower record.
+                wire = try lowerSession.receive()
+            }
             let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
-            pending.append(contentsOf: inbound.emittedFrames)
+            let deliveredBefore = delivered.count
             delivered.append(contentsOf: inbound.deliveredPayloads)
+            if delivered.count > deliveredBefore {
+                // The PONG generated for a delivered peer record is an
+                // acknowledgement, not a request/reply turn.  Sending it
+                // one-way prevents a peer that correctly emits no response
+                // from stalling the synchronous compatibility path.
+                for reply in inbound.emittedFrames {
+                    try sendSecureLinkBoundaryFrame(reply)
+                }
+            } else {
+                pending.append(contentsOf: inbound.emittedFrames)
+            }
         }
         return delivered
     }
