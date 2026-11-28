@@ -450,6 +450,24 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
 
     private func exchangeAdapterFrames(_ initialFrames: [Data]) throws -> [Data] {
         guard let overlayAdapter else { return [] }
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxRuntimeConfigurationTests
+        // A cleartext delivery-fence PONG is an acknowledgement, not a new
+        // request.  Waiting for a reply to it before the receive owner has
+        // started deadlocks peers that correctly send no further bootstrap
+        // record (notably the WebSocket listener).  SecureLink's handshake,
+        // in contrast, has an explicit request/response transcript and keeps
+        // the exchange loop below.
+        guard overlayAdapter.secureLinkProtocolState() != nil else {
+            var delivered: [Data] = []
+            for outbound in initialFrames {
+                lowerSession.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+                let wire = try lowerSession.exchange(outbound)
+                let inbound = handleSecureLinkBoundaryFrame(wire, adapter: overlayAdapter)
+                delivered.append(contentsOf: inbound.deliveredPayloads)
+                for reply in inbound.emittedFrames { try sendSecureLinkBoundaryFrame(reply) }
+            }
+            return delivered
+        }
         var pending = initialFrames
         var delivered: [Data] = []
         while !pending.isEmpty {

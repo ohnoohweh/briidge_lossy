@@ -279,6 +279,35 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(lowerReceiveCalls == 1)
     }
 
+    @Test func cleartextHandshakeWritesFencePongWithoutAwaitingAnotherRecord() throws {
+        var exchanges = 0
+        var sent: [Data] = []
+        let peerPing = ObstacleBridgeDeliveryFenceCodec.encodePing(
+            txNS: 19,
+            echoNS: 0,
+            deliveredSequence: 0
+        )
+        let lower = ObstacleBridgeLinuxOverlayTransportSession(
+            exchange: { _ in
+                exchanges += 1
+                return peerPing
+            },
+            send: { sent.append($0) },
+            close: {}
+        )
+        let session = ObstacleBridgeLinuxConfiguredSession(
+            lowerSession: lower,
+            overlayAdapter: ObstacleBridgeOverlayLayerTransportAdapter(cleartext: true),
+            transport: .ws
+        )
+
+        try session.completeClientHandshake(sessionID: 77, clientNonce: Data(repeating: 9, count: 32))
+
+        #expect(exchanges == 1)
+        #expect(sent.count == 1)
+        #expect((try ObstacleBridgeDeliveryFenceCodec.decode(sent[0])).kind == .pong)
+    }
+
     @Test func configuredSessionForwardsPeriodicLowerLivenessProbe() throws {
         var probes = 0
         let lower = ObstacleBridgeLinuxOverlayTransportSession(
