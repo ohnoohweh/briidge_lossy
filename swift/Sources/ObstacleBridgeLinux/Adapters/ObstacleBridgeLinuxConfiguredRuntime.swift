@@ -432,6 +432,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         // matching PONG, so one request/reply exchange is not necessarily
         // enough to establish delivery readiness.  Retain those early
         // application records and continue receiving until the PONG arrives.
+        // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxRuntimeConfigurationTests
         while !overlayAdapter.deliveryFenceReadyForBootstrap {
             let inbound = handleSecureLinkBoundaryFrame(try lowerSession.receive(), adapter: overlayAdapter)
             for reply in inbound.emittedFrames { try sendSecureLinkBoundaryFrame(reply) }

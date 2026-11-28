@@ -460,7 +460,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     /// send a ChannelMux catalog between that probe and its PONG, so callers
     /// must keep consuming inbound records rather than treating the first
     /// application record as proof of delivery.
-    var deliveryFenceReadyForBootstrap: Bool {
+    public var deliveryFenceReadyForBootstrap: Bool {
         !deliveryFenceEnabled || deliveryFenceRuntime.isConnected
     }
 
