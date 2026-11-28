@@ -593,6 +593,12 @@ class LinuxSwiftSecureLinkPeer:
                     DeliveryFenceCodec.decode_ping(body)[0], delivered_client_sequence,
                 ))
                 continue
+            if kind == DeliveryFenceCodec.KIND_PONG:
+                # DATA delivery is acknowledged independently of application
+                # traffic. The Swift client sends this after each peer DATA
+                # record; it is not a request for a response.
+                DeliveryFenceCodec.decode_pong(body)
+                continue
             if kind != DeliveryFenceCodec.KIND_DATA:
                 raise RuntimeError('Linux Swift delivery fence record kind mismatch')
             if sequence > delivered_client_sequence:
