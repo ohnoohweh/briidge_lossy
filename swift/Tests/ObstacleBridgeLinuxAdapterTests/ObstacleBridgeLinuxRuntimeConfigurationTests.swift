@@ -244,39 +244,22 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(session.observedPublicPort == 44321)
     }
 
-    @Test func clientHandshakePreservesCatalogReceivedBeforePeerAddressReply() throws {
-        let psk = Data("linux-swift-early-catalog-psk".utf8)
-        let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
-        let peerAddressServer = ObstacleBridgePeerAddressProtocolRuntime(clientMode: false)
+    @Test func clientHandshakeDefersCleartextCatalogUntilFencePong() throws {
         let catalog = Data("early-remote-services-catalog".utf8)
         var lowerReceiveCalls = 0
         var fencePong: Data?
         let lower = ObstacleBridgeLinuxOverlayTransportSession(
             exchange: { wire in
-                if server.isAuthenticated {
-                    if wire.prefix(4) == Data([0x4f, 0x42, 0x50, 0x41]) {
-                        let response = peerAddressServer.handleInboundFrame(
-                            wire, observedPeerHost: "203.0.113.47", observedPeerPort: 44321
-                        )
-                        #expect(response.consumed)
-                        return try #require(response.emittedFrames.first)
-                    }
-                    // A Python listener can publish its catalog immediately
-                    // after the delivery-fence PING, before the matching PONG
-                    // reaches the native receive owner.
-                    let plaintext = try server.unprotect(wire)
-                    let ping = try #require(try? ObstacleBridgeDeliveryFenceCodec.decode(plaintext))
-                    #expect(ping.kind == .ping)
-                    fencePong = try server.protect(ObstacleBridgeDeliveryFenceCodec.encodePong(
-                        echoTxNS: try ObstacleBridgeDeliveryFenceCodec.pingFields(ping.body).txNS,
-                        deliveredSequence: 0
-                    ))
-                    return try server.protect(catalog)
-                }
-                if server.state.sessionID == 0 {
-                    return try server.handleClientHello(wire, serverNonce: Data(repeating: 7, count: 32))
-                }
-                return try server.handleClientProof(wire)
+                // A cleartext Python listener can publish its catalog
+                // immediately after the delivery-fence PING, before the
+                // matching PONG reaches the native receive owner.
+                let ping = try #require(try? ObstacleBridgeDeliveryFenceCodec.decode(wire))
+                #expect(ping.kind == .ping)
+                fencePong = ObstacleBridgeDeliveryFenceCodec.encodePong(
+                    echoTxNS: try ObstacleBridgeDeliveryFenceCodec.pingFields(ping.body).txNS,
+                    deliveredSequence: 0
+                )
+                return catalog
             },
             receive: {
                 lowerReceiveCalls += 1
@@ -284,7 +267,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             },
             close: {}
         )
-        let adapter = ObstacleBridgeOverlayLayerTransportAdapter(clientPSK: String(decoding: psk, as: UTF8.self))
+        let adapter = ObstacleBridgeOverlayLayerTransportAdapter(cleartext: true)
         let session = ObstacleBridgeLinuxConfiguredSession(
             lowerSession: lower, overlayAdapter: adapter, transport: .tcp
         )

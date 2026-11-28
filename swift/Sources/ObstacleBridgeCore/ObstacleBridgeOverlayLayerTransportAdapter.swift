@@ -458,8 +458,10 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     /// Bootstrap payloads must remain private to the transport owner until
     /// the outer delivery probe is acknowledged. A peer may put a ChannelMux
     /// catalog in front of that acknowledgement on the same lower stream.
+    /// SecureLink owns an authenticated bootstrap of its own, so this gate
+    /// applies only to cleartext lower transports.
     public var deliveryFenceReadyForBootstrap: Bool {
-        !deliveryFenceEnabled || deliveryFenceRuntime.isConnected
+        secureLinkAdapter != nil || !deliveryFenceEnabled || deliveryFenceRuntime.isConnected
     }
 
     public func handleInboundFrame(
