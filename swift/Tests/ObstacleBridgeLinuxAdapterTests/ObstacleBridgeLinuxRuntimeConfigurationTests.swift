@@ -250,16 +250,27 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         let peerAddressServer = ObstacleBridgePeerAddressProtocolRuntime(clientMode: false)
         let catalog = Data("early-remote-services-catalog".utf8)
         var lowerReceiveCalls = 0
+        var fencePong: Data?
         let lower = ObstacleBridgeLinuxOverlayTransportSession(
             exchange: { wire in
                 if server.isAuthenticated {
-                    let response = peerAddressServer.handleInboundFrame(
-                        wire, observedPeerHost: "203.0.113.47", observedPeerPort: 44321
-                    )
-                    #expect(response.consumed)
+                    if wire.prefix(4) == Data([0x4f, 0x42, 0x50, 0x41]) {
+                        let response = peerAddressServer.handleInboundFrame(
+                            wire, observedPeerHost: "203.0.113.47", observedPeerPort: 44321
+                        )
+                        #expect(response.consumed)
+                        return try #require(response.emittedFrames.first)
+                    }
                     // A Python listener can publish its catalog immediately
-                    // after authentication, before its peer-address reply is
-                    // read by the native client.
+                    // after the delivery-fence PING, before the matching PONG
+                    // is read by the native client.
+                    let plaintext = try server.unprotect(wire)
+                    let ping = try #require(try? ObstacleBridgeDeliveryFenceCodec.decode(plaintext))
+                    #expect(ping.kind == .ping)
+                    fencePong = try server.protect(ObstacleBridgeDeliveryFenceCodec.encodePong(
+                        echoTxNS: try ObstacleBridgeDeliveryFenceCodec.pingFields(ping.body).txNS,
+                        deliveredSequence: 0
+                    ))
                     return try server.protect(catalog)
                 }
                 if server.state.sessionID == 0 {
@@ -269,7 +280,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             },
             receive: {
                 lowerReceiveCalls += 1
-                throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF
+                return try #require(fencePong)
             },
             close: {}
         )
@@ -282,7 +293,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         session.activateReceiveOwner()
 
         #expect(try session.receiveForOwner() == catalog)
-        #expect(lowerReceiveCalls == 0)
+        #expect(lowerReceiveCalls == 1)
     }
 
     @Test func configuredSessionForwardsPeriodicLowerLivenessProbe() throws {

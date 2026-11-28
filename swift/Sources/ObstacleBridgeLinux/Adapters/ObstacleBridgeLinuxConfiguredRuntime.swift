@@ -426,7 +426,17 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
 
     func completeClientHandshake(sessionID: UInt64, clientNonce: Data) throws {
         guard let overlayAdapter else { return }
-        let delivered = try exchangeAdapterFrames(try overlayAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce).emittedFrames)
+        var delivered = try exchangeAdapterFrames(try overlayAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce).emittedFrames)
+        // The Python listener publishes its ChannelMux catalog when it sees
+        // our delivery-fence PING.  Its catalog can be queued before the
+        // matching PONG, so one request/reply exchange is not necessarily
+        // enough to establish delivery readiness.  Retain those early
+        // application records and continue receiving until the PONG arrives.
+        while !overlayAdapter.deliveryFenceReadyForBootstrap {
+            let inbound = handleSecureLinkBoundaryFrame(try lowerSession.receive(), adapter: overlayAdapter)
+            for reply in inbound.emittedFrames { try sendSecureLinkBoundaryFrame(reply) }
+            delivered.append(contentsOf: inbound.deliveredPayloads)
+        }
         if !delivered.isEmpty {
             requestLock.lock()
             for payload in delivered { _ = handshakeDeliveredPayloads.append(payload) }

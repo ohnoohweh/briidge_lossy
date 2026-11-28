@@ -455,6 +455,15 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         return OutboundSnapshot(emittedFrames: [outboundPayload])
     }
 
+    /// A synchronous transport bootstrap must not publish its epoch until the
+    /// outer delivery probe has been acknowledged.  A peer can legitimately
+    /// send a ChannelMux catalog between that probe and its PONG, so callers
+    /// must keep consuming inbound records rather than treating the first
+    /// application record as proof of delivery.
+    var deliveryFenceReadyForBootstrap: Bool {
+        !deliveryFenceEnabled || deliveryFenceRuntime.isConnected
+    }
+
     public func handleInboundFrame(
         _ payload: Data,
         observedPeerHost: String? = nil,
