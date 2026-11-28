@@ -610,8 +610,12 @@ class LinuxSwiftSecureLinkPeer:
             else:
                 reply_body = b'python-e2e:' + body
             server_sequence += 1
-            send_plaintext(DeliveryFenceCodec.encode_data(server_sequence, reply_body))
+            # Acknowledge the client DATA before publishing our reply. This
+            # matches DeliveryFenceSession: confirmation is control-plane
+            # progress and must be visible to a synchronous bootstrap exchange
+            # before its first peer application record.
             send_plaintext(DeliveryFenceCodec.encode_pong(0, delivered_client_sequence))
+            send_plaintext(DeliveryFenceCodec.encode_data(server_sequence, reply_body))
             if not self.mux_echo:
                 return
 
