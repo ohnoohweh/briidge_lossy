@@ -231,7 +231,12 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             secureLinkBoundary: { boundaryDirections.append($0) },
             close: {}
         )
-        let adapter = ObstacleBridgeOverlayLayerTransportAdapter(clientPSK: String(decoding: psk, as: UTF8.self))
+        let adapter = ObstacleBridgeOverlayLayerTransportAdapter(
+            clientPSK: String(decoding: psk, as: UTF8.self),
+            // MyUDP does not carry the stream delivery-fence envelope. Match
+            // the production configuration rather than the adapter default.
+            deliveryFenceEnabled: false
+        )
         let session = ObstacleBridgeLinuxConfiguredSession(
             lowerSession: lower, overlayAdapter: adapter, transport: .myudp
         )
@@ -758,7 +763,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         ])
         #expect(bootstrap.transport == "tcp")
         #expect(bootstrap.transports == ["tcp"])
-        #expect(bootstrap.layersTopDown == ["compress_layer", "secure_link_psk", "tcp"])
+        #expect(bootstrap.layersTopDown == ["delivery_fence", "compress_layer", "secure_link_psk", "tcp"])
         #expect(bootstrap.compressWrapped)
         #expect(bootstrap.secureLinkMode == "psk")
     }
