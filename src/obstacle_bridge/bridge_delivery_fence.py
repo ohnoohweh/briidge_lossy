@@ -59,6 +59,16 @@ class DeliveryFenceSession:
         if callable(setter):
             setter(self._on_inner_lifecycle)
 
+    def __getattr__(self, name: str):
+        """Keep controls and diagnostics of transparent inner layers reachable.
+
+        The delivery fence is intentionally the outermost transport wrapper.
+        Operator controls, including SecureLink rekey/reload, are implemented
+        by lower layers, so hiding their methods makes a fenced peer appear to
+        have SecureLink disabled.
+        """
+        return getattr(self._inner, name)
+
     @staticmethod
     def _key(peer_id: Optional[int]) -> int:
         return int(peer_id or 0)

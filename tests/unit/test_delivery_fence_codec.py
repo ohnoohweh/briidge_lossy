@@ -38,6 +38,14 @@ class _Inner:
     def get_connection_layers_snapshot(self): return []
 
 
+def test_delivery_fence_forwards_inner_operator_controls():
+    class _SecureInner(_Inner):
+        def request_secure_link_rekey(self):
+            return (True, "rekey_started")
+
+    assert DeliveryFenceSession(_SecureInner()).request_secure_link_rekey() == (True, "rekey_started")
+
+
 def test_delivery_fence_replays_only_unconfirmed_plaintext_after_reconnect():
     inner = _Inner()
     fence = DeliveryFenceSession(inner)
