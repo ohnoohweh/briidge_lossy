@@ -3477,6 +3477,15 @@ class SecureLinkPskSession(ISession):
                 self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_BAD_IDENTITY_PROOF)
                 return
             self._promote_pending_rekey(state)
+            done = self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b"")
+            state.completed_rekey_session_id = int(session_id)
+            state.completed_rekey_done_frame = done
+            self._log_rekey_phase("done", "tx", state, peer_id=peer_id, frame_session_id=session_id)
+            self._send_inner_frame(done, peer_id=peer_id)
+            # The outer delivery fence replays plaintext as soon as the
+            # authenticated lifecycle is published.  Keep this completion
+            # control record ahead of that replay: the client cannot install
+            # the new traffic keys until it consumes REKEY_DONE.
             self._record_authenticated_session(
                 state,
                 session_id=session_id,
@@ -3484,11 +3493,6 @@ class SecureLinkPskSession(ISession):
                 event="rekey_completed",
                 rekey_completed=True,
             )
-            done = self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b"")
-            state.completed_rekey_session_id = int(session_id)
-            state.completed_rekey_done_frame = done
-            self._log_rekey_phase("done", "tx", state, peer_id=peer_id, frame_session_id=session_id)
-            self._send_inner_frame(done, peer_id=peer_id)
             self._refresh_connected_state()
             return
         expected = self._client_rekey_commit_proof(session_id, state.pending_client_nonce, state.pending_server_nonce)
@@ -3496,6 +3500,14 @@ class SecureLinkPskSession(ISession):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_BAD_PSK)
             return
         self._promote_pending_rekey(state)
+        done = self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b"")
+        state.completed_rekey_session_id = int(session_id)
+        state.completed_rekey_done_frame = done
+        self._log_rekey_phase("done", "tx", state, peer_id=peer_id, frame_session_id=session_id)
+        self._send_inner_frame(done, peer_id=peer_id)
+        # See the certificate path above.  Stream ordering must expose the
+        # key-installing control record before the outer fence can replay a
+        # payload encrypted with this new generation.
         self._record_authenticated_session(
             state,
             session_id=session_id,
@@ -3503,11 +3515,6 @@ class SecureLinkPskSession(ISession):
             event="rekey_completed",
             rekey_completed=True,
         )
-        done = self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b"")
-        state.completed_rekey_session_id = int(session_id)
-        state.completed_rekey_done_frame = done
-        self._log_rekey_phase("done", "tx", state, peer_id=peer_id, frame_session_id=session_id)
-        self._send_inner_frame(done, peer_id=peer_id)
         self._refresh_connected_state()
 
     def _handle_rekey_done(self, session_id: int) -> None:

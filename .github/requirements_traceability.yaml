@@ -932,6 +932,9 @@ REQ-LIFE-003:
     - tests/unit/test_delivery_fence_codec.py::test_delivery_fence_replays_only_unconfirmed_plaintext_after_reconnect
     - tests/unit/test_delivery_fence_codec.py::test_delivery_fence_addresses_initial_listener_probe_to_the_admitted_peer
     - tests/unit/test_delivery_fence_codec.py::test_delivery_fence_routes_colliding_listener_mux_channels_without_exposing_its_envelope
+    - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::adminRekeyCompletesAgainstPythonPeerAndKeepsForegroundRuntimeReady
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeOwnsOneCleartextReceiveWorkerAndCancelsItOnStop
     # The helper probe compiles RuntimeConfig with its Core configuration dependencies.
     - ios/tests/test_ios_swift_udp_tun_helper.py::test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path
 

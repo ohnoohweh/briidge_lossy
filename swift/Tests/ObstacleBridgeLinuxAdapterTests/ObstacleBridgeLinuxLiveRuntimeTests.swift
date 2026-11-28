@@ -656,7 +656,7 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
     }
 
     @Test func liveRuntimeOwnsOneCleartextReceiveWorkerAndCancelsItOnStop() throws {
-        let peer = try PythonOverlayPeer(mode: "tcp-duplex")
+        let peer = try PythonOverlayPeer(mode: "tcp-fence-duplex")
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(
             transport: .tcp, host: "127.0.0.1", port: peer.port
