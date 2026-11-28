@@ -1200,6 +1200,10 @@ final class PythonOverlayPeer {
             key=[x.split(b':',1)[1].strip() for x in r.split(b'\\r\\n') if x.lower().startswith(b'sec-websocket-key:')][0]
             accept=base64.b64encode(hashlib.sha1(key+b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
             c.sendall(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: '+accept+b'\\r\\n\\r\\n')
+            # A valid WebSocket PONG can arrive before the first overlay
+            # application record; clients must ignore it at both bootstrap
+            # and readiness-driven receive boundaries.
+            c.sendall(bytes([138,0]))
             p=b'\\0python-first'; c.sendall(bytes([130,len(p)])+p); c.close(); s.close()
             """
         }
