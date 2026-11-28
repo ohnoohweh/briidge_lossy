@@ -326,7 +326,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     public func receiveForOwner() throws -> Data? {
         do {
             while true {
-                if let payload = takeHandshakeDeliveredPayload() { return payload }
+                // OBSTACLEBRIDGE-CONCURRENCY: serial; test=ObstacleBridgeLinuxRuntimeConfigurationTests
+                if overlayAdapter?.deliveryFenceReadyForBootstrap ?? true,
+                   let payload = takeHandshakeDeliveredPayload() { return payload }
                 let payload = try handleReceivedWire(lowerSession.receive())
                 // SecureLink rekey controls have no application payload. They
                 // are fully handled by Core above and must not retire a live

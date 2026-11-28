@@ -455,6 +455,13 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         return OutboundSnapshot(emittedFrames: [outboundPayload])
     }
 
+    /// Bootstrap payloads must remain private to the transport owner until
+    /// the outer delivery probe is acknowledged. A peer may put a ChannelMux
+    /// catalog in front of that acknowledgement on the same lower stream.
+    public var deliveryFenceReadyForBootstrap: Bool {
+        !deliveryFenceEnabled || deliveryFenceRuntime.isConnected
+    }
+
     public func handleInboundFrame(
         _ payload: Data,
         observedPeerHost: String? = nil,
